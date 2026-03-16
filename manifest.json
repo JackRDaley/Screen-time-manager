@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "Screen Time Manager",
-    "version": "1.0.0",
-    "description": "Block distracting websites, set daily time limits per site, and track your screen time and visit history — all without leaving your browser.",
+    "version": "2.0.1",
+    "description": "Block distracting websites, set daily time limits, and track your screen time and visit history — all without leaving your browser.",
     "icons": {
         "16": "extension_icon.png",
         "32": "extension_icon.png",
