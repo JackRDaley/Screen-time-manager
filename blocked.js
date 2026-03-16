@@ -28,10 +28,12 @@ if (source === "scheduled") {
 
 // Time-limit: reset stats and go to site
 document.getElementById("goBackBtn").addEventListener("click", async () => {
-    const { statsToday = {} } = await chrome.storage.local.get(["statsToday"]);
+    const { statsToday = {}, alertsSent = {} } = await chrome.storage.local.get(["statsToday", "alertsSent"]);
     const nextStats = { ...statsToday };
     delete nextStats[d];
-    await chrome.storage.local.set({ statsToday: nextStats });
+    const nextAlerts = { ...alertsSent };
+    delete nextAlerts[d];
+    await chrome.storage.local.set({ statsToday: nextStats, alertsSent: nextAlerts });
     window.location.href = `https://${d}`;
 });
 

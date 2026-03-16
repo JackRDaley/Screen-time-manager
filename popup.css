@@ -114,6 +114,12 @@ header {
     letter-spacing: .03em;
 }
 
+.status-pill.is-inactive {
+    border: 1px solid rgba(255,255,255,.16);
+    background: rgba(255,255,255,.06);
+    color: var(--muted);
+}
+
 .pulse {
     width: 7px;
     height: 7px;
@@ -121,6 +127,12 @@ header {
     background: #2EFFA8;
     box-shadow: 0 0 8px #2EFFA8;
     animation: pulse 1.8s ease-in-out infinite;
+}
+
+.status-pill.is-inactive .pulse {
+    background: rgba(255,255,255,.50);
+    box-shadow: none;
+    animation: none;
 }
 
 @keyframes pulse {

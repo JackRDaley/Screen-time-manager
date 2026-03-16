@@ -11,7 +11,8 @@ const KEYS = {
     alertsSent: "alertsSent",          // { [domain]: Set of alert thresholds already notified ("75", "90") }
     scheduledBlocks: "scheduledBlocks", // [{ domain: string, startTime: number, endTime: number }]
     activeBlocks: "activeBlocks",       // [{ domain: string, startTime: number, endTime: number }]
-    snoozedDomains: "snoozedDomains"    // { [domain]: expiresAt (ms) }
+    snoozedDomains: "snoozedDomains",   // { [domain]: expiresAt (ms) }
+    statsHistory: "statsHistory"        // { [dayKey]: { [domain]: { timeMs, visits } } }
 };
 
 let activeTabId = null;
@@ -40,59 +41,72 @@ async function ensureDayReset() {
     const { [KEYS.dayKey]: storedDay } = await chrome.storage.local.get([KEYS.dayKey]);
     const today = getDayKey();
     if (storedDay !== today) {
+        if (storedDay) {
+            const { [KEYS.allStatsToday]: allStats = {}, [KEYS.statsHistory]: history = {} } =
+                await chrome.storage.local.get([KEYS.allStatsToday, KEYS.statsHistory]);
+            if (Object.keys(allStats).length > 0) {
+                history[storedDay] = allStats;
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - 31);
+                const cutoff = getDayKey(cutoffDate);
+                for (const key of Object.keys(history)) {
+                    if (key < cutoff) delete history[key];
+                }
+                await chrome.storage.local.set({
+                    [KEYS.statsHistory]: history,
+                    [KEYS.statsToday]: {},
+                    [KEYS.allStatsToday]: {},
+                    [KEYS.dayKey]: today
+                });
+                return;
+            }
+        }
         await chrome.storage.local.set({ [KEYS.statsToday]: {}, [KEYS.allStatsToday]: {}, [KEYS.dayKey]: today });
     }
 }
 
-async function addTime(domain, deltaMs) {
-    if (!domain || deltaMs <= 0) return;
+async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false } = {}) {
+    if (!domain) return;
+    if (deltaMs <= 0 && !countVisit) return;
     await ensureDayReset();
 
     const { blockedDomains = {}, [KEYS.statsToday]: stats = {}, [KEYS.allStatsToday]: allStats = {} } =
         await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday, KEYS.allStatsToday]);
 
     const cur = stats[domain] || { timeMs: 0, visits: 0 };
-    cur.timeMs = (cur.timeMs || 0) + deltaMs;
-    stats[domain] = cur;
-
     const allCur = allStats[domain] || { timeMs: 0, visits: 0 };
-    allCur.timeMs = (allCur.timeMs || 0) + deltaMs;
-    allStats[domain] = allCur;
 
+    if (deltaMs > 0) {
+        cur.timeMs = (cur.timeMs || 0) + deltaMs;
+        allCur.timeMs = (allCur.timeMs || 0) + deltaMs;
+    }
+    if (countVisit) {
+        cur.visits = (cur.visits || 0) + 1;
+        allCur.visits = (allCur.visits || 0) + 1;
+    }
+
+    stats[domain] = cur;
+    allStats[domain] = allCur;
     await chrome.storage.local.set({ [KEYS.statsToday]: stats, [KEYS.allStatsToday]: allStats });
 
-    // Check for alerts after updating time
-    await checkAndSendAlerts(domain, blockedDomains, stats);
+    if (deltaMs > 0) {
+        // Check for alerts after updating time
+        await checkAndSendAlerts(domain, blockedDomains, stats);
 
-    // ENFORCE LIMIT (only if domain is currently blocked)
-    if (isBlockedDomain(domain, blockedDomains)) {
-        const limitMs = limitMsFor(domain, blockedDomains);
-        if (limitMs != null && cur.timeMs >= limitMs && activeTabId != null) {
-            const t = await chrome.tabs.get(activeTabId).catch(() => null);
-            const tabDomain = t?.url ? domainFromUrl(t.url) : null;
+        // ENFORCE LIMIT (only if domain is currently blocked)
+        if (isBlockedDomain(domain, blockedDomains)) {
+            const limitMs = limitMsFor(domain, blockedDomains);
+            if (limitMs != null && cur.timeMs >= limitMs && activeTabId != null) {
+                const t = await chrome.tabs.get(activeTabId).catch(() => null);
+                const tabDomain = t?.url ? domainFromUrl(t.url) : null;
 
-            // only redirect if the active tracked tab is STILL on this domain
-            if (t?.id != null && tabDomain === domain) {
-                await chrome.tabs.update(t.id, { url: blockedUrl(domain) }).catch(() => {});
+                // only redirect if the active tracked tab is STILL on this domain
+                if (t?.id != null && tabDomain === domain) {
+                    await chrome.tabs.update(t.id, { url: blockedUrl(domain) }).catch(() => {});
+                }
             }
         }
     }
-}
-
-async function addVisit(domain) {
-    if (!domain) return;
-    await ensureDayReset();
-
-    const { [KEYS.statsToday]: stats = {}, [KEYS.allStatsToday]: allStats = {} } = await chrome.storage.local.get([KEYS.statsToday, KEYS.allStatsToday]);
-    const cur = stats[domain] || { timeMs: 0, visits: 0 };
-    cur.visits = (cur.visits || 0) + 1;
-    stats[domain] = cur;
-
-    const allCur = allStats[domain] || { timeMs: 0, visits: 0 };
-    allCur.visits = (allCur.visits || 0) + 1;
-    allStats[domain] = allCur;
-
-    await chrome.storage.local.set({ [KEYS.statsToday]: stats, [KEYS.allStatsToday]: allStats });
 }
 
 function isBlockedDomain(domain, blockedDomains) {
@@ -125,8 +139,13 @@ async function redirectOpenTabsForDomains(domains) {
     }));
 }
 
+function parseHourMinute(timeStr) {
+    const [h, m] = timeStr.split(':').map(Number);
+    return { h, m };
+}
+
 function getNextTime(timeStr) {
-    const [hours, minutes] = timeStr.split(':').map(Number);
+    const { h: hours, m: minutes } = parseHourMinute(timeStr);
     const now = new Date();
     const target = new Date(now);
     target.setHours(hours, minutes, 0, 0);
@@ -137,7 +156,7 @@ function getNextTime(timeStr) {
 }
 
 function getTodayTime(timeStr, baseDate = new Date()) {
-    const [hours, minutes] = timeStr.split(":").map(Number);
+    const { h: hours, m: minutes } = parseHourMinute(timeStr);
     const target = new Date(baseDate);
     target.setHours(hours, minutes, 0, 0);
     return target.getTime();
@@ -209,8 +228,8 @@ async function enforceIfNeeded(tabId) {
     const domain = domainFromUrl(tab.url);
     if (!domain) return;
 
-    const { blockedDomains = {}, statsToday = {} } =
-        await chrome.storage.local.get(["blockedDomains", "statsToday"]);
+    const { [KEYS.blockedDomains]: blockedDomains = {}, [KEYS.statsToday]: statsToday = {} } =
+        await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday]);
 
     const limitMs = limitMsFor(domain, blockedDomains);
     if (limitMs == null) return;
@@ -272,7 +291,7 @@ async function flushTime() {
     if (!activeDomain || !activeStartMs) return;
     const deltaMs = Date.now() - activeStartMs;
     activeStartMs = Date.now(); // reset start for continued tracking
-    if (deltaMs > 0) await addTime(activeDomain, deltaMs);
+    if (deltaMs > 0) await updateDomainActivity(activeDomain, { deltaMs });
     
     // immediately check if we should enforce on the active tab
     if (activeTabId != null) {
@@ -287,7 +306,7 @@ async function setActiveDomain(tabId, countVisit = false) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     const d = tab?.url ? domainFromUrl(tab.url) : null;
 
-    if (countVisit && d && d !== activeDomain) await addVisit(d);
+    if (countVisit && d && d !== activeDomain) await updateDomainActivity(d, { countVisit: true });
 
     activeDomain = d;
     activeStartMs = d ? Date.now() : null;
@@ -587,9 +606,6 @@ async function runSelfTest() {
     };
 }
 
-// Expose a direct debug hook for the service worker DevTools console.
-self.runSelfTest = runSelfTest;
-
 // Handle messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!request || typeof request !== "object") return;
@@ -613,14 +629,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             sendResponse({ success: true });
         });
-        return true;
-    }
-
-    if (request.action === "runSelfTest") {
-        (async () => {
-            const result = await runSelfTest();
-            sendResponse(result);
-        })();
         return true;
     }
 

@@ -9,14 +9,51 @@ const DEFAULT_SETTINGS = Object.freeze({
 let currentSettings = { ...DEFAULT_SETTINGS };
 let saveMessageTimer = null;
 let latestActiveBlocks = [];
+let latestBlockedDomains = {};
+let latestStatsToday = {};
 let activeCountdownTimer = null;
 let popupRefreshTimer = null;
 let popupRefreshInFlight = false;
+let loadAllInFlight = false;
+let loadAllPending = false;
+let rankingInteractionDepth = 0;
+
+function isRankingInteractionActive() {
+    return rankingInteractionDepth > 0;
+}
+
+function beginRankingInteraction() {
+    rankingInteractionDepth += 1;
+}
+
+function endRankingInteraction() {
+    rankingInteractionDepth = Math.max(0, rankingInteractionDepth - 1);
+    if (!isRankingInteractionActive()) {
+        loadAll();
+    }
+}
+
+function wireRankingInteractionGuards() {
+    ["ranking", "rankingByVisits"].forEach((id) => {
+        const container = $(id);
+        if (!container) return;
+
+        container.addEventListener("pointerenter", beginRankingInteraction);
+        container.addEventListener("pointerleave", endRankingInteraction);
+        container.addEventListener("focusin", beginRankingInteraction);
+        container.addEventListener("focusout", (e) => {
+            const nextFocused = e.relatedTarget;
+            if (!nextFocused || !container.contains(nextFocused)) {
+                endRankingInteraction();
+            }
+        });
+    });
+}
 
 function startActiveCountdownTicker() {
     if (activeCountdownTimer != null) return;
     activeCountdownTimer = setInterval(() => {
-        renderActive(latestActiveBlocks);
+        renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
     }, 1000);
 }
 
@@ -56,6 +93,43 @@ function formatTime(sec) {
     if (h > 0) return `${h}h ${m}m`;
     if (m > 0) return `${m}m ${s}s`;
     return `${s}s`;
+}
+
+function getDayKey(d = new Date()) {
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${mo}-${day}`;
+}
+
+function getAggregatedStats(range, allStatsToday, statsHistory) {
+    if (range === "Today") return allStatsToday;
+    const today = new Date();
+    const result = {};
+
+    function mergeDayStats(dayStats) {
+        for (const [domain, stats] of Object.entries(dayStats || {})) {
+            if (!result[domain]) result[domain] = { timeMs: 0, visits: 0 };
+            result[domain].timeMs += stats.timeMs || 0;
+            result[domain].visits += stats.visits || 0;
+        }
+    }
+
+    if (range === "Yesterday") {
+        const d = new Date(today);
+        d.setDate(d.getDate() - 1);
+        mergeDayStats(statsHistory[getDayKey(d)]);
+    } else {
+        // "This week" = today + 6 prior days; "This month" = today + 29 prior days
+        const days = range === "This week" ? 6 : 29;
+        mergeDayStats(allStatsToday);
+        for (let i = 1; i <= days; i++) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            mergeDayStats(statsHistory[getDayKey(d)]);
+        }
+    }
+    return result;
 }
 
 function normalizeSettings(raw) {
@@ -125,8 +199,19 @@ function normalizeDomain(input) {
     let d = (input || "").trim().toLowerCase();
     d = d.replace(/^https?:\/\//, "");
     d = d.replace(/^www\./, "");
-    d = d.split("/")[0];
+    d = d.split(/[\/#?]/)[0];
+    d = d.replace(/:\d+$/, "");
     return d;
+}
+
+function isValidDomain(domain) {
+    if (!domain || domain.length > 253) return false;
+    if (!domain.includes(".")) return false;
+
+    const labels = domain.split(".");
+    if (labels.some((label) => !label || label.length > 63)) return false;
+
+    return labels.every((label) => /^[a-z0-9-]+$/.test(label) && !label.startsWith("-") && !label.endsWith("-"));
 }
 
 function getLimitSecondsFromConfig(cfg) {
@@ -191,32 +276,66 @@ function updateStatStrip(allStatsToday, blockedDomains) {
 }
 
 async function loadAll() {
-    const {
-        blockedDomains = {},
-        statsToday = {},
-        allStatsToday = {},
-        activeBlocks = [],
-        scheduledBlocks = [],
-        [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS
-    } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "activeBlocks", "scheduledBlocks", SETTINGS_KEY]);
+    if (loadAllInFlight) {
+        loadAllPending = true;
+        return;
+    }
 
-    currentSettings = normalizeSettings(storedSettings);
-    latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
+    loadAllInFlight = true;
+    try {
+        do {
+            loadAllPending = false;
 
-    updateStatStrip(allStatsToday, blockedDomains);
-    renderActive(latestActiveBlocks);
-    renderScheduled(scheduledBlocks, activeBlocks);
-    renderRanking(blockedDomains, allStatsToday, "ranking", "timeSec", "Top websites by time");
-    renderRanking(blockedDomains, allStatsToday, "rankingByVisits", "visits", "Top websites by visits");
-    renderBlockList(blockedDomains, statsToday);
+            const {
+                blockedDomains = {},
+                statsToday = {},
+                allStatsToday = {},
+                statsHistory = {},
+                activeBlocks = [],
+                scheduledBlocks = [],
+                [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS
+            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY]);
+
+            currentSettings = normalizeSettings(storedSettings);
+            latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
+            latestBlockedDomains = blockedDomains || {};
+            latestStatsToday = statsToday || {};
+
+            const range = $("statRange")?.value || "Today";
+            const rangeStats = getAggregatedStats(range, allStatsToday, statsHistory);
+
+            updateStatStrip(rangeStats, blockedDomains);
+            renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+            renderScheduled(scheduledBlocks, activeBlocks);
+            if (!isRankingInteractionActive()) {
+                renderRanking(blockedDomains, statsToday, rangeStats, "ranking", "timeSec", "Top by Time", range);
+                renderRanking(blockedDomains, statsToday, rangeStats, "rankingByVisits", "visits", "Top by Visits", range);
+            }
+            renderBlockList(blockedDomains, statsToday);
+        } while (loadAllPending);
+    } finally {
+        loadAllInFlight = false;
+    }
 }
 
-function renderActive(activeBlocks) {
+function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
     const list = $("activeList");
     const count = $("activeCount");
+    const statusPill = document.querySelector(".status-pill");
 
     const active = Array.isArray(activeBlocks) ? activeBlocks : [];
-    count.textContent = String(active.length);
+
+    // Count time-limited domains that have no remaining time today
+    const timeLimitedActive = Object.entries(blockedDomains).filter(([domain, cfg]) => {
+        const limitSec = getLimitSecondsFromConfig(cfg);
+        if (!Number.isFinite(limitSec) || limitSec <= 0) return false;
+        const usedMs = statsToday?.[domain]?.timeMs || 0;
+        return usedMs >= limitSec * 1000;
+    }).length;
+
+    const totalActive = active.length + timeLimitedActive;
+    count.textContent = String(totalActive);
+    statusPill?.classList.toggle("is-inactive", totalActive === 0);
 
     if (active.length === 0) {
         list.classList.add("muted");
@@ -260,13 +379,20 @@ async function stopActiveBlock(domain) {
     await chrome.storage.local.set({ activeBlocks: next });
 }
 
+async function removeScheduledBlock(id) {
+    const { scheduledBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks"]);
+    const next = scheduledBlocks.filter((b) => b.id !== id);
+    await chrome.storage.local.set({ scheduledBlocks: next });
+    chrome.alarms.clear(`startBlock_${id}`);
+    chrome.alarms.clear(`endBlock_${id}`);
+}
+
 function renderScheduled(scheduledBlocks, activeBlocks = []) {
     const list = $("scheduledList");
     const count = $("scheduledCount");
 
     const scheduled = Array.isArray(scheduledBlocks) ? scheduledBlocks : [];
     const active = Array.isArray(activeBlocks) ? activeBlocks : [];
-    count.textContent = String(scheduled.length);
 
     if (scheduled.length === 0) {
         list.classList.add("muted");
@@ -292,12 +418,8 @@ function renderScheduled(scheduledBlocks, activeBlocks = []) {
         </div>
         `;
         if (!isActive) {
-            div.querySelector("button").addEventListener("click", async (e) => {
-                const { scheduledBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks"]);
-                const next = scheduledBlocks.filter((b) => b.id !== s.id);
-                await chrome.storage.local.set({ scheduledBlocks: next });
-                chrome.alarms.clear(`startBlock_${s.id}`);
-                chrome.alarms.clear(`endBlock_${s.id}`);
+            div.querySelector("button").addEventListener("click", async () => {
+                await removeScheduledBlock(s.id);
                 await loadAll();
             });
         }
@@ -305,8 +427,10 @@ function renderScheduled(scheduledBlocks, activeBlocks = []) {
     });
 }
 
-function renderRanking(blockedDomains, allStatsToday, elementId, sortBy, title) {
+function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sortBy, title, range = "Today") {
     const rank = $(elementId);
+    const titleEl = rank?.parentElement?.querySelector(".card-title");
+    if (titleEl) titleEl.textContent = `${title} · ${range}`;
     const byVisits = sortBy === "visits";
 
     const allDomains = Object.keys(allStatsToday || {});
@@ -325,45 +449,62 @@ function renderRanking(blockedDomains, allStatsToday, elementId, sortBy, title) 
         .sort((a, b) => byVisits ? b.visits - a.visits : b.timeSec - a.timeSec)
         .slice(0, 3); // top 3
 
-    const maxVal = rows.length > 0 ? (byVisits ? rows[0].visits : rows[0].timeSec) : 1;
-
     rank.classList.remove("muted");
     rank.innerHTML = "";
 
     rows.forEach((r, i) => {
         const metricValue = byVisits ? String(r.visits) : formatTime(r.timeSec);
-        const mainVal = byVisits ? r.visits : r.timeSec;
-        const pct = maxVal > 0 ? Math.round((mainVal / maxVal) * 100) : 0;
         const rankClass = i === 0 ? 'gold' : i === 1 ? 'silver' : 'bronze';
         const isBlocked = !!blockedDomains[r.domain];
+        const limitSec = getLimitSecondsFromConfig(blockedDomains[r.domain]);
+        const hasProgressBar = isBlocked && Number.isFinite(limitSec) && limitSec > 0 && range === "Today";
+        const blockedStats = statsToday?.[r.domain] || { timeMs: 0, visits: 0 };
+        const usedLimitSec = Math.round((blockedStats.timeMs || 0) / 1000);
+        const limitUsageText = `Limit used: ${formatTime(usedLimitSec)} / ${formatTime(limitSec || 0)}`;
+        const pct = hasProgressBar ? Math.min(100, Math.round((usedLimitSec / limitSec) * 100)) : 0;
         const div = document.createElement("div");
-        div.className = "row row-ranking row-with-bar";
-        div.innerHTML = `
-        <div class="row-top">
-            <div class="row-main-inline">
-                <span class="rank-num ${rankClass}">${i + 1}</span>
+        if (hasProgressBar) {
+            div.className = "row row-ranking row-with-bar";
+            div.innerHTML = `
+            <div class="row-top">
+                <div class="row-main-inline">
+                    <span class="rank-num ${rankClass}">${i + 1}</span>
+                    <div class="row-title">${r.domain}</div>
+                </div>
+                <div class="row-right">
+                    <span class="tag tag-cyan">${metricValue}</span>
+                </div>
+            </div>
+            <div class="row-meta">${limitUsageText}</div>
+            <div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>
+            `;
+        } else {
+            div.className = "row row-ranking";
+            div.innerHTML = `
+            <span class="rank-num ${rankClass}">${i + 1}</span>
+            <div class="row-main">
                 <div class="row-title">${r.domain}</div>
             </div>
             <div class="row-right">
                 <span class="tag tag-cyan">${metricValue}</span>
             </div>
-        </div>
-        <div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>
-        `;
+            `;
+        }
         if (!isBlocked) {
             const addBtn = document.createElement("button");
             addBtn.className = "btn-ghost";
             addBtn.textContent = "+ Limit";
             addBtn.addEventListener("click", async () => {
+                rankingInteractionDepth = 0;
                 await addDomain(r.domain, currentSettings.defaultLimitMinutes * 60);
                 await loadAll();
             });
-            div.querySelector(".row-top .row-right").appendChild(addBtn);
+            div.querySelector(".row-right").appendChild(addBtn);
         } else {
             const blockedSpan = document.createElement("span");
             blockedSpan.className = "tag tag-muted";
-            blockedSpan.textContent = "Blocked";
-            div.querySelector(".row-top .row-right").appendChild(blockedSpan);
+            blockedSpan.textContent = "Limited";
+            div.querySelector(".row-right").appendChild(blockedSpan);
         }
         rank.appendChild(div);
     });
@@ -394,7 +535,6 @@ function renderBlockList(blockedDomains, statsToday) {
 
         const displayTimeSec = (limitSec != null && timeSec >= limitSec) ? limitSec : timeSec;
         const pct = limitSec ? Math.min(100, Math.round((displayTimeSec / limitSec) * 100)) : 0;
-        const pctTag = pct >= 90 ? 'tag-red' : pct >= 60 ? 'tag-cyan' : 'tag-green';
 
         const div = document.createElement("div");
         div.className = "row row-limit row-with-bar";
@@ -405,7 +545,6 @@ function renderBlockList(blockedDomains, statsToday) {
                     <div class="row-meta">Limit: ${limitText} · Today: ${formatTime(displayTimeSec)} · ${st.visits || 0} visits</div>
                 </div>
                 <div class="row-right">
-                    ${limitSec ? `<span class="tag ${pctTag}">${pct}%</span>` : ""}
                     <button class="btn-ghost" data-domain="${domain}" data-action="reset">Reset</button>
                     <button class="btn-danger" data-domain="${domain}" data-action="remove">Remove</button>
                 </div>
@@ -471,20 +610,30 @@ async function resetDomainStats(domain) {
 }
 
 async function addDomain(domain, limitSeconds) {
-    const { blockedDomains = {}, alertsSent = {} } = await chrome.storage.local.get(["blockedDomains", "alertsSent"]);
+    const { blockedDomains = {}, alertsSent = {}, statsToday = {}, allStatsToday = {} }
+        = await chrome.storage.local.get(["blockedDomains", "alertsSent", "statsToday", "allStatsToday"]);
     const next = { ...blockedDomains };
     next[domain] = { limitSeconds };
+
+    const passiveStats = allStatsToday?.[domain] || { timeMs: 0, visits: 0 };
+    const existingStats = statsToday?.[domain] || { timeMs: 0, visits: 0 };
+    const mergedStats = {
+        timeMs: Math.max(existingStats.timeMs || 0, passiveStats.timeMs || 0),
+        visits: Math.max(existingStats.visits || 0, passiveStats.visits || 0)
+    };
+    const nextStats = { ...statsToday, [domain]: mergedStats };
     
     // Reset alerts when limit is changed
     const nextAlerts = { ...alertsSent };
     delete nextAlerts[domain];
     
-    await chrome.storage.local.set({ blockedDomains: next, alertsSent: nextAlerts });
+    await chrome.storage.local.set({ blockedDomains: next, statsToday: nextStats, alertsSent: nextAlerts });
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
     startActiveCountdownTicker();
     startPopupRefreshTicker();
+    wireRankingInteractionGuards();
 
     await loadSettingsFromStorage();
 
@@ -496,21 +645,18 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const statRangeSelect = document.getElementById("statRange");
     if (statRangeSelect) {
-        statRangeSelect.addEventListener("change", () => {
+        statRangeSelect.addEventListener("change", async () => {
             requestAnimationFrame(() => statRangeSelect.blur());
+            await loadAll();
         });
     }
 
     $("settingsForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
-
-        const parsedMinutes = Number(defaultLimitEl?.value);
-        const defaultLimitMinutes = Number.isFinite(parsedMinutes) && parsedMinutes > 0
-            ? Math.min(1440, Math.floor(parsedMinutes))
-            : DEFAULT_SETTINGS.defaultLimitMinutes;
-
-        const use24HourTime = Boolean(use24HourEl?.checked);
-        await saveSettingsToStorage({ defaultLimitMinutes, use24HourTime });
+        await saveSettingsToStorage({
+            defaultLimitMinutes: Number(defaultLimitEl?.value),
+            use24HourTime: Boolean(use24HourEl?.checked)
+        });
 
         if (defaultLimitEl) defaultLimitEl.value = String(currentSettings.defaultLimitMinutes);
         if (use24HourEl) use24HourEl.checked = currentSettings.use24HourTime;
@@ -527,7 +673,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         const limitMinutes = rawLimitValue === "" ? currentSettings.defaultLimitMinutes : parsedMinutes;
         const limitSeconds = Math.floor(limitMinutes * 60);
 
-        if (!domain) return;
+        if (!isValidDomain(domain)) {
+            alert("Please enter a valid domain (e.g., google.com).");
+            return;
+        }
         if (!Number.isFinite(limitSeconds) || limitSeconds <= 0) return;
 
         $("domainInput").value = "";
@@ -547,7 +696,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         const startTime = parseTimeInput(startTimeInput, currentSettings.use24HourTime);
         const endTime = parseTimeInput(endTimeInput, currentSettings.use24HourTime);
 
-        if (!domain || !startTime || !endTime) {
+        if (!isValidDomain(domain)) {
+            alert("Please enter a valid domain (e.g., google.com).");
+            return;
+        }
+
+        if (!startTime || !endTime) {
             if (currentSettings.use24HourTime) {
                 alert("Please enter valid times in 24-hour format (e.g., 9:00, 09:00, 17:30)");
             } else {
