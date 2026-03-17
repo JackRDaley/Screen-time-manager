@@ -189,24 +189,13 @@
                 <div class="card-body">
                     <div class="settings-list">
                         <div class="settings-row">
-                            <label class="settings-label" for="whopCheckoutUrl">Checkout URL</label>
-                            <input id="whopCheckoutUrl" class="input" type="url" placeholder="https://whop.com/checkout/..." />
-                        </div>
-
-                        <div class="settings-row">
-                            <label class="settings-label" for="whopVerifyUrl">Verify API URL</label>
-                            <input id="whopVerifyUrl" class="input" type="url" placeholder="https://your-api.com/whop/verify" />
-                        </div>
-
-                        <div class="settings-row">
                             <label class="settings-label" for="whopAccessToken">Access token / receipt</label>
-                            <input id="whopAccessToken" class="input" type="text" placeholder="Paste Whop token from your flow" autocomplete="off" />
+                            <input id="whopAccessToken" class="input" type="text" placeholder="Paste your Whop token" autocomplete="off" />
                         </div>
                     </div>
 
                     <div class="settings-actions" style="margin-top:8px">
                         <button class="btn" id="verifyWhopBtn" type="button" style="width:100%">Verify Premium Access</button>
-                        <button class="btn-ghost" id="openWhopCheckoutBtn" type="button" style="width:100%">Open Whop Checkout</button>
                         <div id="premiumStatusMsg" class="settings-saved" role="status" aria-live="polite">Premium inactive</div>
                     </div>
                 </div>

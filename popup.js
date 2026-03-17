@@ -2,7 +2,8 @@ const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "uiSettings";
 const PREMIUM_KEY = "premiumState";
-const WHOP_SETTINGS_KEY = "whopSettings";
+const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/verify";
+const WHOP_CHECKOUT_URL = ""; // fill in your Whop checkout link when ready
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 60,
     use24HourTime: false
@@ -13,11 +14,6 @@ const DEFAULT_PREMIUM = Object.freeze({
     source: "free",
     checkedAt: null,
     expiresAt: null
-});
-const DEFAULT_WHOP_SETTINGS = Object.freeze({
-    checkoutUrl: "",
-    verifyUrl: "",
-    accessToken: ""
 });
 const FREE_PLAN_LIMITS = Object.freeze({
     maxTrackedDomains: 3,
@@ -36,7 +32,6 @@ let loadAllInFlight = false;
 let loadAllPending = false;
 let rankingInteractionDepth = 0;
 let currentPremium = { ...DEFAULT_PREMIUM };
-let currentWhopSettings = { ...DEFAULT_WHOP_SETTINGS };
 
 function isRankingInteractionActive() {
     return rankingInteractionDepth > 0;
@@ -172,14 +167,6 @@ function normalizePremium(raw) {
     };
 }
 
-function normalizeWhopSettings(raw) {
-    return {
-        checkoutUrl: typeof raw?.checkoutUrl === "string" ? raw.checkoutUrl.trim() : "",
-        verifyUrl: typeof raw?.verifyUrl === "string" ? raw.verifyUrl.trim() : "",
-        accessToken: typeof raw?.accessToken === "string" ? raw.accessToken.trim() : ""
-    };
-}
-
 function isPremiumActive() {
     return Boolean(currentPremium?.active);
 }
@@ -242,10 +229,8 @@ async function loadSettingsFromStorage() {
 }
 
 async function loadMonetizationFromStorage() {
-    const { [PREMIUM_KEY]: premiumStored, [WHOP_SETTINGS_KEY]: whopStored } =
-        await chrome.storage.local.get([PREMIUM_KEY, WHOP_SETTINGS_KEY]);
+    const { [PREMIUM_KEY]: premiumStored } = await chrome.storage.local.get([PREMIUM_KEY]);
     currentPremium = normalizePremium(premiumStored || DEFAULT_PREMIUM);
-    currentWhopSettings = normalizeWhopSettings(whopStored || DEFAULT_WHOP_SETTINGS);
 }
 
 async function saveSettingsToStorage(partialSettings) {
@@ -255,21 +240,9 @@ async function saveSettingsToStorage(partialSettings) {
     return merged;
 }
 
-async function saveWhopSettingsToStorage(partial) {
-    const merged = normalizeWhopSettings({ ...currentWhopSettings, ...partial });
-    currentWhopSettings = merged;
-    await chrome.storage.local.set({ [WHOP_SETTINGS_KEY]: merged });
-    return merged;
-}
-
 async function verifyWhopAccess() {
-    const verifyUrl = currentWhopSettings.verifyUrl;
-    const accessToken = currentWhopSettings.accessToken;
+    const accessToken = ($('whopAccessToken')?.value || "").trim();
 
-    if (!verifyUrl) {
-        setPremiumStatusMessage("Set a Verify API URL first.", "error");
-        return;
-    }
     if (!accessToken) {
         setPremiumStatusMessage("Paste an access token/receipt first.", "error");
         return;
@@ -278,7 +251,7 @@ async function verifyWhopAccess() {
     setPremiumStatusMessage("Verifying access...");
 
     try {
-        const response = await fetch(verifyUrl, {
+        const response = await fetch(WHOP_VERIFY_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token: accessToken, extension: "screen-time-manager" })
@@ -313,12 +286,11 @@ async function verifyWhopAccess() {
 }
 
 function openWhopCheckout() {
-    const checkoutUrl = currentWhopSettings.checkoutUrl;
-    if (!checkoutUrl) {
-        setPremiumStatusMessage("Set a Checkout URL first.", "error");
+    if (!WHOP_CHECKOUT_URL) {
+        setPremiumStatusMessage("Checkout URL not configured.", "error");
         return;
     }
-    chrome.tabs.create({ url: checkoutUrl });
+    chrome.tabs.create({ url: WHOP_CHECKOUT_URL });
 }
 
 function formatTimeForDisplay(timeStr, use24Hour = currentSettings.use24HourTime) {
@@ -522,13 +494,11 @@ async function loadAll() {
                 activeBlocks = [],
                 scheduledBlocks = [],
                 [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS,
-                [PREMIUM_KEY]: premiumStored = DEFAULT_PREMIUM,
-                [WHOP_SETTINGS_KEY]: whopStored = DEFAULT_WHOP_SETTINGS
-            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY, WHOP_SETTINGS_KEY]);
+                [PREMIUM_KEY]: premiumStored = DEFAULT_PREMIUM
+            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY]);
 
             currentSettings = normalizeSettings(storedSettings);
             currentPremium = normalizePremium(premiumStored);
-            currentWhopSettings = normalizeWhopSettings(whopStored);
 
             const enforced = await enforceFreeTierDomainCap(blockedDomains, statsToday);
             const effectiveBlockedDomains = enforced.blockedDomains;
@@ -882,32 +852,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const defaultLimitEl = $("defaultLimitMinutes");
     const use24HourEl = $("use24HourTime");
-    const whopCheckoutUrlEl = $("whopCheckoutUrl");
-    const whopVerifyUrlEl = $("whopVerifyUrl");
-    const whopAccessTokenEl = $("whopAccessToken");
     if (defaultLimitEl) defaultLimitEl.value = String(currentSettings.defaultLimitMinutes);
     if (use24HourEl) use24HourEl.checked = currentSettings.use24HourTime;
-    if (whopCheckoutUrlEl) whopCheckoutUrlEl.value = currentWhopSettings.checkoutUrl;
-    if (whopVerifyUrlEl) whopVerifyUrlEl.value = currentWhopSettings.verifyUrl;
-    if (whopAccessTokenEl) whopAccessTokenEl.value = currentWhopSettings.accessToken;
     applyScheduleInputMode();
 
     $("verifyWhopBtn")?.addEventListener("click", async () => {
-        await saveWhopSettingsToStorage({
-            checkoutUrl: whopCheckoutUrlEl?.value,
-            verifyUrl: whopVerifyUrlEl?.value,
-            accessToken: whopAccessTokenEl?.value
-        });
         await verifyWhopAccess();
-    });
-
-    $("openWhopCheckoutBtn")?.addEventListener("click", async () => {
-        await saveWhopSettingsToStorage({
-            checkoutUrl: whopCheckoutUrlEl?.value,
-            verifyUrl: whopVerifyUrlEl?.value,
-            accessToken: whopAccessTokenEl?.value
-        });
-        openWhopCheckout();
     });
 
     $("upgradeBtnFromLimits")?.addEventListener("click", openWhopCheckout);
@@ -1027,17 +977,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
         currentPremium = normalizePremium(changes[PREMIUM_KEY].newValue || DEFAULT_PREMIUM);
     }
 
-    if (changes[WHOP_SETTINGS_KEY]) {
-        currentWhopSettings = normalizeWhopSettings(changes[WHOP_SETTINGS_KEY].newValue || DEFAULT_WHOP_SETTINGS);
-        const whopCheckoutUrlEl = $("whopCheckoutUrl");
-        const whopVerifyUrlEl = $("whopVerifyUrl");
-        const whopAccessTokenEl = $("whopAccessToken");
-        if (whopCheckoutUrlEl) whopCheckoutUrlEl.value = currentWhopSettings.checkoutUrl;
-        if (whopVerifyUrlEl) whopVerifyUrlEl.value = currentWhopSettings.verifyUrl;
-        if (whopAccessTokenEl) whopAccessTokenEl.value = currentWhopSettings.accessToken;
-    }
-
-    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes[WHOP_SETTINGS_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks) {
+    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks) {
         loadAll();
     }
 });
