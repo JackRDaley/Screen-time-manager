@@ -1,0 +1,7 @@
+name = "screen-time-manager-verify"
+main = "src/index.js"
+compatibility_date = "2026-03-17"
+
+[vars]
+DEV_PREMIUM_TOKEN = "local-premium-token"
+WHOP_VERIFY_URL = ""

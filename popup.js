@@ -1,9 +1,27 @@
 const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "uiSettings";
+const PREMIUM_KEY = "premiumState";
+const WHOP_SETTINGS_KEY = "whopSettings";
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 60,
     use24HourTime: false
+});
+const DEFAULT_PREMIUM = Object.freeze({
+    active: false,
+    planName: "Free",
+    source: "free",
+    checkedAt: null,
+    expiresAt: null
+});
+const DEFAULT_WHOP_SETTINGS = Object.freeze({
+    checkoutUrl: "",
+    verifyUrl: "",
+    accessToken: ""
+});
+const FREE_PLAN_LIMITS = Object.freeze({
+    maxTrackedDomains: 3,
+    schedulingEnabled: false
 });
 
 let currentSettings = { ...DEFAULT_SETTINGS };
@@ -17,6 +35,8 @@ let popupRefreshInFlight = false;
 let loadAllInFlight = false;
 let loadAllPending = false;
 let rankingInteractionDepth = 0;
+let currentPremium = { ...DEFAULT_PREMIUM };
+let currentWhopSettings = { ...DEFAULT_WHOP_SETTINGS };
 
 function isRankingInteractionActive() {
     return rankingInteractionDepth > 0;
@@ -142,10 +162,90 @@ function normalizeSettings(raw) {
     };
 }
 
+function normalizePremium(raw) {
+    return {
+        active: Boolean(raw?.active),
+        planName: typeof raw?.planName === "string" && raw.planName.trim() ? raw.planName.trim() : (raw?.active ? "Premium" : "Free"),
+        source: typeof raw?.source === "string" && raw.source.trim() ? raw.source : (raw?.active ? "whop" : "free"),
+        checkedAt: typeof raw?.checkedAt === "string" ? raw.checkedAt : null,
+        expiresAt: typeof raw?.expiresAt === "string" ? raw.expiresAt : null
+    };
+}
+
+function normalizeWhopSettings(raw) {
+    return {
+        checkoutUrl: typeof raw?.checkoutUrl === "string" ? raw.checkoutUrl.trim() : "",
+        verifyUrl: typeof raw?.verifyUrl === "string" ? raw.verifyUrl.trim() : "",
+        accessToken: typeof raw?.accessToken === "string" ? raw.accessToken.trim() : ""
+    };
+}
+
+function isPremiumActive() {
+    return Boolean(currentPremium?.active);
+}
+
+function canUseScheduling() {
+    return isPremiumActive() || FREE_PLAN_LIMITS.schedulingEnabled;
+}
+
+function canAddMoreDomains(blockedDomains) {
+    if (isPremiumActive()) return true;
+    return Object.keys(blockedDomains || {}).length < FREE_PLAN_LIMITS.maxTrackedDomains;
+}
+
+function setPremiumStatusMessage(message, kind = "neutral") {
+    const statusEl = $("premiumStatusMsg");
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.classList.remove("is-error", "is-success");
+    if (kind === "error") statusEl.classList.add("is-error");
+    if (kind === "success") statusEl.classList.add("is-success");
+    statusEl.classList.add("is-visible");
+}
+
+function applyPaywallUI(blockedDomains = {}, scheduledBlocks = []) {
+    const limitsPaywallCard = $("limitsPaywallCard");
+    const schedulePaywallCard = $("schedulePaywallCard");
+    const limitsNotice = $("limitsPaywallNotice");
+    const addForm = $("addForm");
+    const scheduledForm = $("scheduledForm");
+
+    const domainCount = Object.keys(blockedDomains || {}).length;
+    const atDomainCap = !isPremiumActive() && domainCount >= FREE_PLAN_LIMITS.maxTrackedDomains;
+    const scheduleLocked = !canUseScheduling();
+
+    if (limitsPaywallCard) {
+        limitsPaywallCard.style.display = atDomainCap ? "block" : "none";
+    }
+    if (limitsNotice) {
+        limitsNotice.textContent = `Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains.`;
+    }
+    if (schedulePaywallCard) {
+        schedulePaywallCard.style.display = scheduleLocked ? "block" : "none";
+    }
+
+    addForm?.classList.toggle("is-locked", atDomainCap);
+    scheduledForm?.classList.toggle("is-locked", scheduleLocked);
+
+    if (isPremiumActive()) {
+        const label = currentPremium.planName || "Premium";
+        setPremiumStatusMessage(`Premium active (${label})`, "success");
+    } else {
+        setPremiumStatusMessage("Premium inactive");
+    }
+}
+
 async function loadSettingsFromStorage() {
     const { [SETTINGS_KEY]: stored } = await chrome.storage.local.get([SETTINGS_KEY]);
     currentSettings = normalizeSettings(stored);
     return currentSettings;
+}
+
+async function loadMonetizationFromStorage() {
+    const { [PREMIUM_KEY]: premiumStored, [WHOP_SETTINGS_KEY]: whopStored } =
+        await chrome.storage.local.get([PREMIUM_KEY, WHOP_SETTINGS_KEY]);
+    currentPremium = normalizePremium(premiumStored || DEFAULT_PREMIUM);
+    currentWhopSettings = normalizeWhopSettings(whopStored || DEFAULT_WHOP_SETTINGS);
 }
 
 async function saveSettingsToStorage(partialSettings) {
@@ -153,6 +253,72 @@ async function saveSettingsToStorage(partialSettings) {
     currentSettings = merged;
     await chrome.storage.local.set({ [SETTINGS_KEY]: merged });
     return merged;
+}
+
+async function saveWhopSettingsToStorage(partial) {
+    const merged = normalizeWhopSettings({ ...currentWhopSettings, ...partial });
+    currentWhopSettings = merged;
+    await chrome.storage.local.set({ [WHOP_SETTINGS_KEY]: merged });
+    return merged;
+}
+
+async function verifyWhopAccess() {
+    const verifyUrl = currentWhopSettings.verifyUrl;
+    const accessToken = currentWhopSettings.accessToken;
+
+    if (!verifyUrl) {
+        setPremiumStatusMessage("Set a Verify API URL first.", "error");
+        return;
+    }
+    if (!accessToken) {
+        setPremiumStatusMessage("Paste an access token/receipt first.", "error");
+        return;
+    }
+
+    setPremiumStatusMessage("Verifying access...");
+
+    try {
+        const response = await fetch(verifyUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: accessToken, extension: "screen-time-manager" })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Verification failed (${response.status})`);
+        }
+
+        const payload = await response.json();
+        const nextPremium = normalizePremium({
+            active: Boolean(payload?.active),
+            planName: payload?.planName || (payload?.active ? "Premium" : "Free"),
+            source: "whop",
+            checkedAt: new Date().toISOString(),
+            expiresAt: payload?.expiresAt || null
+        });
+
+        currentPremium = nextPremium;
+        await chrome.storage.local.set({ [PREMIUM_KEY]: nextPremium });
+
+        if (nextPremium.active) {
+            setPremiumStatusMessage(`Premium active (${nextPremium.planName})`, "success");
+        } else {
+            setPremiumStatusMessage("No active Whop entitlement found.", "error");
+        }
+
+        await loadAll();
+    } catch (error) {
+        setPremiumStatusMessage(error?.message || "Verification failed.", "error");
+    }
+}
+
+function openWhopCheckout() {
+    const checkoutUrl = currentWhopSettings.checkoutUrl;
+    if (!checkoutUrl) {
+        setPremiumStatusMessage("Set a Checkout URL first.", "error");
+        return;
+    }
+    chrome.tabs.create({ url: checkoutUrl });
 }
 
 function formatTimeForDisplay(timeStr, use24Hour = currentSettings.use24HourTime) {
@@ -275,6 +441,68 @@ function updateStatStrip(allStatsToday, blockedDomains) {
     if ($("statBlocked"))    $("statBlocked").textContent    = String(blockedCount);
 }
 
+async function enforceFreeTierDomainCap(blockedDomains = {}, statsToday = {}) {
+    if (isPremiumActive()) {
+        return { blockedDomains, statsToday, trimmedCount: 0 };
+    }
+
+    const entries = Object.entries(blockedDomains || {});
+    const maxAllowed = FREE_PLAN_LIMITS.maxTrackedDomains;
+    if (entries.length <= maxAllowed) {
+        return { blockedDomains, statsToday, trimmedCount: 0 };
+    }
+
+    const ranked = entries
+        .map(([domain, cfg]) => ({
+            domain,
+            cfg,
+            timeMs: statsToday?.[domain]?.timeMs || 0,
+            visits: statsToday?.[domain]?.visits || 0
+        }))
+        .sort((a, b) => b.timeMs - a.timeMs || b.visits - a.visits || a.domain.localeCompare(b.domain));
+
+    const keptDomains = new Set(ranked.slice(0, maxAllowed).map((entry) => entry.domain));
+    const nextBlockedDomains = {};
+    for (const [domain, cfg] of entries) {
+        if (keptDomains.has(domain)) {
+            nextBlockedDomains[domain] = cfg;
+        }
+    }
+
+    const nextStatsToday = {};
+    for (const [domain, stats] of Object.entries(statsToday || {})) {
+        if (keptDomains.has(domain)) {
+            nextStatsToday[domain] = stats;
+        }
+    }
+
+    const { alertsSent = {}, activeBlocks = [] } = await chrome.storage.local.get(["alertsSent", "activeBlocks"]);
+    const nextAlerts = {};
+    for (const [domain, sent] of Object.entries(alertsSent || {})) {
+        if (keptDomains.has(domain)) {
+            nextAlerts[domain] = sent;
+        }
+    }
+
+    const nextActiveBlocks = (activeBlocks || []).filter((block) => keptDomains.has(block.domain));
+
+    await chrome.storage.local.set({
+        blockedDomains: nextBlockedDomains,
+        statsToday: nextStatsToday,
+        alertsSent: nextAlerts,
+        activeBlocks: nextActiveBlocks
+    });
+
+    const trimmedCount = entries.length - keptDomains.size;
+    setPremiumStatusMessage(`Premium inactive: removed ${trimmedCount} domain(s) to match free tier.`, "error");
+
+    return {
+        blockedDomains: nextBlockedDomains,
+        statsToday: nextStatsToday,
+        trimmedCount
+    };
+}
+
 async function loadAll() {
     if (loadAllInFlight) {
         loadAllPending = true;
@@ -293,25 +521,35 @@ async function loadAll() {
                 statsHistory = {},
                 activeBlocks = [],
                 scheduledBlocks = [],
-                [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS
-            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY]);
+                [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS,
+                [PREMIUM_KEY]: premiumStored = DEFAULT_PREMIUM,
+                [WHOP_SETTINGS_KEY]: whopStored = DEFAULT_WHOP_SETTINGS
+            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY, WHOP_SETTINGS_KEY]);
 
             currentSettings = normalizeSettings(storedSettings);
+            currentPremium = normalizePremium(premiumStored);
+            currentWhopSettings = normalizeWhopSettings(whopStored);
+
+            const enforced = await enforceFreeTierDomainCap(blockedDomains, statsToday);
+            const effectiveBlockedDomains = enforced.blockedDomains;
+            const effectiveStatsToday = enforced.statsToday;
+
             latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
-            latestBlockedDomains = blockedDomains || {};
-            latestStatsToday = statsToday || {};
+            latestBlockedDomains = effectiveBlockedDomains || {};
+            latestStatsToday = effectiveStatsToday || {};
 
             const range = $("statRange")?.value || "Today";
             const rangeStats = getAggregatedStats(range, allStatsToday, statsHistory);
 
-            updateStatStrip(rangeStats, blockedDomains);
+            updateStatStrip(rangeStats, effectiveBlockedDomains);
             renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
-            renderScheduled(scheduledBlocks, activeBlocks);
+            renderScheduled(scheduledBlocks, latestActiveBlocks);
             if (!isRankingInteractionActive()) {
-                renderRanking(blockedDomains, statsToday, rangeStats, "ranking", "timeSec", "Top by Time", range);
-                renderRanking(blockedDomains, statsToday, rangeStats, "rankingByVisits", "visits", "Top by Visits", range);
+                renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "ranking", "timeSec", "Top by Time", range);
+                renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "rankingByVisits", "visits", "Top by Visits", range);
             }
-            renderBlockList(blockedDomains, statsToday);
+            renderBlockList(effectiveBlockedDomains, effectiveStatsToday);
+            applyPaywallUI(effectiveBlockedDomains, scheduledBlocks);
         } while (loadAllPending);
     } finally {
         loadAllInFlight = false;
@@ -495,6 +733,10 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
             addBtn.className = "btn-ghost";
             addBtn.textContent = "+ Limit";
             addBtn.addEventListener("click", async () => {
+                if (!canAddMoreDomains(latestBlockedDomains)) {
+                    setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains.`, "error");
+                    return;
+                }
                 rankingInteractionDepth = 0;
                 await addDomain(r.domain, currentSettings.defaultLimitMinutes * 60);
                 await loadAll();
@@ -636,12 +878,40 @@ document.addEventListener("DOMContentLoaded", async () => {
     wireRankingInteractionGuards();
 
     await loadSettingsFromStorage();
+    await loadMonetizationFromStorage();
 
     const defaultLimitEl = $("defaultLimitMinutes");
     const use24HourEl = $("use24HourTime");
+    const whopCheckoutUrlEl = $("whopCheckoutUrl");
+    const whopVerifyUrlEl = $("whopVerifyUrl");
+    const whopAccessTokenEl = $("whopAccessToken");
     if (defaultLimitEl) defaultLimitEl.value = String(currentSettings.defaultLimitMinutes);
     if (use24HourEl) use24HourEl.checked = currentSettings.use24HourTime;
+    if (whopCheckoutUrlEl) whopCheckoutUrlEl.value = currentWhopSettings.checkoutUrl;
+    if (whopVerifyUrlEl) whopVerifyUrlEl.value = currentWhopSettings.verifyUrl;
+    if (whopAccessTokenEl) whopAccessTokenEl.value = currentWhopSettings.accessToken;
     applyScheduleInputMode();
+
+    $("verifyWhopBtn")?.addEventListener("click", async () => {
+        await saveWhopSettingsToStorage({
+            checkoutUrl: whopCheckoutUrlEl?.value,
+            verifyUrl: whopVerifyUrlEl?.value,
+            accessToken: whopAccessTokenEl?.value
+        });
+        await verifyWhopAccess();
+    });
+
+    $("openWhopCheckoutBtn")?.addEventListener("click", async () => {
+        await saveWhopSettingsToStorage({
+            checkoutUrl: whopCheckoutUrlEl?.value,
+            verifyUrl: whopVerifyUrlEl?.value,
+            accessToken: whopAccessTokenEl?.value
+        });
+        openWhopCheckout();
+    });
+
+    $("upgradeBtnFromLimits")?.addEventListener("click", openWhopCheckout);
+    $("upgradeBtnFromSchedule")?.addEventListener("click", openWhopCheckout);
 
     const statRangeSelect = document.getElementById("statRange");
     if (statRangeSelect) {
@@ -667,6 +937,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     $("addForm").addEventListener("submit", async (e) => {
         e.preventDefault();
+
+        if (!canAddMoreDomains(latestBlockedDomains)) {
+            setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains.`, "error");
+            return;
+        }
+
         const domain = normalizeDomain($("domainInput").value);
         const rawLimitValue = $("limitInput").value.trim();
         const parsedMinutes = Number(rawLimitValue);
@@ -689,6 +965,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Scheduled form event listener
     $("scheduledForm").addEventListener("submit", async (e) => {
         e.preventDefault();
+
+        if (!canUseScheduling()) {
+            setPremiumStatusMessage("Scheduling is a premium feature.", "error");
+            return;
+        }
+
         const domain = normalizeDomain($("scheduledDomain").value);
         const startTimeInput = $("startTime").value.trim();
         const endTimeInput = $("endTime").value.trim();
@@ -741,7 +1023,21 @@ chrome.storage.onChanged.addListener((changes, area) => {
         applyScheduleInputMode();
     }
 
-    if (changes[SETTINGS_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks) {
+    if (changes[PREMIUM_KEY]) {
+        currentPremium = normalizePremium(changes[PREMIUM_KEY].newValue || DEFAULT_PREMIUM);
+    }
+
+    if (changes[WHOP_SETTINGS_KEY]) {
+        currentWhopSettings = normalizeWhopSettings(changes[WHOP_SETTINGS_KEY].newValue || DEFAULT_WHOP_SETTINGS);
+        const whopCheckoutUrlEl = $("whopCheckoutUrl");
+        const whopVerifyUrlEl = $("whopVerifyUrl");
+        const whopAccessTokenEl = $("whopAccessToken");
+        if (whopCheckoutUrlEl) whopCheckoutUrlEl.value = currentWhopSettings.checkoutUrl;
+        if (whopVerifyUrlEl) whopVerifyUrlEl.value = currentWhopSettings.verifyUrl;
+        if (whopAccessTokenEl) whopAccessTokenEl.value = currentWhopSettings.accessToken;
+    }
+
+    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes[WHOP_SETTINGS_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks) {
         loadAll();
     }
 });

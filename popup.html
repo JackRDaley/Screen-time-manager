@@ -85,6 +85,16 @@
 
         <!-- ── Limits ─────────────────────────────────── -->
         <div class="panel" id="p2">
+            <div class="card" id="limitsPaywallCard" style="display:none">
+                <div class="card-head">
+                    <div class="card-title">Premium Required</div>
+                </div>
+                <div class="card-body">
+                    <div id="limitsPaywallNotice" class="muted" style="padding:0 0 8px 0">Free plan reached its limit.</div>
+                    <button class="btn" id="upgradeBtnFromLimits" type="button" style="width:100%">Upgrade with Whop</button>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-head">
                     <div class="card-title">Add Limit</div>
@@ -110,6 +120,16 @@
 
         <!-- ── Schedule ───────────────────────────────── -->
         <div class="panel" id="p3">
+            <div class="card" id="schedulePaywallCard" style="display:none">
+                <div class="card-head">
+                    <div class="card-title">Premium Required</div>
+                </div>
+                <div class="card-body">
+                    <div class="muted" style="padding:0 0 8px 0">Scheduling is a premium feature.</div>
+                    <button class="btn" id="upgradeBtnFromSchedule" type="button" style="width:100%">Upgrade with Whop</button>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-head">
                     <div class="card-title">New Scheduled Block</div>
@@ -159,6 +179,36 @@
                             <div id="settingsSavedMsg" class="settings-saved" role="status" aria-live="polite">Settings saved</div>
                         </div>
                     </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head">
+                    <div class="card-title">Whop Billing</div>
+                </div>
+                <div class="card-body">
+                    <div class="settings-list">
+                        <div class="settings-row">
+                            <label class="settings-label" for="whopCheckoutUrl">Checkout URL</label>
+                            <input id="whopCheckoutUrl" class="input" type="url" placeholder="https://whop.com/checkout/..." />
+                        </div>
+
+                        <div class="settings-row">
+                            <label class="settings-label" for="whopVerifyUrl">Verify API URL</label>
+                            <input id="whopVerifyUrl" class="input" type="url" placeholder="https://your-api.com/whop/verify" />
+                        </div>
+
+                        <div class="settings-row">
+                            <label class="settings-label" for="whopAccessToken">Access token / receipt</label>
+                            <input id="whopAccessToken" class="input" type="text" placeholder="Paste Whop token from your flow" autocomplete="off" />
+                        </div>
+                    </div>
+
+                    <div class="settings-actions" style="margin-top:8px">
+                        <button class="btn" id="verifyWhopBtn" type="button" style="width:100%">Verify Premium Access</button>
+                        <button class="btn-ghost" id="openWhopCheckoutBtn" type="button" style="width:100%">Open Whop Checkout</button>
+                        <div id="premiumStatusMsg" class="settings-saved" role="status" aria-live="polite">Premium inactive</div>
+                    </div>
                 </div>
             </div>
         </div>

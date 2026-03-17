@@ -273,6 +273,19 @@ nav label {
     padding: 10px 12px;
 }
 
+.is-locked {
+    opacity: .55;
+    pointer-events: none;
+}
+
+.settings-saved.is-error {
+    color: var(--danger);
+}
+
+.settings-saved.is-success {
+    color: var(--green);
+}
+
 /* ── Row items ───────────────────────────────────────────────── */
 .row {
     display: flex;
