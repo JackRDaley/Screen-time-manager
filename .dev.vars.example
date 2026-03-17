@@ -1,0 +1,3 @@
+WHOP_API_KEY=your_whop_secret
+WHOP_VERIFY_URL=https://your-whop-verify-endpoint
+DEV_PREMIUM_TOKEN=local-premium-token

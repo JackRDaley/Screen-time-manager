@@ -1,0 +1,11 @@
+{
+  "name": "screen-time-manager",
+  "private": true,
+  "scripts": {
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.74.0"
+  }
+}
