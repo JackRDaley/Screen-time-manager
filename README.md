@@ -7,7 +7,7 @@ This extension now supports a built-in paywall flow:
 
 - Free tier:
 	- Up to 3 limited domains
-	- Scheduling locked
+	- Up to 2 scheduled blocks
 - Premium tier:
 	- Unlimited limits
 	- Scheduling enabled
@@ -53,6 +53,8 @@ If `active` is `true`, premium unlocks immediately in the popup.
 This repo now includes a Worker backend in `worker/` with:
 
 - `GET /health`
+- `GET /whop/complete`
+- `POST /whop/issue-token`
 - `POST /whop/verify`
 
 #### 1) Install and log in
@@ -65,19 +67,32 @@ npx wrangler login
 
 #### 2) Set secrets/vars
 
-Set your Whop secret in Cloudflare (secret):
+Set your Whop secret in Cloudflare:
 
 ```bash
 npx wrangler secret put WHOP_API_KEY
 ```
 
-Set your Whop verify URL (plain var):
+Set your JWT signing secret in Cloudflare:
 
 ```bash
-npx wrangler deploy --var WHOP_VERIFY_URL:https://your-whop-verify-endpoint
+npx wrangler secret put JWT_SECRET
 ```
 
-For local/dev fallback token, edit `worker/wrangler.toml`:
+Set your Whop memberships config and token lifetime in `wrangler.toml` or deploy vars:
+
+- `WHOP_VERIFY_URL`
+- `WHOP_COMPANY_ID`
+- `WHOP_ACTIVE_STATUSES = "active,trialing"`
+- `TOKEN_TTL_DAYS = "7"`
+- `WHOP_EXTENSION_ID` (optional fallback extension id for checkout callback)
+
+For memberships mode, use:
+
+- `WHOP_VERIFY_URL = "https://api.whop.com/api/v1/memberships"`
+- `WHOP_COMPANY_ID = "biz_xxxxxxxxxxxxx"`
+
+For local/dev fallback token, keep:
 
 - `DEV_PREMIUM_TOKEN = "local-premium-token"`
 
@@ -91,17 +106,57 @@ Wrangler prints your Worker URL, for example:
 
 - `https://screen-time-manager-verify.<your-subdomain>.workers.dev`
 
-#### 4) Configure extension
+#### 4) Issue a premium token
 
-In **Settings → Whop Billing**:
+Call the Worker with a Whop user ID (`user_...`) or membership ID (`mem_...`):
 
-- Verify API URL: `https://...workers.dev/whop/verify`
-- Access token / receipt: `local-premium-token` (dev fallback) or your real token
+```bash
+curl -X POST https://your-worker.workers.dev/whop/issue-token \
+  -H "Content-Type: application/json" \
+	-d '{"token":"user_xxxxxxxxxxxxx"}'
+```
 
-#### 5) Test endpoints
+Successful response:
+
+```json
+{
+  "active": true,
+  "planName": "Premium",
+  "expiresAt": "2026-03-24T12:00:00.000Z",
+  "token": "signed_jwt_here"
+}
+```
+
+#### 5) Configure extension
+
+In the extension popup, paste the returned signed `token` into **Access token / receipt** and click **Verify Premium Access**.
+
+The extension already posts to your Worker `/whop/verify` endpoint.
+
+### Optional: fully automatic checkout activation (no token paste)
+
+To avoid manual token input, configure Whop to redirect after checkout to your Worker callback:
+
+- `https://screen-time-manager.jackster0627.workers.dev/whop/complete`
+
+Flow:
+
+1. User starts checkout from the extension.
+2. Extension appends `ext=<chrome.runtime.id>` to the checkout URL.
+3. Whop redirects to `/whop/complete?token=...&ext=...`.
+4. Worker callback page sends `{ action: "whopCheckoutComplete", token }` to the extension.
+5. Background verifies token against `/whop/verify` and stores premium state automatically.
+
+Notes:
+
+- Keep `manifest.json` `externally_connectable.matches` aligned with your Worker domain.
+- If your checkout provider can’t pass `ext`, set `WHOP_EXTENSION_ID` in Worker vars for your production extension ID.
+
+#### 6) Test endpoints
 
 - Health: `https://...workers.dev/health`
-- Verify: POST to `https://...workers.dev/whop/verify`
+- Issue token: `POST https://...workers.dev/whop/issue-token`
+- Verify token: `POST https://...workers.dev/whop/verify`
 
 ### What to commit (important)
 

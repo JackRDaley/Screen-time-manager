@@ -45,13 +45,21 @@ document.getElementById("closeTabBtn").addEventListener("click", async () => {
 
 // Scheduled: snooze 5 min then redirect
 document.getElementById("snoozeBtn").addEventListener("click", async () => {
-    await chrome.runtime.sendMessage({ action: "snoozeBlock", domain: d, minutes: 5 });
-    window.location.href = `https://${d}`;
+    try {
+        await chrome.runtime.sendMessage({ action: "snoozeBlock", domain: d, minutes: 5 });
+        window.location.href = `https://${d}`;
+    } catch (err) {
+        console.error("Snooze failed:", err);
+    }
 });
 
 // Scheduled: end session early
 document.getElementById("endSessionBtn").addEventListener("click", async () => {
-    await chrome.runtime.sendMessage({ action: "endScheduledBlock", domain: d });
-    window.location.href = `https://${d}`;
+    try {
+        await chrome.runtime.sendMessage({ action: "endScheduledBlock", domain: d });
+        window.location.href = `https://${d}`;
+    } catch (err) {
+        console.error("End session failed:", err);
+    }
 });
 

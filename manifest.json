@@ -17,6 +17,9 @@
         "service_worker": "background.js"
     },
     "permissions": ["storage", "tabs", "alarms", "notifications", "declarativeNetRequest"],
+    "externally_connectable": {
+        "matches": ["https://screen-time-manager.jackster0627.workers.dev/*"]
+    },
     "host_permissions": ["<all_urls>"],
     "web_accessible_resources": [
         {

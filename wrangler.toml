@@ -3,5 +3,12 @@ main = "worker/src/index.js"
 compatibility_date = "2026-03-17"
 
 [vars]
-DEV_PREMIUM_TOKEN = "local-premium-token"
-WHOP_VERIFY_URL = ""
+WHOP_VERIFY_URL = "https://api.whop.com/api/v1/memberships"
+WHOP_COMPANY_ID = "biz_EE8NPUFwUpVWma"
+WHOP_ACTIVE_STATUSES = "active,trialing"
+TOKEN_TTL_DAYS = "7"
+WHOP_EXTENSION_ID = "oflgdecdopjpkpbnncendjoeohoeomnf"
+
+[[kv_namespaces]]
+binding = "PREMIUM_STATUS"
+id = "3f1cdfb28014454a8b5781979427ced7"

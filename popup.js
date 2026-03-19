@@ -2,8 +2,10 @@ const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "uiSettings";
 const PREMIUM_KEY = "premiumState";
+const WHOP_TOKEN_KEY = "whopAccessToken";
 const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/verify";
-const WHOP_CHECKOUT_URL = ""; // fill in your Whop checkout link when ready
+const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
+const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 60,
     use24HourTime: false
@@ -17,7 +19,7 @@ const DEFAULT_PREMIUM = Object.freeze({
 });
 const FREE_PLAN_LIMITS = Object.freeze({
     maxTrackedDomains: 3,
-    schedulingEnabled: false
+    maxScheduledBlocks: 2
 });
 
 let currentSettings = { ...DEFAULT_SETTINGS };
@@ -100,7 +102,7 @@ function stopPopupRefreshTicker() {
     popupRefreshTimer = null;
 }
 
-function formatTime(sec) {
+function formatTimeSec(sec) {
     sec = Math.max(0, Math.floor(sec || 0));
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
@@ -171,13 +173,14 @@ function isPremiumActive() {
     return Boolean(currentPremium?.active);
 }
 
-function canUseScheduling() {
-    return isPremiumActive() || FREE_PLAN_LIMITS.schedulingEnabled;
-}
-
 function canAddMoreDomains(blockedDomains) {
     if (isPremiumActive()) return true;
     return Object.keys(blockedDomains || {}).length < FREE_PLAN_LIMITS.maxTrackedDomains;
+}
+
+function canAddMoreScheduledBlocks(scheduledBlocks) {
+    if (isPremiumActive()) return true;
+    return (Array.isArray(scheduledBlocks) ? scheduledBlocks.length : 0) < FREE_PLAN_LIMITS.maxScheduledBlocks;
 }
 
 function setPremiumStatusMessage(message, kind = "neutral") {
@@ -198,8 +201,9 @@ function applyPaywallUI(blockedDomains = {}, scheduledBlocks = []) {
     const scheduledForm = $("scheduledForm");
 
     const domainCount = Object.keys(blockedDomains || {}).length;
+    const scheduledCount = Array.isArray(scheduledBlocks) ? scheduledBlocks.length : 0;
     const atDomainCap = !isPremiumActive() && domainCount >= FREE_PLAN_LIMITS.maxTrackedDomains;
-    const scheduleLocked = !canUseScheduling();
+    const atScheduleCap = !isPremiumActive() && scheduledCount >= FREE_PLAN_LIMITS.maxScheduledBlocks;
 
     if (limitsPaywallCard) {
         limitsPaywallCard.style.display = atDomainCap ? "block" : "none";
@@ -208,15 +212,17 @@ function applyPaywallUI(blockedDomains = {}, scheduledBlocks = []) {
         limitsNotice.textContent = `Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains.`;
     }
     if (schedulePaywallCard) {
-        schedulePaywallCard.style.display = scheduleLocked ? "block" : "none";
+        schedulePaywallCard.style.display = atScheduleCap ? "block" : "none";
     }
 
     addForm?.classList.toggle("is-locked", atDomainCap);
-    scheduledForm?.classList.toggle("is-locked", scheduleLocked);
+    scheduledForm?.classList.toggle("is-locked", atScheduleCap);
 
     if (isPremiumActive()) {
         const label = currentPremium.planName || "Premium";
         setPremiumStatusMessage(`Premium active (${label})`, "success");
+    } else if (atScheduleCap) {
+        setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxScheduledBlocks} scheduled blocks.`, "error");
     } else {
         setPremiumStatusMessage("Premium inactive");
     }
@@ -241,33 +247,20 @@ async function saveSettingsToStorage(partialSettings) {
 }
 
 async function verifyWhopAccess() {
-    const accessToken = ($('whopAccessToken')?.value || "").trim();
-
-    if (!accessToken) {
-        setPremiumStatusMessage("Paste an access token/receipt first.", "error");
-        return;
-    }
-
-    setPremiumStatusMessage("Verifying access...");
+    setPremiumStatusMessage("Refreshing premium status...");
 
     try {
-        const response = await fetch(WHOP_VERIFY_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: accessToken, extension: "screen-time-manager" })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Verification failed (${response.status})`);
+        const response = await chrome.runtime.sendMessage({ action: "refreshPremiumStatus" });
+        if (!response?.success) {
+            throw new Error(response?.error || "No linked billing identity found.");
         }
 
-        const payload = await response.json();
         const nextPremium = normalizePremium({
-            active: Boolean(payload?.active),
-            planName: payload?.planName || (payload?.active ? "Premium" : "Free"),
-            source: "whop",
-            checkedAt: new Date().toISOString(),
-            expiresAt: payload?.expiresAt || null
+            active: Boolean(response?.premiumState?.active),
+            planName: response?.premiumState?.planName || (response?.premiumState?.active ? "Premium" : "Free"),
+            source: response?.premiumState?.source || "whop",
+            checkedAt: response?.premiumState?.checkedAt || new Date().toISOString(),
+            expiresAt: response?.premiumState?.expiresAt || null
         });
 
         currentPremium = nextPremium;
@@ -290,7 +283,21 @@ function openWhopCheckout() {
         setPremiumStatusMessage("Checkout URL not configured.", "error");
         return;
     }
-    chrome.tabs.create({ url: WHOP_CHECKOUT_URL });
+    try {
+        const checkoutUrl = new URL(WHOP_CHECKOUT_URL);
+        checkoutUrl.searchParams.set("ext", chrome.runtime.id);
+        chrome.tabs.create({ url: checkoutUrl.toString() });
+    } catch {
+        chrome.tabs.create({ url: WHOP_CHECKOUT_URL });
+    }
+}
+
+function openWhopManage() {
+    if (!WHOP_MANAGE_URL) {
+        setPremiumStatusMessage("Manage membership URL not configured.", "error");
+        return;
+    }
+    chrome.tabs.create({ url: WHOP_MANAGE_URL });
 }
 
 function formatTimeForDisplay(timeStr, use24Hour = currentSettings.use24HourTime) {
@@ -408,7 +415,7 @@ function updateStatStrip(allStatsToday, blockedDomains) {
     const totalMs = domains.reduce((s, d) => s + (allStatsToday[d]?.timeMs || 0), 0);
     const totalVisits = domains.reduce((s, d) => s + (allStatsToday[d]?.visits || 0), 0);
     const blockedCount = Object.keys(blockedDomains || {}).length;
-    if ($("statScreenTime")) $("statScreenTime").textContent = formatTime(Math.round(totalMs / 1000));
+    if ($("statScreenTime")) $("statScreenTime").textContent = formatTimeSec(Math.round(totalMs / 1000));
     if ($("statVisits"))     $("statVisits").textContent     = String(totalVisits);
     if ($("statBlocked"))    $("statBlocked").textContent    = String(blockedCount);
 }
@@ -475,6 +482,36 @@ async function enforceFreeTierDomainCap(blockedDomains = {}, statsToday = {}) {
     };
 }
 
+async function enforceFreeTierScheduledCap(scheduledBlocks = []) {
+    if (isPremiumActive()) {
+        return { scheduledBlocks, trimmedCount: 0 };
+    }
+
+    const scheduled = Array.isArray(scheduledBlocks) ? scheduledBlocks : [];
+    const maxAllowed = FREE_PLAN_LIMITS.maxScheduledBlocks;
+    if (scheduled.length <= maxAllowed) {
+        return { scheduledBlocks: scheduled, trimmedCount: 0 };
+    }
+
+    const nextScheduledBlocks = scheduled.slice(0, maxAllowed);
+    const keptIds = new Set(nextScheduledBlocks.map((block) => block.id));
+    const { activeBlocks = [] } = await chrome.storage.local.get(["activeBlocks"]);
+    const nextActiveBlocks = (activeBlocks || []).filter((block) => keptIds.has(block.id));
+
+    await chrome.storage.local.set({
+        scheduledBlocks: nextScheduledBlocks,
+        activeBlocks: nextActiveBlocks
+    });
+
+    const trimmedCount = scheduled.length - nextScheduledBlocks.length;
+    setPremiumStatusMessage(`Premium inactive: removed ${trimmedCount} scheduled block(s) to match free tier.`, "error");
+
+    return {
+        scheduledBlocks: nextScheduledBlocks,
+        trimmedCount
+    };
+}
+
 async function loadAll() {
     if (loadAllInFlight) {
         loadAllPending = true;
@@ -501,8 +538,10 @@ async function loadAll() {
             currentPremium = normalizePremium(premiumStored);
 
             const enforced = await enforceFreeTierDomainCap(blockedDomains, statsToday);
+            const enforcedScheduled = await enforceFreeTierScheduledCap(scheduledBlocks);
             const effectiveBlockedDomains = enforced.blockedDomains;
             const effectiveStatsToday = enforced.statsToday;
+            const effectiveScheduledBlocks = enforcedScheduled.scheduledBlocks;
 
             latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
             latestBlockedDomains = effectiveBlockedDomains || {};
@@ -513,13 +552,13 @@ async function loadAll() {
 
             updateStatStrip(rangeStats, effectiveBlockedDomains);
             renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
-            renderScheduled(scheduledBlocks, latestActiveBlocks);
+            renderScheduled(effectiveScheduledBlocks, latestActiveBlocks);
             if (!isRankingInteractionActive()) {
                 renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "ranking", "timeSec", "Top by Time", range);
                 renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "rankingByVisits", "visits", "Top by Visits", range);
             }
             renderBlockList(effectiveBlockedDomains, effectiveStatsToday);
-            applyPaywallUI(effectiveBlockedDomains, scheduledBlocks);
+            applyPaywallUI(effectiveBlockedDomains, effectiveScheduledBlocks);
         } while (loadAllPending);
     } finally {
         loadAllInFlight = false;
@@ -568,7 +607,7 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
             <div class="row-meta">Ends: ${endsText}</div>
         </div>
         <div class="row-right">
-            ${remainingSec > 0 ? `<span class="timer">${formatTime(remainingSec)} left</span>` : ""}
+            ${remainingSec > 0 ? `<span class="timer">${formatTimeSec(remainingSec)} left</span>` : ""}
             <button class="btn-ghost" data-domain="${s.domain}">Stop</button>
         </div>
         `;
@@ -661,14 +700,14 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
     rank.innerHTML = "";
 
     rows.forEach((r, i) => {
-        const metricValue = byVisits ? String(r.visits) : formatTime(r.timeSec);
+        const metricValue = byVisits ? String(r.visits) : formatTimeSec(r.timeSec);
         const rankClass = i === 0 ? 'gold' : i === 1 ? 'silver' : 'bronze';
         const isBlocked = !!blockedDomains[r.domain];
         const limitSec = getLimitSecondsFromConfig(blockedDomains[r.domain]);
         const hasProgressBar = isBlocked && Number.isFinite(limitSec) && limitSec > 0 && range === "Today";
         const blockedStats = statsToday?.[r.domain] || { timeMs: 0, visits: 0 };
         const usedLimitSec = Math.round((blockedStats.timeMs || 0) / 1000);
-        const limitUsageText = `Limit used: ${formatTime(usedLimitSec)} / ${formatTime(limitSec || 0)}`;
+        const limitUsageText = `Limit used: ${formatTimeSec(usedLimitSec)} / ${formatTimeSec(limitSec || 0)}`;
         const pct = hasProgressBar ? Math.min(100, Math.round((usedLimitSec / limitSec) * 100)) : 0;
         const div = document.createElement("div");
         if (hasProgressBar) {
@@ -704,7 +743,7 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
             addBtn.textContent = "+ Limit";
             addBtn.addEventListener("click", async () => {
                 if (!canAddMoreDomains(latestBlockedDomains)) {
-                    setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains.`, "error");
+                    setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains and ${FREE_PLAN_LIMITS.maxScheduledBlocks} scheduled blocks.`, "error");
                     return;
                 }
                 rankingInteractionDepth = 0;
@@ -754,7 +793,7 @@ function renderBlockList(blockedDomains, statsToday) {
             <div class="row-top">
                 <div class="row-main">
                     <div class="row-title">${domain}</div>
-                    <div class="row-meta">Limit: ${limitText} · Today: ${formatTime(displayTimeSec)} · ${st.visits || 0} visits</div>
+                    <div class="row-meta">Limit: ${limitText} · Today: ${formatTimeSec(displayTimeSec)} · ${st.visits || 0} visits</div>
                 </div>
                 <div class="row-right">
                     <button class="btn-ghost" data-domain="${domain}" data-action="reset">Reset</button>
@@ -860,8 +899,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         await verifyWhopAccess();
     });
 
+    await chrome.runtime.sendMessage({ action: "refreshPremiumStatus" }).catch(() => null);
+
     $("upgradeBtnFromLimits")?.addEventListener("click", openWhopCheckout);
     $("upgradeBtnFromSchedule")?.addEventListener("click", openWhopCheckout);
+    $("manageWhopBtn")?.addEventListener("click", openWhopManage);
 
     const statRangeSelect = document.getElementById("statRange");
     if (statRangeSelect) {
@@ -916,8 +958,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("scheduledForm").addEventListener("submit", async (e) => {
         e.preventDefault();
 
-        if (!canUseScheduling()) {
-            setPremiumStatusMessage("Scheduling is a premium feature.", "error");
+        const { scheduledBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks"]);
+        if (!canAddMoreScheduledBlocks(scheduledBlocks)) {
+            setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxScheduledBlocks} scheduled blocks.`, "error");
             return;
         }
 

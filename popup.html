@@ -187,15 +187,13 @@
                     <div class="card-title">Whop Billing</div>
                 </div>
                 <div class="card-body">
-                    <div class="settings-list">
-                        <div class="settings-row">
-                            <label class="settings-label" for="whopAccessToken">Access token / receipt</label>
-                            <input id="whopAccessToken" class="input" type="text" placeholder="Paste your Whop token" autocomplete="off" />
-                        </div>
+                    <div class="muted" style="padding:0 0 8px 0">
+                        Billing is linked automatically after checkout. Use the button below to refresh membership status.
                     </div>
 
                     <div class="settings-actions" style="margin-top:8px">
-                        <button class="btn" id="verifyWhopBtn" type="button" style="width:100%">Verify Premium Access</button>
+                        <button class="btn" id="verifyWhopBtn" type="button" style="width:100%">Refresh Premium Status</button>
+                        <button class="btn" id="manageWhopBtn" type="button" style="width:100%">Manage / Cancel Membership</button>
                         <div id="premiumStatusMsg" class="settings-saved" role="status" aria-live="polite">Premium inactive</div>
                     </div>
                 </div>

@@ -15,6 +15,17 @@ const KEYS = {
     statsHistory: "statsHistory"        // { [dayKey]: { [domain]: { timeMs, visits } } }
 };
 
+const PREMIUM_KEY = "premiumState";
+const WHOP_TOKEN_KEY = "whopAccessToken";
+const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/verify";
+const ALLOWED_EXTERNAL_CALLBACK_ORIGIN = "https://screen-time-manager.jackster0627.workers.dev/";
+const PREMIUM_SYNC_ALARM = "premiumSync";
+const PREMIUM_SYNC_INTERVAL_MINUTES = 60;
+const FREE_PLAN_LIMITS = Object.freeze({
+    maxTrackedDomains: 3,
+    maxScheduledBlocks: 2
+});
+
 let activeTabId = null;
 let activeDomain = null;
 let activeStartMs = null;
@@ -250,6 +261,99 @@ function formatTimeSec(sec) {
     return `${s}s`;
 }
 
+function normalizePremium(raw) {
+    return {
+        active: Boolean(raw?.active),
+        planName: typeof raw?.planName === "string" && raw.planName.trim() ? raw.planName.trim() : (raw?.active ? "Premium" : "Free"),
+        source: typeof raw?.source === "string" && raw.source.trim() ? raw.source : (raw?.active ? "whop" : "free"),
+        checkedAt: typeof raw?.checkedAt === "string" ? raw.checkedAt : null,
+        expiresAt: typeof raw?.expiresAt === "string" ? raw.expiresAt : null
+    };
+}
+
+async function verifyAndPersistWhopToken(token, source = "whop-callback") {
+    const trimmedToken = String(token || "").trim();
+    if (!trimmedToken) {
+        throw new Error("Missing token");
+    }
+    if (/\{[^}]+\}/.test(trimmedToken)) {
+        throw new Error("Whop callback returned a placeholder token (e.g. {user_id}) instead of a real ID");
+    }
+
+    const response = await fetch(WHOP_VERIFY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: trimmedToken, extension: "screen-time-manager" })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Verification failed (${response.status})`);
+    }
+
+    const payload = await response.json();
+    const nextPremium = normalizePremium({
+        active: Boolean(payload?.active),
+        planName: payload?.planName || (payload?.active ? "Premium" : "Free"),
+        source,
+        checkedAt: new Date().toISOString(),
+        expiresAt: payload?.expiresAt || null
+    });
+
+    const payloadToStore = {
+        [PREMIUM_KEY]: nextPremium
+    };
+    if (nextPremium.active) {
+        payloadToStore[WHOP_TOKEN_KEY] = trimmedToken;
+    }
+
+    await chrome.storage.local.set(payloadToStore);
+
+    return nextPremium;
+}
+
+async function refreshStoredPremiumStatus(source = "background-sync") {
+    const { [WHOP_TOKEN_KEY]: storedToken = "", [PREMIUM_KEY]: premiumStored = {} } =
+        await chrome.storage.local.get([WHOP_TOKEN_KEY, PREMIUM_KEY]);
+
+    const trimmedToken = String(storedToken || "").trim();
+    if (!trimmedToken) {
+        return { success: false, error: "No linked billing identity found." };
+    }
+
+    if (/\{[^}]+\}/.test(trimmedToken)) {
+        return { success: false, error: "Stored billing identity is invalid." };
+    }
+
+    const response = await fetch(WHOP_VERIFY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: trimmedToken, extension: "screen-time-manager" })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Verification failed (${response.status})`);
+    }
+
+    const payload = await response.json();
+    const nextPremium = normalizePremium({
+        active: Boolean(payload?.active),
+        planName: payload?.planName || (payload?.active ? "Premium" : "Free"),
+        source,
+        checkedAt: new Date().toISOString(),
+        expiresAt: payload?.expiresAt || null
+    });
+
+    const nextStorage = {
+        [PREMIUM_KEY]: nextPremium,
+        [WHOP_TOKEN_KEY]: trimmedToken
+    };
+
+    await chrome.storage.local.set(nextStorage);
+
+    const becameInactive = Boolean(premiumStored?.active) && !nextPremium.active;
+    return { success: true, premiumState: nextPremium, becameInactive };
+}
+
 async function flushAllStats() {
     const { [KEYS.allStatsToday]: allStats = {}, [KEYS.blockedDomains]: blockedDomains = {} } = 
         await chrome.storage.local.get([KEYS.allStatsToday, KEYS.blockedDomains]);
@@ -334,6 +438,13 @@ async function createEnforceAlarm() {
 async function createFlushAlarm() {
     const whenMs = Date.now() + 60 * 1000; // every minute
     chrome.alarms.create("flush", { when: whenMs });
+}
+
+async function createPremiumSyncAlarm() {
+    chrome.alarms.create(PREMIUM_SYNC_ALARM, {
+        delayInMinutes: PREMIUM_SYNC_INTERVAL_MINUTES,
+        periodInMinutes: PREMIUM_SYNC_INTERVAL_MINUTES
+    });
 }
 
 // When user switches tabs
@@ -499,8 +610,10 @@ async function initializeExtension() {
     await initActive();
     await createEnforceAlarm();
     await createFlushAlarm();
+    await createPremiumSyncAlarm();
     await scheduleAlarms();
     await reconcileActiveScheduledBlocks();
+    await refreshStoredPremiumStatus("startup-sync").catch(() => null);
 }
 
 chrome.runtime.onStartup?.addListener(() => {
@@ -522,6 +635,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     } else if (alarm.name === "flush") {
         await flushAllStats();
         await createFlushAlarm();
+    } else if (alarm.name === PREMIUM_SYNC_ALARM) {
+        await refreshStoredPremiumStatus("alarm-sync").catch(() => null);
     } else if (alarm.name.startsWith('startBlock_')) {
         const id = parseInt(alarm.name.split('_')[1], 10);
         await activateScheduledBlock(id);
@@ -612,8 +727,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === 'addScheduledBlock') {
         const { domain, startTime, endTime } = request;
-        chrome.storage.local.get([KEYS.scheduledBlocks], async (data) => {
+        chrome.storage.local.get([KEYS.scheduledBlocks, PREMIUM_KEY], async (data) => {
             const scheduled = data[KEYS.scheduledBlocks] || [];
+            const premiumState = data[PREMIUM_KEY] || {};
+            const isPremium = Boolean(premiumState?.active);
+            if (!isPremium && scheduled.length >= FREE_PLAN_LIMITS.maxScheduledBlocks) {
+                sendResponse({ success: false, error: `Free plan allows up to ${FREE_PLAN_LIMITS.maxScheduledBlocks} scheduled blocks.` });
+                return;
+            }
             const id = Date.now();
             scheduled.push({ id, domain, startTime, endTime });
             await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
@@ -671,6 +792,63 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })();
         return true;
     }
+
+    if (request.action === "refreshPremiumStatus") {
+        (async () => {
+            try {
+                const result = await refreshStoredPremiumStatus("manual-refresh");
+                sendResponse(result);
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Premium refresh failed"
+                });
+            }
+        })();
+        return true;
+    }
+});
+
+chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
+    if (!request || typeof request !== "object") return;
+
+    if (request.action !== "whopCheckoutComplete") {
+        sendResponse({ success: false, error: "unsupported-action" });
+        return;
+    }
+
+    const senderUrl = typeof sender?.url === "string" ? sender.url : "";
+    if (!senderUrl.startsWith(ALLOWED_EXTERNAL_CALLBACK_ORIGIN)) {
+        sendResponse({ success: false, error: "unauthorized-origin" });
+        return;
+    }
+
+    (async () => {
+        try {
+            const premiumState = await verifyAndPersistWhopToken(request.token, "whop-callback");
+            let popupOpened = false;
+            try {
+                await chrome.action.openPopup();
+                popupOpened = true;
+            } catch {
+                popupOpened = false;
+            }
+
+            sendResponse({
+                success: true,
+                active: premiumState.active,
+                planName: premiumState.planName,
+                popupOpened
+            });
+        } catch (error) {
+            sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : "Token verification failed"
+            });
+        }
+    })();
+
+    return true;
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
