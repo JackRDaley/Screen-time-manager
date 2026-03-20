@@ -599,6 +599,62 @@ nav label {
     margin-bottom: 8px;
 }
 
+.schedule-days-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin-bottom: 8px;
+}
+
+.schedule-days-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.schedule-days {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.day-bubble {
+    min-width: 34px;
+    padding: 6px 8px;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
+    background: var(--surface1);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    font-family: inherit;
+    text-align: center;
+    cursor: pointer;
+    transition: background .16s, border-color .16s, color .16s;
+}
+
+.day-bubble:hover {
+    border-color: var(--border-hi);
+    color: var(--text);
+}
+
+.day-bubble.is-selected {
+    background: var(--text);
+    border-color: rgba(255,255,255,.72);
+    color: var(--bg);
+}
+
+.day-bubble:focus-visible {
+    outline: 2px solid rgba(139,111,255,.45);
+    outline-offset: 2px;
+}
+
+.schedule-row-meta {
+    white-space: normal;
+}
+
 .settings-list {
     display: flex;
     flex-direction: column;
@@ -642,6 +698,26 @@ nav label {
 
 .settings-actions {
     margin-top: 10px;
+}
+
+.billing-note {
+    padding: 0;
+    line-height: 1.45;
+}
+
+.billing-actions {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.billing-actions .btn {
+    width: 100%;
+}
+
+.billing-actions .settings-saved {
+    margin-top: 2px;
 }
 
 .settings-saved {

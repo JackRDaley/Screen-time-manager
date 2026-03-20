@@ -141,6 +141,10 @@
                             <input type="text" id="startTime" class="input" placeholder="Start (9:00 AM)" required />
                             <input type="text" id="endTime" class="input" placeholder="End (5:00 PM)" required />
                         </div>
+                        <div class="schedule-days-wrap">
+                            <div class="schedule-days-label">Active on</div>
+                            <div id="scheduledDays" class="schedule-days" role="group" aria-label="Scheduled block active days"></div>
+                        </div>
                         <button class="btn" type="submit" style="width:100%;margin-top:8px">Schedule</button>
                     </form>
                 </div>
@@ -187,13 +191,13 @@
                     <div class="card-title">Whop Billing</div>
                 </div>
                 <div class="card-body">
-                    <div class="muted" style="padding:0 0 8px 0">
+                    <div class="billing-note muted">
                         Billing is linked automatically after checkout. Use the button below to refresh membership status.
                     </div>
 
-                    <div class="settings-actions" style="margin-top:8px">
-                        <button class="btn" id="verifyWhopBtn" type="button" style="width:100%">Refresh Premium Status</button>
-                        <button class="btn" id="manageWhopBtn" type="button" style="width:100%">Manage / Cancel Membership</button>
+                    <div class="settings-actions billing-actions">
+                        <button class="btn" id="verifyWhopBtn" type="button">Refresh Premium Status</button>
+                        <button class="btn" id="manageWhopBtn" type="button">Manage / Cancel Membership</button>
                         <div id="premiumStatusMsg" class="settings-saved" role="status" aria-live="polite">Premium inactive</div>
                     </div>
                 </div>

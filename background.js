@@ -25,6 +25,7 @@ const FREE_PLAN_LIMITS = Object.freeze({
     maxTrackedDomains: 3,
     maxScheduledBlocks: 2
 });
+const ALL_SCHEDULE_DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
 
 let activeTabId = null;
 let activeDomain = null;
@@ -36,6 +37,23 @@ function getDayKey(d = new Date()) {
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
+}
+
+function normalizeScheduleDays(days) {
+    const source = Array.isArray(days) ? days : ALL_SCHEDULE_DAYS;
+    const normalized = [...new Set(source
+        .map((day) => Number(day))
+        .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
+        .sort((a, b) => a - b);
+
+    return normalized.length > 0 ? normalized : [...ALL_SCHEDULE_DAYS];
+}
+
+function normalizeScheduledBlock(block) {
+    return {
+        ...block,
+        daysOfWeek: normalizeScheduleDays(block?.daysOfWeek)
+    };
 }
 
 function domainFromUrl(url) {
@@ -173,13 +191,78 @@ function getTodayTime(timeStr, baseDate = new Date()) {
     return target.getTime();
 }
 
-function isScheduleActiveNow(block, now = Date.now()) {
-    const startMs = getTodayTime(block.startTime);
-    const endMs = getTodayTime(block.endTime);
+function getScheduleWindowForAnchorDate(block, anchorDate) {
+    const normalizedBlock = normalizeScheduledBlock(block);
+    const normalizedAnchor = new Date(anchorDate);
+    normalizedAnchor.setHours(0, 0, 0, 0);
 
-    if (startMs === endMs) return true;
-    if (startMs < endMs) return now >= startMs && now < endMs;
-    return now >= startMs || now < endMs;
+    if (!normalizedBlock.daysOfWeek.includes(normalizedAnchor.getDay())) {
+        return null;
+    }
+
+    const start = getTodayTime(normalizedBlock.startTime, normalizedAnchor);
+    let end = getTodayTime(normalizedBlock.endTime, normalizedAnchor);
+    if (end <= start) {
+        end += 24 * 60 * 60 * 1000;
+    }
+
+    return { start, end };
+}
+
+function getScheduleActiveWindow(block, now = Date.now()) {
+    const reference = new Date(now);
+    const todayWindow = getScheduleWindowForAnchorDate(block, reference);
+    if (todayWindow && now >= todayWindow.start && now < todayWindow.end) {
+        return todayWindow;
+    }
+
+    const previousDay = new Date(reference);
+    previousDay.setDate(previousDay.getDate() - 1);
+    const previousWindow = getScheduleWindowForAnchorDate(block, previousDay);
+    if (previousWindow && now >= previousWindow.start && now < previousWindow.end) {
+        return previousWindow;
+    }
+
+    return null;
+}
+
+function getNextScheduledStartTime(block, now = Date.now()) {
+    const normalizedBlock = normalizeScheduledBlock(block);
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    for (let offset = 0; offset <= 7; offset += 1) {
+        const candidateDay = new Date(startOfToday);
+        candidateDay.setDate(candidateDay.getDate() + offset);
+        if (!normalizedBlock.daysOfWeek.includes(candidateDay.getDay())) {
+            continue;
+        }
+
+        const candidateStart = getTodayTime(normalizedBlock.startTime, candidateDay);
+        if (candidateStart > now) {
+            return candidateStart;
+        }
+    }
+
+    return null;
+}
+
+function getNextScheduledEndTime(block, now = Date.now()) {
+    const activeWindow = getScheduleActiveWindow(block, now);
+    if (activeWindow) {
+        return activeWindow.end;
+    }
+
+    const nextStart = getNextScheduledStartTime(block, now);
+    if (nextStart == null) {
+        return null;
+    }
+
+    return getScheduleWindowForAnchorDate(block, new Date(nextStart))?.end ?? null;
+}
+
+function isScheduleActiveNow(block, now = Date.now()) {
+    return Boolean(getScheduleActiveWindow(block, now));
 }
 
 function stableRuleIdForDomain(domain) {
@@ -548,57 +631,91 @@ function updateBlockRules() {
 // Schedule alarms for scheduled blocks
 async function scheduleAlarms() {
     const { [KEYS.scheduledBlocks]: scheduled = [] } = await chrome.storage.local.get([KEYS.scheduledBlocks]);
-    scheduled.forEach((block) => {
-        const startMs = getNextTime(block.startTime);
-        const endMs = getNextTime(block.endTime);
-        chrome.alarms.create(`startBlock_${block.id}`, { when: startMs });
-        chrome.alarms.create(`endBlock_${block.id}`, { when: endMs });
+    scheduled.map(normalizeScheduledBlock).forEach((block) => {
+        const startMs = getNextScheduledStartTime(block);
+        const endMs = getNextScheduledEndTime(block);
+        if (startMs != null) {
+            chrome.alarms.create(`startBlock_${block.id}`, { when: startMs });
+        }
+        if (endMs != null) {
+            chrome.alarms.create(`endBlock_${block.id}`, { when: endMs });
+        }
     });
 }
 
 async function activateScheduledBlock(id) {
     const { [KEYS.scheduledBlocks]: scheduled = [], [KEYS.activeBlocks]: activeBlocks = [] } =
         await chrome.storage.local.get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
-    const block = scheduled.find((entry) => entry.id === id);
+    const block = scheduled.map(normalizeScheduledBlock).find((entry) => entry.id === id);
     if (!block) return;
+
+    const activeWindow = getScheduleActiveWindow(block, Date.now());
+    if (!activeWindow) {
+        const nextStart = getNextScheduledStartTime(block, Date.now() + 1000);
+        const nextEnd = getNextScheduledEndTime(block, Date.now() + 1000);
+        if (nextStart != null) {
+            chrome.alarms.create(`startBlock_${id}`, { when: nextStart });
+        }
+        if (nextEnd != null) {
+            chrome.alarms.create(`endBlock_${id}`, { when: nextEnd });
+        }
+        return;
+    }
 
     const nextActiveBlocks = activeBlocks.filter((entry) => entry.id !== id);
     nextActiveBlocks.push({
         id,
         domain: block.domain,
-        startTime: Date.now(),
-        endTime: getNextTime(block.endTime)
+        startTime: activeWindow.start,
+        endTime: activeWindow.end
     });
 
     await chrome.storage.local.set({ [KEYS.activeBlocks]: nextActiveBlocks });
     await updateBlockRules();
     await redirectOpenTabsForDomains([block.domain]);
-    chrome.alarms.create(`startBlock_${id}`, { when: getNextTime(block.startTime) });
+
+    const nextStart = getNextScheduledStartTime(block, Date.now() + 1000);
+    const nextEnd = getNextScheduledEndTime(block, Date.now());
+    if (nextStart != null) {
+        chrome.alarms.create(`startBlock_${id}`, { when: nextStart });
+    }
+    if (nextEnd != null) {
+        chrome.alarms.create(`endBlock_${id}`, { when: nextEnd });
+    }
 }
 
 async function deactivateScheduledBlock(id) {
     const { [KEYS.scheduledBlocks]: scheduled = [], [KEYS.activeBlocks]: activeBlocks = [] } =
         await chrome.storage.local.get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
-    const block = scheduled.find((entry) => entry.id === id);
+    const block = scheduled.map(normalizeScheduledBlock).find((entry) => entry.id === id);
     const nextActiveBlocks = activeBlocks.filter((entry) => entry.id !== id);
 
     await chrome.storage.local.set({ [KEYS.activeBlocks]: nextActiveBlocks });
     await updateBlockRules();
 
     if (block) {
-        chrome.alarms.create(`endBlock_${id}`, { when: getNextTime(block.endTime) });
+        const nextStart = getNextScheduledStartTime(block, Date.now() + 1000);
+        const nextEnd = getNextScheduledEndTime(block, Date.now() + 1000);
+        if (nextStart != null) {
+            chrome.alarms.create(`startBlock_${id}`, { when: nextStart });
+        }
+        if (nextEnd != null) {
+            chrome.alarms.create(`endBlock_${id}`, { when: nextEnd });
+        }
     }
 }
 
 async function reconcileActiveScheduledBlocks() {
     const { [KEYS.scheduledBlocks]: scheduled = [] } = await chrome.storage.local.get([KEYS.scheduledBlocks]);
     const nextActiveBlocks = scheduled
-        .filter((block) => isScheduleActiveNow(block))
-        .map((block) => ({
+        .map(normalizeScheduledBlock)
+        .map((block) => ({ block, activeWindow: getScheduleActiveWindow(block) }))
+        .filter(({ activeWindow }) => Boolean(activeWindow))
+        .map(({ block, activeWindow }) => ({
             id: block.id,
             domain: block.domain,
-            startTime: getTodayTime(block.startTime),
-            endTime: getNextTime(block.endTime)
+            startTime: activeWindow.start,
+            endTime: activeWindow.end
         }));
 
     await chrome.storage.local.set({ [KEYS.activeBlocks]: nextActiveBlocks });
@@ -726,7 +843,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!request || typeof request !== "object") return;
 
     if (request.action === 'addScheduledBlock') {
-        const { domain, startTime, endTime } = request;
+        const { domain, startTime, endTime, daysOfWeek } = request;
         chrome.storage.local.get([KEYS.scheduledBlocks, PREMIUM_KEY], async (data) => {
             const scheduled = data[KEYS.scheduledBlocks] || [];
             const premiumState = data[PREMIUM_KEY] || {};
@@ -736,15 +853,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 return;
             }
             const id = Date.now();
-            scheduled.push({ id, domain, startTime, endTime });
+            const nextBlock = normalizeScheduledBlock({ id, domain, startTime, endTime, daysOfWeek });
+            scheduled.push(nextBlock);
             await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
             // Set alarms for next occurrences
-            const startMs = getNextTime(startTime);
-            const endMs = getNextTime(endTime);
-            chrome.alarms.create(`startBlock_${id}`, { when: startMs });
-            chrome.alarms.create(`endBlock_${id}`, { when: endMs });
+            const startMs = getNextScheduledStartTime(nextBlock);
+            const endMs = getNextScheduledEndTime(nextBlock);
+            if (startMs != null) {
+                chrome.alarms.create(`startBlock_${id}`, { when: startMs });
+            }
+            if (endMs != null) {
+                chrome.alarms.create(`endBlock_${id}`, { when: endMs });
+            }
 
-            if (isScheduleActiveNow({ startTime, endTime })) {
+            if (isScheduleActiveNow(nextBlock)) {
                 await activateScheduledBlock(id);
             }
 

@@ -21,6 +21,16 @@ const FREE_PLAN_LIMITS = Object.freeze({
     maxTrackedDomains: 3,
     maxScheduledBlocks: 2
 });
+const SCHEDULE_DAY_OPTIONS = Object.freeze([
+    { value: 0, label: "Sun" },
+    { value: 1, label: "Mon" },
+    { value: 2, label: "Tue" },
+    { value: 3, label: "Wed" },
+    { value: 4, label: "Thu" },
+    { value: 5, label: "Fri" },
+    { value: 6, label: "Sat" }
+]);
+const ALL_SCHEDULE_DAYS = Object.freeze(SCHEDULE_DAY_OPTIONS.map((day) => day.value));
 
 let currentSettings = { ...DEFAULT_SETTINGS };
 let saveMessageTimer = null;
@@ -34,6 +44,7 @@ let loadAllInFlight = false;
 let loadAllPending = false;
 let rankingInteractionDepth = 0;
 let currentPremium = { ...DEFAULT_PREMIUM };
+let selectedScheduleDays = [];
 
 function isRankingInteractionActive() {
     return rankingInteractionDepth > 0;
@@ -349,6 +360,76 @@ function normalizeDomain(input) {
     return d;
 }
 
+function normalizeScheduleDays(days, fallbackDays = ALL_SCHEDULE_DAYS) {
+    const source = Array.isArray(days) ? days : fallbackDays;
+    const normalized = [...new Set(source
+        .map((day) => Number(day))
+        .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
+        .sort((a, b) => a - b);
+
+    return normalized.length > 0 ? normalized : [...fallbackDays];
+}
+
+function formatScheduleDays(days) {
+    const normalized = normalizeScheduleDays(days);
+    if (normalized.length === ALL_SCHEDULE_DAYS.length) return "Every day";
+    if (normalized.join(",") === "1,2,3,4,5") return "Weekdays";
+    if (normalized.join(",") === "0,6") return "Weekends";
+    return normalized
+        .map((day) => SCHEDULE_DAY_OPTIONS.find((option) => option.value === day)?.label)
+        .filter(Boolean)
+        .join(", ");
+}
+
+function syncScheduleDayPicker() {
+    const container = $("scheduledDays");
+    if (!container) return;
+
+    const selectedSet = new Set(selectedScheduleDays);
+    container.querySelectorAll(".day-bubble").forEach((button) => {
+        const dayValue = Number(button.getAttribute("data-day"));
+        const isSelected = selectedSet.has(dayValue);
+        button.classList.toggle("is-selected", isSelected);
+        button.setAttribute("aria-pressed", String(isSelected));
+    });
+}
+
+function setSelectedScheduleDays(days) {
+    selectedScheduleDays = normalizeScheduleDays(days, []);
+    syncScheduleDayPicker();
+}
+
+function toggleScheduleDay(dayValue) {
+    const next = new Set(selectedScheduleDays);
+    if (next.has(dayValue)) {
+        next.delete(dayValue);
+    } else {
+        next.add(dayValue);
+    }
+
+    selectedScheduleDays = [...next].sort((a, b) => a - b);
+    syncScheduleDayPicker();
+}
+
+function initializeScheduleDayPicker() {
+    const container = $("scheduledDays");
+    if (!container) return;
+
+    container.innerHTML = "";
+    SCHEDULE_DAY_OPTIONS.forEach((day) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "day-bubble";
+        button.textContent = day.label;
+        button.setAttribute("data-day", String(day.value));
+        button.setAttribute("aria-label", day.label);
+        button.addEventListener("click", () => toggleScheduleDay(day.value));
+        container.appendChild(button);
+    });
+
+    setSelectedScheduleDays([]);
+}
+
 function isValidDomain(domain) {
     if (!domain || domain.length > 253) return false;
     if (!domain.includes(".")) return false;
@@ -651,13 +732,14 @@ function renderScheduled(scheduledBlocks, activeBlocks = []) {
     list.innerHTML = "";
 
     scheduled.forEach((s) => {
-        const isActive = active.some((b) => b.domain === s.domain);
+        const isActive = active.some((b) => b.id === s.id);
+        const daySummary = formatScheduleDays(s.daysOfWeek);
         const div = document.createElement("div");
         div.className = "row";
         div.innerHTML = `
         <div class="row-main">
             <div class="row-title">${s.domain}</div>
-            <div class="row-meta">Daily: ${formatTimeForDisplay(s.startTime)} – ${formatTimeForDisplay(s.endTime)}</div>
+            <div class="row-meta schedule-row-meta">${daySummary} · ${formatTimeForDisplay(s.startTime)} - ${formatTimeForDisplay(s.endTime)}</div>
         </div>
         <div class="row-right">
             ${isActive ? '<span class="tag tag-red">Live</span>' : ''}
@@ -885,6 +967,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     startActiveCountdownTicker();
     startPopupRefreshTicker();
     wireRankingInteractionGuards();
+    initializeScheduleDayPicker();
 
     await loadSettingsFromStorage();
     await loadMonetizationFromStorage();
@@ -967,6 +1050,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const domain = normalizeDomain($("scheduledDomain").value);
         const startTimeInput = $("startTime").value.trim();
         const endTimeInput = $("endTime").value.trim();
+        const daysOfWeek = [...selectedScheduleDays].sort((a, b) => a - b);
 
         const startTime = parseTimeInput(startTimeInput, currentSettings.use24HourTime);
         const endTime = parseTimeInput(endTimeInput, currentSettings.use24HourTime);
@@ -985,10 +1069,16 @@ document.addEventListener("DOMContentLoaded", async () => {
             return;
         }
 
-        await chrome.runtime.sendMessage({ action: 'addScheduledBlock', domain, startTime, endTime });
+        if (daysOfWeek.length === 0) {
+            alert("Please select at least one active day for this scheduled block.");
+            return;
+        }
+
+        await chrome.runtime.sendMessage({ action: 'addScheduledBlock', domain, startTime, endTime, daysOfWeek });
         $("scheduledDomain").value = "";
         $("startTime").value = "";
         $("endTime").value = "";
+        setSelectedScheduleDays([]);
         await loadAll();
     });
 
