@@ -45,6 +45,13 @@ let loadAllPending = false;
 let rankingInteractionDepth = 0;
 let currentPremium = { ...DEFAULT_PREMIUM };
 let selectedScheduleDays = [];
+let editingScheduledBlockId = null;
+
+const EMPTY_STATE_MESSAGES = Object.freeze({
+    active: "No active sessions. Scheduled blocks and time-limited sites will appear here when they start.",
+    scheduled: "No scheduled sessions yet. Add a block above and choose the days it should run.",
+    blocked: "No blocked sites yet. Add a site above to start tracking and enforcing a daily limit."
+});
 
 function isRankingInteractionActive() {
     return rankingInteractionDepth > 0;
@@ -399,6 +406,48 @@ function setSelectedScheduleDays(days) {
     syncScheduleDayPicker();
 }
 
+function updateScheduledFormMode() {
+    const modeLabel = $("scheduledFormModeLabel");
+    const submitBtn = $("scheduledSubmitBtn");
+    const cancelBtn = $("cancelScheduledEditBtn");
+    const isEditing = editingScheduledBlockId != null;
+
+    if (modeLabel) {
+        modeLabel.textContent = isEditing
+            ? "Editing this scheduled block. Save changes to keep the same rule."
+            : "Create a new recurring block.";
+    }
+    if (submitBtn) {
+        submitBtn.textContent = isEditing ? "Save Changes" : "Schedule";
+    }
+    if (cancelBtn) {
+        cancelBtn.hidden = !isEditing;
+    }
+}
+
+function resetScheduledForm() {
+    editingScheduledBlockId = null;
+    $("scheduledDomain").value = "";
+    $("startTime").value = "";
+    $("endTime").value = "";
+    setSelectedScheduleDays([]);
+    clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true);
+    updateScheduledFormMode();
+}
+
+function beginScheduledBlockEdit(block) {
+    if (!block) return;
+
+    editingScheduledBlockId = block.id;
+    $("scheduledDomain").value = block.domain || "";
+    $("startTime").value = block.startTime ? formatTimeForDisplay(block.startTime) : "";
+    $("endTime").value = block.endTime ? formatTimeForDisplay(block.endTime) : "";
+    setSelectedScheduleDays(block.daysOfWeek);
+    clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true);
+    updateScheduledFormMode();
+    $("scheduledDomain")?.focus();
+}
+
 function toggleScheduleDay(dayValue) {
     const next = new Set(selectedScheduleDays);
     if (next.has(dayValue)) {
@@ -428,6 +477,34 @@ function initializeScheduleDayPicker() {
     });
 
     setSelectedScheduleDays([]);
+}
+
+function clearFormFeedback(messageId, fieldIds = [], clearDays = false) {
+    const messageEl = $(messageId);
+    if (messageEl) {
+        messageEl.textContent = "";
+        messageEl.classList.remove("is-error");
+    }
+
+    fieldIds.forEach((fieldId) => $(fieldId)?.classList.remove("is-invalid"));
+    if (clearDays) {
+        $("scheduledDays")?.classList.remove("is-invalid");
+    }
+}
+
+function showFormError(messageId, message, fieldIds = [], markDays = false) {
+    clearFormFeedback(messageId, fieldIds, markDays);
+
+    const messageEl = $(messageId);
+    if (messageEl) {
+        messageEl.textContent = message;
+        messageEl.classList.add("is-error");
+    }
+
+    fieldIds.forEach((fieldId) => $(fieldId)?.classList.add("is-invalid"));
+    if (markDays) {
+        $("scheduledDays")?.classList.add("is-invalid");
+    }
 }
 
 function isValidDomain(domain) {
@@ -667,11 +744,13 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
 
     if (active.length === 0) {
         list.classList.add("muted");
-        list.textContent = "No active sessions.";
+        list.textContent = EMPTY_STATE_MESSAGES.active;
+        list.classList.add("empty-state");
         return;
     }
 
     list.classList.remove("muted");
+    list.classList.remove("empty-state");
     list.innerHTML = "";
 
     active.forEach((s) => {
@@ -713,6 +792,10 @@ async function removeScheduledBlock(id) {
     await chrome.storage.local.set({ scheduledBlocks: next });
     chrome.alarms.clear(`startBlock_${id}`);
     chrome.alarms.clear(`endBlock_${id}`);
+
+    if (editingScheduledBlockId === id) {
+        resetScheduledForm();
+    }
 }
 
 function renderScheduled(scheduledBlocks, activeBlocks = []) {
@@ -722,14 +805,21 @@ function renderScheduled(scheduledBlocks, activeBlocks = []) {
     const scheduled = Array.isArray(scheduledBlocks) ? scheduledBlocks : [];
     const active = Array.isArray(activeBlocks) ? activeBlocks : [];
 
+    if (editingScheduledBlockId != null && !scheduled.some((block) => block.id === editingScheduledBlockId)) {
+        resetScheduledForm();
+    }
+
     if (scheduled.length === 0) {
         list.classList.add("muted");
-        list.textContent = "No scheduled sessions.";
+        list.textContent = EMPTY_STATE_MESSAGES.scheduled;
+        list.classList.add("empty-state");
         return;
     }
 
     list.classList.remove("muted");
+    list.classList.remove("empty-state");
     list.innerHTML = "";
+    if (count) count.textContent = String(scheduled.length);
 
     scheduled.forEach((s) => {
         const isActive = active.some((b) => b.id === s.id);
@@ -743,11 +833,15 @@ function renderScheduled(scheduledBlocks, activeBlocks = []) {
         </div>
         <div class="row-right">
             ${isActive ? '<span class="tag tag-red">Live</span>' : ''}
-            <button class="btn-danger" data-domain="${s.domain}" ${isActive ? "disabled title=\"Stop the active session before removing\"" : ""}>Cancel</button>
+            <button class="btn-ghost" data-action="edit">Edit</button>
+            <button class="btn-danger" data-action="remove" data-domain="${s.domain}" ${isActive ? "disabled title=\"Stop the active session before removing\"" : ""}>Cancel</button>
         </div>
         `;
+        div.querySelector('[data-action="edit"]')?.addEventListener("click", () => {
+            beginScheduledBlockEdit(s);
+        });
         if (!isActive) {
-            div.querySelector("button").addEventListener("click", async () => {
+            div.querySelector('[data-action="remove"]')?.addEventListener("click", async () => {
                 await removeScheduledBlock(s.id);
                 await loadAll();
             });
@@ -849,11 +943,13 @@ function renderBlockList(blockedDomains, statsToday) {
 
     if (entries.length === 0) {
         list.classList.add("muted");
-        list.textContent = "No blocked sites yet.";
+        list.textContent = EMPTY_STATE_MESSAGES.blocked;
+        list.classList.add("empty-state");
         return;
     }
 
     list.classList.remove("muted");
+    list.classList.remove("empty-state");
     list.innerHTML = "";
 
     entries
@@ -978,6 +1074,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (use24HourEl) use24HourEl.checked = currentSettings.use24HourTime;
     applyScheduleInputMode();
 
+    ["domainInput", "limitInput"].forEach((id) => {
+        $(id)?.addEventListener("input", () => clearFormFeedback("addFormMsg", ["domainInput", "limitInput"]));
+    });
+    ["scheduledDomain", "startTime", "endTime"].forEach((id) => {
+        $(id)?.addEventListener("input", () => clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true));
+    });
+    $("scheduledDays")?.addEventListener("click", () => clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true));
+    $("cancelScheduledEditBtn")?.addEventListener("click", () => resetScheduledForm());
+    updateScheduledFormMode();
+
     $("verifyWhopBtn")?.addEventListener("click", async () => {
         await verifyWhopAccess();
     });
@@ -1012,6 +1118,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     $("addForm").addEventListener("submit", async (e) => {
         e.preventDefault();
+        clearFormFeedback("addFormMsg", ["domainInput", "limitInput"]);
 
         if (!canAddMoreDomains(latestBlockedDomains)) {
             setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains.`, "error");
@@ -1025,10 +1132,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         const limitSeconds = Math.floor(limitMinutes * 60);
 
         if (!isValidDomain(domain)) {
-            alert("Please enter a valid domain (e.g., google.com).");
+            showFormError("addFormMsg", "Enter a valid domain like google.com.", ["domainInput"]);
             return;
         }
-        if (!Number.isFinite(limitSeconds) || limitSeconds <= 0) return;
+        if (!Number.isFinite(limitSeconds) || limitSeconds <= 0) {
+            showFormError("addFormMsg", "Enter a daily limit greater than 0 minutes.", ["limitInput"]);
+            return;
+        }
 
         $("domainInput").value = "";
         $("limitInput").value = "";
@@ -1040,9 +1150,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Scheduled form event listener
     $("scheduledForm").addEventListener("submit", async (e) => {
         e.preventDefault();
+        clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true);
 
+        const isEditing = editingScheduledBlockId != null;
         const { scheduledBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks"]);
-        if (!canAddMoreScheduledBlocks(scheduledBlocks)) {
+        if (!isEditing && !canAddMoreScheduledBlocks(scheduledBlocks)) {
             setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxScheduledBlocks} scheduled blocks.`, "error");
             return;
         }
@@ -1056,29 +1168,38 @@ document.addEventListener("DOMContentLoaded", async () => {
         const endTime = parseTimeInput(endTimeInput, currentSettings.use24HourTime);
 
         if (!isValidDomain(domain)) {
-            alert("Please enter a valid domain (e.g., google.com).");
+            showFormError("scheduledFormMsg", "Enter a valid domain like google.com.", ["scheduledDomain"]);
             return;
         }
 
         if (!startTime || !endTime) {
             if (currentSettings.use24HourTime) {
-                alert("Please enter valid times in 24-hour format (e.g., 9:00, 09:00, 17:30)");
+                showFormError("scheduledFormMsg", "Enter valid start and end times in 24-hour format.", ["startTime", "endTime"]);
             } else {
-                alert("Please enter valid times in H:MM AM/PM format (e.g., 9:00 AM, 2:30 PM)");
+                showFormError("scheduledFormMsg", "Enter valid start and end times in H:MM AM/PM format.", ["startTime", "endTime"]);
             }
             return;
         }
 
         if (daysOfWeek.length === 0) {
-            alert("Please select at least one active day for this scheduled block.");
+            showFormError("scheduledFormMsg", "Select at least one active day.", [], true);
             return;
         }
 
-        await chrome.runtime.sendMessage({ action: 'addScheduledBlock', domain, startTime, endTime, daysOfWeek });
-        $("scheduledDomain").value = "";
-        $("startTime").value = "";
-        $("endTime").value = "";
-        setSelectedScheduleDays([]);
+        const response = await chrome.runtime.sendMessage({
+            action: isEditing ? "updateScheduledBlock" : "addScheduledBlock",
+            id: editingScheduledBlockId,
+            domain,
+            startTime,
+            endTime,
+            daysOfWeek
+        });
+        if (!response?.success) {
+            showFormError("scheduledFormMsg", response?.error || "Unable to save the scheduled block.");
+            return;
+        }
+
+        resetScheduledForm();
         await loadAll();
     });
 

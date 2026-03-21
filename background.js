@@ -643,6 +643,33 @@ async function scheduleAlarms() {
     });
 }
 
+async function clearScheduledBlockAlarms(id) {
+    await Promise.all([
+        chrome.alarms.clear(`startBlock_${id}`),
+        chrome.alarms.clear(`endBlock_${id}`)
+    ]);
+}
+
+async function refreshScheduledBlockRuntime(id) {
+    await clearScheduledBlockAlarms(id);
+
+    const { [KEYS.scheduledBlocks]: scheduled = [] } = await chrome.storage.local.get([KEYS.scheduledBlocks]);
+    const block = scheduled.map(normalizeScheduledBlock).find((entry) => entry.id === id);
+
+    if (!block) {
+        await deactivateScheduledBlock(id);
+        return false;
+    }
+
+    if (isScheduleActiveNow(block)) {
+        await activateScheduledBlock(id);
+    } else {
+        await deactivateScheduledBlock(id);
+    }
+
+    return true;
+}
+
 async function activateScheduledBlock(id) {
     const { [KEYS.scheduledBlocks]: scheduled = [], [KEYS.activeBlocks]: activeBlocks = [] } =
         await chrome.storage.local.get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
@@ -869,6 +896,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (isScheduleActiveNow(nextBlock)) {
                 await activateScheduledBlock(id);
             }
+
+            sendResponse({ success: true });
+        });
+        return true;
+    }
+
+    if (request.action === "updateScheduledBlock") {
+        const id = Number(request.id);
+        const { domain, startTime, endTime, daysOfWeek } = request;
+
+        if (!Number.isInteger(id) || id <= 0) {
+            sendResponse({ success: false, error: "Scheduled block not found." });
+            return true;
+        }
+
+        chrome.storage.local.get([KEYS.scheduledBlocks], async (data) => {
+            const scheduled = (data[KEYS.scheduledBlocks] || []).map(normalizeScheduledBlock);
+            const blockIndex = scheduled.findIndex((block) => block.id === id);
+
+            if (blockIndex === -1) {
+                sendResponse({ success: false, error: "Scheduled block not found." });
+                return;
+            }
+
+            scheduled[blockIndex] = normalizeScheduledBlock({
+                ...scheduled[blockIndex],
+                id,
+                domain,
+                startTime,
+                endTime,
+                daysOfWeek
+            });
+
+            await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
+            await refreshScheduledBlockRuntime(id);
 
             sendResponse({ success: true });
         });

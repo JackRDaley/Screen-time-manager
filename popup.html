@@ -100,12 +100,13 @@
                     <div class="card-title">Add Limit</div>
                 </div>
                 <div class="card-body">
-                    <form id="addForm">
+                    <form id="addForm" novalidate>
                         <div class="input-row">
                             <input id="domainInput" class="input" type="text" placeholder="Website (e.g. google.com)" autocomplete="off" />
                             <input id="limitInput" class="input input-min" type="number" min="1" max="1440" placeholder="mins" title="Daily limit (minutes)" />
                         </div>
                         <button class="btn" type="submit" style="width:100%">Add</button>
+                        <div id="addFormMsg" class="form-feedback" role="status" aria-live="polite"></div>
                     </form>
                 </div>
             </div>
@@ -135,7 +136,8 @@
                     <div class="card-title">New Scheduled Block</div>
                 </div>
                 <div class="card-body">
-                    <form id="scheduledForm">
+                    <form id="scheduledForm" novalidate>
+                        <div id="scheduledFormModeLabel" class="scheduled-form-mode-label">Create a new recurring block.</div>
                         <input type="text" id="scheduledDomain" class="input" placeholder="Domain" required style="width:100%;margin-bottom:8px" />
                         <div class="two-col">
                             <input type="text" id="startTime" class="input" placeholder="Start (9:00 AM)" required />
@@ -145,7 +147,11 @@
                             <div class="schedule-days-label">Active on</div>
                             <div id="scheduledDays" class="schedule-days" role="group" aria-label="Scheduled block active days"></div>
                         </div>
-                        <button class="btn" type="submit" style="width:100%;margin-top:8px">Schedule</button>
+                        <div class="scheduled-form-actions">
+                            <button id="scheduledSubmitBtn" class="btn" type="submit">Schedule</button>
+                            <button id="cancelScheduledEditBtn" class="btn-ghost" type="button" hidden>Cancel</button>
+                        </div>
+                        <div id="scheduledFormMsg" class="form-feedback" role="status" aria-live="polite"></div>
                     </form>
                 </div>
             </div>
