@@ -599,6 +599,29 @@ nav label {
     margin-bottom: 8px;
 }
 
+.scheduled-form-mode-label {
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.scheduled-form-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.scheduled-form-actions .btn {
+    flex: 1;
+}
+
+.scheduled-form-actions .btn-ghost {
+    padding: 8px 12px;
+    font-size: 12px;
+}
+
 .schedule-days-wrap {
     display: flex;
     flex-direction: column;
@@ -649,6 +672,28 @@ nav label {
 .day-bubble:focus-visible {
     outline: 2px solid rgba(139,111,255,.45);
     outline-offset: 2px;
+}
+
+.input.is-invalid,
+.schedule-days.is-invalid {
+    border-color: rgba(255,77,109,.55);
+    box-shadow: 0 0 0 3px rgba(255,77,109,.10);
+}
+
+.form-feedback {
+    min-height: 15px;
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.form-feedback.is-error {
+    color: var(--danger);
+}
+
+.empty-state {
+    line-height: 1.45;
 }
 
 .schedule-row-meta {
