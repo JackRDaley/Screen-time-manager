@@ -13,6 +13,8 @@ server/.env
 
 # Wrangler / Cloudflare
 worker/.wrangler/
+.tools/
+release/
 
 # Logs
 npm-debug.log*

@@ -17,7 +17,11 @@ const KEYS = {
 
 const PREMIUM_KEY = "premiumState";
 const WHOP_TOKEN_KEY = "whopAccessToken";
+const WHOP_PENDING_TOKEN_KEY = "whopPendingToken";
+const WHOP_LINK_STATE_KEY = "whopLinkState";
 const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/verify";
+const WHOP_LINK_STATE_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/link-state";
+const WHOP_LINK_STATE_MAX_AGE_MS = 60 * 60 * 1000;
 const ALLOWED_EXTERNAL_CALLBACK_ORIGIN = "https://screen-time-manager.jackster0627.workers.dev/";
 const PREMIUM_SYNC_ALARM = "premiumSync";
 const PREMIUM_SYNC_INTERVAL_MINUTES = 60;
@@ -363,6 +367,9 @@ async function verifyAndPersistWhopToken(token, source = "whop-callback") {
         throw new Error("Whop callback returned a placeholder token (e.g. {user_id}) instead of a real ID");
     }
 
+    // Persist immediately so manual/background refresh can recover from transient verify failures.
+    await chrome.storage.local.set({ [WHOP_PENDING_TOKEN_KEY]: trimmedToken });
+
     const response = await fetch(WHOP_VERIFY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -383,11 +390,12 @@ async function verifyAndPersistWhopToken(token, source = "whop-callback") {
     });
 
     const payloadToStore = {
-        [PREMIUM_KEY]: nextPremium
+        [PREMIUM_KEY]: nextPremium,
+        [WHOP_TOKEN_KEY]: trimmedToken
     };
-    if (nextPremium.active) {
-        payloadToStore[WHOP_TOKEN_KEY] = trimmedToken;
-    }
+
+    // Keep pending token until premium is confirmed active.
+    payloadToStore[WHOP_PENDING_TOKEN_KEY] = nextPremium.active ? "" : trimmedToken;
 
     await chrome.storage.local.set(payloadToStore);
 
@@ -395,16 +403,59 @@ async function verifyAndPersistWhopToken(token, source = "whop-callback") {
 }
 
 async function refreshStoredPremiumStatus(source = "background-sync") {
-    const { [WHOP_TOKEN_KEY]: storedToken = "", [PREMIUM_KEY]: premiumStored = {} } =
-        await chrome.storage.local.get([WHOP_TOKEN_KEY, PREMIUM_KEY]);
+    const {
+        [WHOP_TOKEN_KEY]: storedToken = "",
+        [WHOP_PENDING_TOKEN_KEY]: pendingToken = "",
+        [WHOP_LINK_STATE_KEY]: linkState = null,
+        [PREMIUM_KEY]: premiumStored = {}
+    } = await chrome.storage.local.get([WHOP_TOKEN_KEY, WHOP_PENDING_TOKEN_KEY, WHOP_LINK_STATE_KEY, PREMIUM_KEY]);
 
-    const trimmedToken = String(storedToken || "").trim();
+    const linkStateId = String(linkState?.id || "").trim();
+    const linkStateCreatedAtMs = Date.parse(String(linkState?.createdAt || ""));
+    const hasFreshLinkState =
+        /^[A-Za-z0-9_-]{16,128}$/.test(linkStateId) &&
+        Number.isFinite(linkStateCreatedAtMs) &&
+        (Date.now() - linkStateCreatedAtMs) <= WHOP_LINK_STATE_MAX_AGE_MS;
+
+    if (linkState && !hasFreshLinkState) {
+        await chrome.storage.local.set({ [WHOP_LINK_STATE_KEY]: null });
+    }
+
+    let trimmedToken = String(storedToken || "").trim() || String(pendingToken || "").trim();
     if (!trimmedToken) {
-        return { success: false, error: "No linked billing identity found." };
+        if (hasFreshLinkState) {
+            const resolveUrl = new URL(WHOP_LINK_STATE_URL);
+            resolveUrl.searchParams.set("client_state", linkStateId);
+
+            const linkResponse = await fetch(resolveUrl.toString(), { method: "GET" });
+            if (linkResponse.ok) {
+                const linkPayload = await linkResponse.json();
+                const resolvedToken = String(linkPayload?.token || "").trim();
+                if (resolvedToken) {
+                    trimmedToken = resolvedToken;
+                    await chrome.storage.local.set({
+                        [WHOP_PENDING_TOKEN_KEY]: resolvedToken,
+                        [WHOP_LINK_STATE_KEY]: {
+                            ...(linkState || {}),
+                            resolvedAt: new Date().toISOString()
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    if (!trimmedToken) {
+        return {
+            success: false,
+            error: "No linked billing identity found.",
+            hasLinkedIdentity: false,
+            pendingActivation: hasFreshLinkState
+        };
     }
 
     if (/\{[^}]+\}/.test(trimmedToken)) {
-        return { success: false, error: "Stored billing identity is invalid." };
+        return { success: false, error: "Stored billing identity is invalid.", hasLinkedIdentity: false };
     }
 
     const response = await fetch(WHOP_VERIFY_URL, {
@@ -428,13 +479,21 @@ async function refreshStoredPremiumStatus(source = "background-sync") {
 
     const nextStorage = {
         [PREMIUM_KEY]: nextPremium,
-        [WHOP_TOKEN_KEY]: trimmedToken
+        [WHOP_TOKEN_KEY]: trimmedToken,
+        [WHOP_PENDING_TOKEN_KEY]: nextPremium.active ? "" : trimmedToken,
+        [WHOP_LINK_STATE_KEY]: nextPremium.active ? null : linkState
     };
 
     await chrome.storage.local.set(nextStorage);
 
     const becameInactive = Boolean(premiumStored?.active) && !nextPremium.active;
-    return { success: true, premiumState: nextPremium, becameInactive };
+    return {
+        success: true,
+        premiumState: nextPremium,
+        becameInactive,
+        hasLinkedIdentity: true,
+        pendingActivation: !nextPremium.active
+    };
 }
 
 async function flushAllStats() {
@@ -986,6 +1045,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 sendResponse({
                     success: false,
                     error: error instanceof Error ? error.message : "Premium refresh failed"
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (request.action === "completeWhopCheckout") {
+        (async () => {
+            try {
+                const premiumState = await verifyAndPersistWhopToken(request.token, "whop-popup-fallback");
+                sendResponse({
+                    success: true,
+                    premiumState
+                });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Token verification failed"
                 });
             }
         })();

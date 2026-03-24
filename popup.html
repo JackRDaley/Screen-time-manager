@@ -198,12 +198,19 @@
                 </div>
                 <div class="card-body">
                     <div class="billing-note muted">
-                        Billing is linked automatically after checkout. Use the button below to refresh membership status.
+                        Checkout should link automatically. If activation lags, click Sync Premium Status or paste your Whop token below.
                     </div>
 
                     <div class="settings-actions billing-actions">
-                        <button class="btn" id="verifyWhopBtn" type="button">Refresh Premium Status</button>
+                        <button class="btn" id="verifyWhopBtn" type="button">Sync Premium Status</button>
                         <button class="btn" id="manageWhopBtn" type="button">Manage / Cancel Membership</button>
+                        <details class="billing-troubleshoot">
+                            <summary>Troubleshooting: Link token manually</summary>
+                            <div class="billing-troubleshoot-body">
+                                <input id="manualWhopToken" class="input" type="text" placeholder="Paste Whop token (user_, mem_, mber_)" autocomplete="off" />
+                                <button class="btn" id="linkWhopTokenBtn" type="button">Link Existing Whop Token</button>
+                            </div>
+                        </details>
                         <div id="premiumStatusMsg" class="settings-saved" role="status" aria-live="polite">Premium inactive</div>
                     </div>
                 </div>

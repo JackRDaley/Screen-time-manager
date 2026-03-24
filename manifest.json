@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Screen Time Manager",
-    "version": "2.1.0",
+    "version": "2.1.2",
     "description": "Block distracting websites, set daily time limits, and track your screen time and visit history — all without leaving your browser.",
     "icons": {
         "16": "extension_icon.png",
@@ -25,6 +25,10 @@
         {
             "resources": ["blocked.html", "blocked.js", "blocked.css", "icon.png"],
             "matches": ["<all_urls>"]
+        },
+        {
+            "resources": ["popup.html", "popup.js", "popup.css"],
+            "matches": ["https://screen-time-manager.jackster0627.workers.dev/*"]
         }
     ]
 }

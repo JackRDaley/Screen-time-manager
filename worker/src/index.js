@@ -186,7 +186,7 @@ async function verifyWithWhopOrFallback(token, env) {
             };
         };
 
-        if (token.startsWith("mem_")) {
+        if (token.startsWith("mem_") || token.startsWith("mber_")) {
             const membershipUrl = `${verifyUrl.replace(/\/$/, "")}/${encodeURIComponent(token)}`;
             const membershipResponse = await fetch(membershipUrl, {
                 method: "GET",
@@ -272,6 +272,67 @@ async function verifyWithWhopOrFallback(token, env) {
     return normalizeWhopResult(payload);
 }
 
+function isPlaceholderValue(value) {
+    return /\{[^}]+\}/.test(String(value || ""));
+}
+
+function looksLikeBillingToken(value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) return false;
+    return /^(user_|mem_|mber_|pay_)/.test(normalized);
+}
+
+function isValidChromeExtensionId(value) {
+    const normalized = String(value || "").trim();
+    return /^[a-p]{32}$/.test(normalized);
+}
+
+function isValidClientState(value) {
+    const normalized = String(value || "").trim();
+    return /^[A-Za-z0-9_-]{16,128}$/.test(normalized);
+}
+
+function firstUsableToken(candidates) {
+    for (const candidate of candidates) {
+        const value = String(candidate || "").trim();
+        if (!value) continue;
+        if (isPlaceholderValue(value)) continue;
+        return value;
+    }
+    return "";
+}
+
+function discoverTokenFromSearchParams(searchParams) {
+    const directCandidates = [
+        searchParams.get("token"),
+        searchParams.get("user_id"),
+        searchParams.get("membership_id"),
+        searchParams.get("member_id"),
+        searchParams.get("membership"),
+        searchParams.get("access_token"),
+        searchParams.get("receipt"),
+        searchParams.get("receipt_id"),
+        searchParams.get("payment_id")
+    ];
+
+    const directMatch = firstUsableToken(directCandidates);
+    if (directMatch) {
+        return directMatch;
+    }
+
+    for (const [, value] of searchParams.entries()) {
+        const trimmed = String(value || "").trim();
+        if (!trimmed || isPlaceholderValue(trimmed)) {
+            continue;
+        }
+        if (looksLikeBillingToken(trimmed)) {
+            return trimmed;
+        }
+    }
+
+    return "";
+}
+
 function buildSignedTokenPayload(entitlement, env) {
     const issuedAt = unixNow();
     const expiresAt = issuedAt + getTokenTtlSeconds(env);
@@ -347,49 +408,226 @@ function constantTimeEqual(a, b) {
     return result === 0;
 }
 
-function renderCheckoutCallbackPage({ token, extensionId }) {
-        const serializedToken = JSON.stringify(token);
-        const serializedExtensionId = JSON.stringify(extensionId);
+function renderCheckoutCallbackPage({ token, extensionId, hasStateBridge }) {
+    const serializedToken = JSON.stringify(token);
+    const serializedExtensionId = JSON.stringify(extensionId);
+    const serializedHasStateBridge = JSON.stringify(Boolean(hasStateBridge));
 
-        return `<!doctype html>
+    return `<!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Completing upgrade…</title>
+    <title>Premium Activation</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-        .wrap { max-width: 560px; margin: 8vh auto; padding: 24px; }
-        .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 20px; }
-        h1 { margin: 0 0 10px; font-size: 20px; }
-        p { margin: 0; line-height: 1.5; color: #cbd5e1; }
-        .ok { color: #22c55e; }
-        .err { color: #f87171; }
-        .hint { margin-top: 10px; font-size: 13px; color: #94a3b8; }
+        :root {
+            --bg0: #071126;
+            --bg1: #0b1730;
+            --card: rgba(10, 22, 46, 0.78);
+            --border: rgba(148, 163, 184, 0.28);
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --ok: #34d399;
+            --warn: #f59e0b;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(900px 500px at 20% -10%, rgba(56, 189, 248, 0.16), transparent 65%),
+                radial-gradient(700px 400px at 90% 10%, rgba(59, 130, 246, 0.18), transparent 60%),
+                linear-gradient(180deg, var(--bg0), var(--bg1));
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+
+        .card {
+            width: min(640px, 100%);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: var(--card);
+            backdrop-filter: blur(8px);
+            padding: 20px;
+            box-shadow: 0 20px 60px rgba(2, 6, 23, 0.45);
+        }
+
+        h1 {
+            margin: 0 0 10px;
+            font-size: 30px;
+            line-height: 1.1;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+        }
+
+        p { margin: 0; }
+        .status {
+            font-size: 17px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .status.ok { color: var(--ok); }
+        .status.warn { color: var(--warn); }
+        .hint {
+            font-size: 14px;
+            color: var(--muted);
+            margin-bottom: 14px;
+        }
+
+        .panel {
+            margin-top: 14px;
+            padding: 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            background: rgba(15, 23, 42, 0.44);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+
+        .tip {
+            font-size: 12px;
+            color: var(--muted);
+            cursor: help;
+            text-decoration: underline dotted;
+            text-underline-offset: 2px;
+            margin-bottom: 8px;
+        }
+
+        .token-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .token {
+            flex: 1;
+            min-width: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(2, 6, 23, 0.48);
+            color: #bfdbfe;
+            word-break: break-all;
+        }
+
+        .btn {
+            border: 0;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: white;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .steps {
+            margin-top: 10px;
+            display: grid;
+            gap: 6px;
+            font-size: 14px;
+            color: #cbd5e1;
+        }
     </style>
 </head>
 <body>
-    <div class="wrap">
-        <div class="card">
-            <h1>Finishing your premium activation…</h1>
-            <p id="status">Connecting to your extension.</p>
-            <p class="hint" id="hint">You can close this tab after activation completes.</p>
+    <div class="card">
+        <h1>Premium Activation</h1>
+        <p id="status" class="status">Finalizing your upgrade...</p>
+        <p id="hint" class="hint">This tab can be closed after completion.</p>
+
+        <div class="panel" id="tokenPanel">
+            <div class="panel-header">
+                <div class="label">Activation Token</div>
+            </div>
+            <div class="token-row">
+                <div id="tokenValue" class="token"></div>
+                <button id="copyTokenBtn" class="btn" type="button">Copy</button>
+            </div>
+            <div class="steps">
+                <div>1. Open the extension popup.</div>
+                <div>2. Go to Whop Billing inside settings.</div>
+                <div>3. Expand the troubleshooting dropdown and paste this token.</div>
+            </div>
         </div>
     </div>
+
     <script>
         const token = ${serializedToken};
         const extensionId = ${serializedExtensionId};
+        const hasStateBridge = ${serializedHasStateBridge};
+
         const statusEl = document.getElementById("status");
         const hintEl = document.getElementById("hint");
+        const tokenPanelEl = document.getElementById("tokenPanel");
+        const tokenValueEl = document.getElementById("tokenValue");
+        const copyTokenBtnEl = document.getElementById("copyTokenBtn");
 
         function setStatus(message, kind) {
             statusEl.textContent = message;
-            statusEl.className = kind || "";
+            statusEl.classList.remove("ok", "warn");
+            if (kind) statusEl.classList.add(kind);
         }
 
+        function showTokenFallback() {
+            if (!tokenPanelEl || !tokenValueEl) return;
+            tokenValueEl.textContent = token || "(missing token)";
+        }
+
+        copyTokenBtnEl?.addEventListener("click", async () => {
+            if (!token) return;
+            try {
+                await navigator.clipboard.writeText(token);
+                copyTokenBtnEl.textContent = "Copied";
+                setTimeout(() => {
+                    copyTokenBtnEl.textContent = "Copy";
+                }, 1200);
+            } catch {
+                copyTokenBtnEl.textContent = "Copy failed";
+                setTimeout(() => {
+                    copyTokenBtnEl.textContent = "Copy";
+                }, 1200);
+            }
+        });
+
         function complete() {
-            if (!window.chrome || !chrome.runtime || typeof chrome.runtime.sendMessage !== "function") {
-                setStatus("Extension bridge unavailable. Open the extension and verify once.", "err");
+            showTokenFallback();
+
+            if (!token) {
+                setStatus("Missing callback data. Please retry checkout.", "warn");
+                hintEl.textContent = "The activation token was not present in this callback.";
+                return;
+            }
+
+            if (hasStateBridge) {
+                setStatus("Activation signal saved. Return to extension and sync premium status.", "ok");
+                return;
+            }
+
+            if (!extensionId || !window.chrome || !chrome.runtime || typeof chrome.runtime.sendMessage !== "function") {
+                setStatus("Automatic handoff unavailable. Use manual token link below.", "warn");
+                hintEl.textContent = "This is expected on some browsers/profiles.";
                 return;
             }
 
@@ -398,28 +636,20 @@ function renderCheckoutCallbackPage({ token, extensionId }) {
                 { action: "whopCheckoutComplete", token },
                 (response) => {
                     if (chrome.runtime.lastError) {
-                        setStatus("Could not reach extension. Make sure it is installed/enabled.", "err");
+                        setStatus("Could not reach extension automatically. Use manual token link below.", "warn");
+                        hintEl.textContent = "Open the extension and link the token once.";
                         return;
                     }
 
                     if (!response || response.success !== true) {
                         const reason = response && response.error ? String(response.error) : "Unknown error";
-                        setStatus("Activation failed: " + reason, "err");
+                        setStatus("Activation did not finish automatically. Use manual token link below.", "warn");
+                        hintEl.textContent = "Reason: " + reason;
                         return;
                     }
 
-                    setStatus("Premium activated. You can now return to the extension.", "ok");
-                    if (hintEl) {
-                        hintEl.textContent = response.popupOpened
-                            ? "Activation finished. Closing this tab…"
-                            : "Activation finished. Return to the extension if it did not open automatically.";
-                    }
-
-                    if (response.popupOpened) {
-                        setTimeout(() => {
-                            window.close();
-                        }, 600);
-                    }
+                    setStatus("Premium activated. You can return to the extension.", "ok");
+                    hintEl.textContent = "Activation completed successfully.";
                 }
             );
         }
@@ -534,6 +764,29 @@ async function kvGetPaymentToUser(env, paymentId) {
     return value || null;
 }
 
+async function kvSetClientStateToken(env, clientState, token) {
+    if (!env.PREMIUM_STATUS || !clientState || !token) return;
+    await env.PREMIUM_STATUS.put(`client-state:${clientState}`, JSON.stringify({ token }), {
+        expirationTtl: 60 * 60 * 24
+    });
+}
+
+async function kvTakeClientStateToken(env, clientState) {
+    if (!env.PREMIUM_STATUS || !clientState) return null;
+    const key = `client-state:${clientState}`;
+    const raw = await env.PREMIUM_STATUS.get(key);
+    if (!raw) return null;
+
+    await env.PREMIUM_STATUS.delete(key);
+    try {
+        const parsed = JSON.parse(raw);
+        const token = String(parsed?.token || "").trim();
+        return token || null;
+    } catch {
+        return null;
+    }
+}
+
 const WEBHOOK_ACTIVATE_EVENTS = new Set([
     "membership.activated",
     "membership_activated",
@@ -568,26 +821,22 @@ export default {
         // Accept any token-like param Whop or the extension might send.
         // Prefer user_id / membership_id for direct verification; fall back to
         // payment identifiers and try a membership lookup by company + status.
-        const rawToken =
-            url.searchParams.get("token") ||
-            url.searchParams.get("user_id") ||
-            url.searchParams.get("membership_id") ||
-            url.searchParams.get("access_token") ||
-            url.searchParams.get("receipt") ||
-            url.searchParams.get("receipt_id") ||
-            url.searchParams.get("payment_id") ||
-            "";
+        const rawToken = discoverTokenFromSearchParams(url.searchParams);
 
         const paymentId =
             url.searchParams.get("payment_id") ||
             url.searchParams.get("receipt_id") ||
             (rawToken.startsWith("pay_") ? rawToken : "");
 
-        const extensionId =
-            url.searchParams.get("ext") ||
-            String(env.WHOP_EXTENSION_ID || "").trim();
+        const extFromQuery = String(url.searchParams.get("ext") || "").trim();
+        const extFromEnv = String(env.WHOP_EXTENSION_ID || "").trim();
+        const extensionId = isValidChromeExtensionId(extFromQuery)
+            ? extFromQuery
+            : (isValidChromeExtensionId(extFromEnv) ? extFromEnv : "");
+        const rawClientState = String(url.searchParams.get("client_state") || "").trim();
+        const clientState = isValidClientState(rawClientState) ? rawClientState : "";
 
-        let token = /\{[^}]+\}/.test(rawToken) ? "" : rawToken;
+        let token = rawToken;
 
         if (!token && paymentId) {
             const mappedUserId = await kvGetPaymentToUser(env, paymentId);
@@ -603,9 +852,13 @@ export default {
             }
         }
 
-        const looksLikePlaceholder = /\{[^}]+\}/.test(token);
+        const looksLikePlaceholder = isPlaceholderValue(token);
 
-        if (!token && paymentId && extensionId) {
+        if (token && !looksLikePlaceholder && clientState) {
+            await kvSetClientStateToken(env, clientState, token);
+        }
+
+        if (!token && paymentId && (extensionId || clientState)) {
             return new Response(
                 "Payment detected but membership mapping is not ready yet. Please wait a few seconds and refresh this page.",
                 {
@@ -618,11 +871,11 @@ export default {
             );
         }
 
-        if (!token || !extensionId || looksLikePlaceholder) {
+        if (!token || (!extensionId && !clientState) || looksLikePlaceholder) {
             // Provide a helpful diagnostic listing all params actually received
             const received = [...url.searchParams.keys()].join(", ") || "(none)";
             return new Response(
-                `Whop checkout callback is missing a usable token or extension id.\n` +
+            `Whop checkout callback is missing a usable token plus extension id/client state.\n` +
                 `Params received: ${received}\n\n` +
                 `In your Whop dashboard, set the post-checkout redirect URL to:\n` +
                 `https://screen-time-manager.jackster0627.workers.dev/whop/complete?token={user_id}\n\n` +
@@ -638,7 +891,7 @@ export default {
             );
         }
 
-        const page = renderCheckoutCallbackPage({ token, extensionId });
+        const page = renderCheckoutCallbackPage({ token, extensionId, hasStateBridge: Boolean(clientState) });
         return new Response(page, {
             status: 200,
             headers: {
@@ -646,6 +899,20 @@ export default {
                 "Cache-Control": "no-store"
             }
         });
+        }
+
+        if (request.method === "GET" && url.pathname === "/whop/link-state") {
+        const rawClientState = String(url.searchParams.get("client_state") || "").trim();
+        if (!isValidClientState(rawClientState)) {
+            return json({ error: "Invalid client_state" }, 400);
+        }
+
+        const token = await kvTakeClientStateToken(env, rawClientState);
+        if (!token) {
+            return json({ error: "Not found" }, 404);
+        }
+
+        return json({ token });
         }
 
         if (request.method === "POST" && url.pathname === "/whop/webhook") {
