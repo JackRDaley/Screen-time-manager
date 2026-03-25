@@ -2,6 +2,7 @@
 node_modules/
 server/node_modules/
 worker/node_modules/
+.tools/
 
 # Environment / secrets
 .env
