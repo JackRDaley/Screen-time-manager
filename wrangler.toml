@@ -8,6 +8,7 @@ WHOP_COMPANY_ID = "biz_EE8NPUFwUpVWma"
 WHOP_ACTIVE_STATUSES = "active,trialing"
 TOKEN_TTL_DAYS = "7"
 WHOP_EXTENSION_ID = "oflgdecdopjpkpbnncendjoeohoeomnf"
+GA4_MEASUREMENT_ID = "G-E0X1Q14TFL"
 
 [[kv_namespaces]]
 binding = "PREMIUM_STATUS"
