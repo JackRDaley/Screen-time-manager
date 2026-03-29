@@ -74,7 +74,39 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 2. The extension detects the active tab and tracks time spent on that domain.
 3. Once the time limit is exceeded:
    - The tab is redirected to a blocked page.
+  - The blocked page can emit an anonymous analytics event for active-usage tracking.
 4. Usage data resets daily.
+
+---
+
+## Google Analytics Tracking
+
+Blocked-page redirects can be tracked with GA4 through the Cloudflare Worker.
+
+- The extension sends one anonymous event per redirect to `/analytics/block-event`.
+- The Worker forwards that event to GA4 using the Measurement Protocol.
+- No GA secret is stored in the extension.
+
+To enable it:
+
+1. Create a GA4 Measurement Protocol API secret in your GA property.
+2. Set the Worker measurement id as an environment variable:
+  ```bash
+  wrangler vars set GA4_MEASUREMENT_ID
+  ```
+3. Set the API secret as a Worker secret:
+  ```bash
+  wrangler secret put GA4_API_SECRET
+  ```
+4. Deploy the Worker again.
+
+The emitted GA4 event name is `blocked_page_view` and includes:
+
+- `block_source` (`limit` or `scheduled`)
+- `extension_version`
+- `redirect_event_id`
+
+Use GA4's Active Users metric against this event if you want a rough measure of how many installs are still hitting real blocks.
 
 ---
 

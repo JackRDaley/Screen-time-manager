@@ -55,6 +55,14 @@ const EMPTY_STATE_MESSAGES = Object.freeze({
     blocked: "No blocked sites yet. Add a site above to start tracking and enforcing a daily limit."
 });
 
+function trackAnalyticsEvent(eventName, params = {}) {
+    chrome.runtime.sendMessage({
+        action: "trackAnalyticsEvent",
+        eventName,
+        params
+    }).catch(() => null);
+}
+
 function isRankingInteractionActive() {
     return rankingInteractionDepth > 0;
 }
@@ -268,12 +276,14 @@ async function saveSettingsToStorage(partialSettings) {
 
 async function verifyWhopAccess() {
     setPremiumStatusMessage("Refreshing premium status...");
+    trackAnalyticsEvent("premium_sync_clicked");
 
     try {
         const response = await chrome.runtime.sendMessage({ action: "refreshPremiumStatus" });
         if (!response?.success) {
             if (response?.pendingActivation) {
                 setPremiumStatusMessage("Checkout detected. Activation is still syncing; retrying shortly...", "error");
+                trackAnalyticsEvent("premium_sync_result", { status: "pending" });
                 setTimeout(() => {
                     chrome.runtime.sendMessage({ action: "refreshPremiumStatus" }).catch(() => null);
                 }, 3500);
@@ -295,23 +305,29 @@ async function verifyWhopAccess() {
 
         if (nextPremium.active) {
             setPremiumStatusMessage(`Premium active (${nextPremium.planName})`, "success");
+            trackAnalyticsEvent("premium_sync_result", { status: "active", source: nextPremium.source || "whop" });
         } else if (response?.pendingActivation || response?.hasLinkedIdentity) {
             setPremiumStatusMessage("Billing identity linked. Premium is pending activation; retry shortly.", "error");
+            trackAnalyticsEvent("premium_sync_result", { status: "pending", source: nextPremium.source || "whop" });
         } else {
             setPremiumStatusMessage("No active Whop entitlement found.", "error");
+            trackAnalyticsEvent("premium_sync_result", { status: "inactive", source: nextPremium.source || "whop" });
         }
 
         await loadAll();
     } catch (error) {
         setPremiumStatusMessage(error?.message || "Verification failed.", "error");
+        trackAnalyticsEvent("premium_sync_result", { status: "error" });
     }
 }
 
-function openWhopCheckout() {
+function openWhopCheckout(entrypoint = "unknown") {
     if (!WHOP_CHECKOUT_URL) {
         setPremiumStatusMessage("Checkout URL not configured.", "error");
         return;
     }
+
+    trackAnalyticsEvent("premium_checkout_opened", { entrypoint });
 
     const randomBytes = new Uint8Array(16);
     crypto.getRandomValues(randomBytes);
@@ -352,6 +368,7 @@ function openWhopManage() {
         setPremiumStatusMessage("Manage membership URL not configured.", "error");
         return;
     }
+    trackAnalyticsEvent("premium_manage_opened");
     chrome.tabs.create({ url: WHOP_MANAGE_URL });
 }
 
@@ -374,6 +391,7 @@ async function completeWhopCheckoutFromUrl() {
         return false;
     }
 
+    trackAnalyticsEvent("premium_checkout_complete_attempt", { source: "popup_url_params" });
     setPremiumStatusMessage("Finishing premium activation...");
     try {
         const response = await chrome.runtime.sendMessage({
@@ -392,8 +410,13 @@ async function completeWhopCheckoutFromUrl() {
         });
 
         setPremiumStatusMessage(`Premium active (${currentPremium.planName})`, "success");
+        trackAnalyticsEvent("premium_checkout_complete_result", {
+            status: currentPremium.active ? "active" : "pending",
+            source: currentPremium.source || "whop"
+        });
     } catch (error) {
         setPremiumStatusMessage(error?.message || "Activation failed.", "error");
+        trackAnalyticsEvent("premium_checkout_complete_result", { status: "error", source: "popup_url_params" });
     } finally {
         clearWhopCheckoutParams();
         await loadAll();
@@ -416,6 +439,7 @@ async function linkWhopTokenManually() {
         return false;
     }
 
+    trackAnalyticsEvent("premium_manual_link_attempt");
     setPremiumStatusMessage("Linking billing identity...");
     try {
         const response = await chrome.runtime.sendMessage({
@@ -438,14 +462,17 @@ async function linkWhopTokenManually() {
 
         if (nextPremium.active) {
             setPremiumStatusMessage(`Premium active (${nextPremium.planName})`, "success");
+            trackAnalyticsEvent("premium_manual_link_result", { status: "active", source: nextPremium.source || "whop-manual" });
         } else {
             setPremiumStatusMessage("Billing identity linked. Premium is pending activation; retry shortly.", "error");
+            trackAnalyticsEvent("premium_manual_link_result", { status: "pending", source: nextPremium.source || "whop-manual" });
         }
 
         await loadAll();
         return true;
     } catch (error) {
         setPremiumStatusMessage(error?.message || "Linking failed.", "error");
+        trackAnalyticsEvent("premium_manual_link_result", { status: "error" });
         return false;
     }
 }
@@ -1235,8 +1262,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         setPremiumStatusMessage("Checkout detected. Activation may take a few seconds. Click Sync Premium Status soon.", "error");
     }
 
-    $("upgradeBtnFromLimits")?.addEventListener("click", openWhopCheckout);
-    $("upgradeBtnFromSchedule")?.addEventListener("click", openWhopCheckout);
+    $("upgradeBtnFromLimits")?.addEventListener("click", () => openWhopCheckout("limits_paywall"));
+    $("upgradeBtnFromSchedule")?.addEventListener("click", () => openWhopCheckout("schedule_paywall"));
     $("manageWhopBtn")?.addEventListener("click", openWhopManage);
 
     const statRangeSelect = document.getElementById("statRange");

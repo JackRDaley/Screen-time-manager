@@ -387,6 +387,97 @@ async function parseJsonBody(request) {
     }
 }
 
+function sanitizeAnalyticsText(value, fallback, maxLength = 100) {
+    const normalized = String(value || "").trim();
+    if (!normalized) {
+        return fallback;
+    }
+
+    return normalized.slice(0, maxLength);
+}
+
+function sanitizeAnalyticsEventName(value, fallback = "extension_event") {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+    if (!normalized || !/^[a-z]/.test(normalized)) {
+        return fallback;
+    }
+
+    return normalized.slice(0, 40);
+}
+
+function sanitizeAnalyticsParams(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+    }
+
+    const entries = Object.entries(value).slice(0, 25);
+    const sanitized = {};
+
+    for (const [rawKey, rawValue] of entries) {
+        const key = sanitizeAnalyticsEventName(rawKey, "param");
+        if (!key) continue;
+
+        if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
+            sanitized[key] = rawValue;
+            continue;
+        }
+
+        if (typeof rawValue === "boolean") {
+            sanitized[key] = rawValue ? 1 : 0;
+            continue;
+        }
+
+        sanitized[key] = sanitizeAnalyticsText(rawValue, "", 100);
+    }
+
+    return sanitized;
+}
+
+function buildGa4CollectUrl(env) {
+    const measurementId = String(env.GA4_MEASUREMENT_ID || "").trim();
+    const apiSecret = String(env.GA4_API_SECRET || "").trim();
+
+    if (!measurementId || !apiSecret) {
+        return null;
+    }
+
+    const gaUrl = new URL("https://www.google-analytics.com/mp/collect");
+    gaUrl.searchParams.set("measurement_id", measurementId);
+    gaUrl.searchParams.set("api_secret", apiSecret);
+    return gaUrl.toString();
+}
+
+async function sendGa4Event(env, { clientId, eventName, params }) {
+    const gaUrl = buildGa4CollectUrl(env);
+    if (!gaUrl) {
+        return { ok: true, skipped: true, reason: "ga-not-configured" };
+    }
+
+    const response = await fetch(gaUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            client_id: clientId,
+            events: [{
+                name: eventName,
+                params
+            }]
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error(`GA4 collect failed (${response.status})`);
+    }
+
+    return { ok: true, skipped: false };
+}
+
 function parseWebhookSecret(secret) {
     const normalized = String(secret || "").trim();
     if (normalized.startsWith("whsec_")) {
@@ -815,6 +906,68 @@ export default {
 
         if (request.method === "GET" && url.pathname === "/health") {
         return json({ ok: true, service: "whop-verify-worker", now: new Date().toISOString() });
+        }
+
+        if (request.method === "POST" && url.pathname === "/analytics/block-event") {
+        let body;
+        try {
+            body = await parseJsonBody(request);
+        } catch (error) {
+            return json({ error: error instanceof Error ? error.message : "Invalid JSON body" }, 400);
+        }
+
+        const clientId = sanitizeAnalyticsText(body?.clientId, "", 128);
+        if (!clientId) {
+            return json({ error: "Missing clientId" }, 400);
+        }
+
+        const result = await sendGa4Event(env, {
+            clientId,
+            eventName: "blocked_page_view",
+            params: {
+                engagement_time_msec: 1,
+                block_source: sanitizeAnalyticsText(body?.source, "unknown", 40),
+                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
+                redirect_event_id: sanitizeAnalyticsText(body?.eventId, "missing", 64)
+            }
+        }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }));
+
+        if (!result.ok) {
+            return json({ error: "Analytics forwarding failed", message: result.error }, 502);
+        }
+
+        return json({ ok: true, skipped: Boolean(result.skipped), reason: result.reason || null });
+        }
+
+        if (request.method === "POST" && url.pathname === "/analytics/event") {
+        let body;
+        try {
+            body = await parseJsonBody(request);
+        } catch (error) {
+            return json({ error: error instanceof Error ? error.message : "Invalid JSON body" }, 400);
+        }
+
+        const clientId = sanitizeAnalyticsText(body?.clientId, "", 128);
+        if (!clientId) {
+            return json({ error: "Missing clientId" }, 400);
+        }
+
+        const eventName = sanitizeAnalyticsEventName(body?.eventName, "extension_event");
+        const result = await sendGa4Event(env, {
+            clientId,
+            eventName,
+            params: {
+                engagement_time_msec: 1,
+                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
+                ...sanitizeAnalyticsParams(body?.params)
+            }
+        }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }));
+
+        if (!result.ok) {
+            return json({ error: "Analytics forwarding failed", message: result.error }, 502);
+        }
+
+        return json({ ok: true, skipped: Boolean(result.skipped), reason: result.reason || null, eventName });
         }
 
         if (request.method === "GET" && url.pathname === "/whop/complete") {

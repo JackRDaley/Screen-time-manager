@@ -1,8 +1,66 @@
 const params = new URLSearchParams(location.search);
 const d = params.get("d") || "this site";
 const source = params.get("source") || "limit";
+const eventId = params.get("eid") || "";
+const ANALYTICS_CLIENT_ID_KEY = "analyticsClientId";
+const BLOCK_EVENT_TRACKER_KEY = "blockedAnalyticsEvent";
+const BLOCK_ANALYTICS_URL = "https://screen-time-manager.jackster0627.workers.dev/analytics/block-event";
 
 document.getElementById("domain").textContent = d;
+
+function getTrackedEventStorageKey(id) {
+    return `${BLOCK_EVENT_TRACKER_KEY}:${id}`;
+}
+
+async function getAnalyticsClientId() {
+    const { [ANALYTICS_CLIENT_ID_KEY]: storedClientId = "" } =
+        await chrome.storage.local.get([ANALYTICS_CLIENT_ID_KEY]);
+
+    if (storedClientId) {
+        return storedClientId;
+    }
+
+    const clientId = typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}.${Math.random().toString(36).slice(2, 12)}`;
+
+    await chrome.storage.local.set({ [ANALYTICS_CLIENT_ID_KEY]: clientId });
+    return clientId;
+}
+
+async function trackBlockedPageView() {
+    if (!eventId) return;
+
+    const trackedEventKey = getTrackedEventStorageKey(eventId);
+    if (sessionStorage.getItem(trackedEventKey) === "1") {
+        return;
+    }
+
+    sessionStorage.setItem(trackedEventKey, "1");
+
+    try {
+        const clientId = await getAnalyticsClientId();
+        const response = await fetch(BLOCK_ANALYTICS_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                clientId,
+                eventId,
+                source,
+                extensionVersion: chrome.runtime.getManifest().version
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Analytics request failed (${response.status})`);
+        }
+    } catch (error) {
+        sessionStorage.removeItem(trackedEventKey);
+        console.debug("Blocked-page analytics failed", error);
+    }
+}
+
+trackBlockedPageView();
 
 if (source === "scheduled") {
     document.getElementById("badge").textContent = "Scheduled block active";

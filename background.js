@@ -23,6 +23,10 @@ const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/wh
 const WHOP_LINK_STATE_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/link-state";
 const WHOP_LINK_STATE_MAX_AGE_MS = 60 * 60 * 1000;
 const ALLOWED_EXTERNAL_CALLBACK_ORIGIN = "https://screen-time-manager.jackster0627.workers.dev/";
+const ANALYTICS_EVENT_URL = "https://screen-time-manager.jackster0627.workers.dev/analytics/event";
+const ANALYTICS_CLIENT_ID_KEY = "analyticsClientId";
+const ANALYTICS_INSTALL_TS_KEY = "analyticsInstallTimestampMs";
+const ANALYTICS_LAST_ACTIVE_DAY_KEY = "analyticsLastActiveDay";
 const PREMIUM_SYNC_ALARM = "premiumSync";
 const PREMIUM_SYNC_INTERVAL_MINUTES = 60;
 const FREE_PLAN_LIMITS = Object.freeze({
@@ -41,6 +45,141 @@ function getDayKey(d = new Date()) {
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
+}
+
+function sanitizeAnalyticsText(value, fallback = "unknown", maxLength = 80) {
+    const normalized = String(value || "").trim();
+    if (!normalized) {
+        return fallback;
+    }
+    return normalized.slice(0, maxLength);
+}
+
+function sanitizeAnalyticsEventName(value) {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+    if (!normalized || !/^[a-z]/.test(normalized)) {
+        return "";
+    }
+
+    return normalized.slice(0, 40);
+}
+
+function sanitizeAnalyticsParams(params) {
+    if (!params || typeof params !== "object" || Array.isArray(params)) {
+        return {};
+    }
+
+    const entries = Object.entries(params).slice(0, 25);
+    const sanitized = {};
+
+    for (const [rawKey, rawValue] of entries) {
+        const key = sanitizeAnalyticsEventName(rawKey);
+        if (!key) continue;
+
+        if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
+            sanitized[key] = rawValue;
+        } else if (typeof rawValue === "boolean") {
+            sanitized[key] = rawValue ? 1 : 0;
+        } else {
+            sanitized[key] = sanitizeAnalyticsText(rawValue, "", 100);
+        }
+    }
+
+    return sanitized;
+}
+
+async function getOrCreateAnalyticsClientId() {
+    const { [ANALYTICS_CLIENT_ID_KEY]: storedClientId = "" } =
+        await chrome.storage.local.get([ANALYTICS_CLIENT_ID_KEY]);
+
+    if (storedClientId) {
+        return storedClientId;
+    }
+
+    const clientId = typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}.${Math.random().toString(36).slice(2, 12)}`;
+
+    await chrome.storage.local.set({ [ANALYTICS_CLIENT_ID_KEY]: clientId });
+    return clientId;
+}
+
+async function sendAnalyticsEvent(eventName, params = {}) {
+    const normalizedEventName = sanitizeAnalyticsEventName(eventName);
+    if (!normalizedEventName) {
+        return;
+    }
+
+    const clientId = await getOrCreateAnalyticsClientId();
+    const extensionVersion = sanitizeAnalyticsText(chrome.runtime.getManifest().version, "unknown", 32);
+
+    await fetch(ANALYTICS_EVENT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            clientId,
+            eventName: normalizedEventName,
+            extensionVersion,
+            params: sanitizeAnalyticsParams(params)
+        })
+    });
+}
+
+async function sendAnalyticsEventSafe(eventName, params = {}) {
+    try {
+        await sendAnalyticsEvent(eventName, params);
+    } catch {
+        // Never block extension behavior on analytics failures.
+    }
+}
+
+async function ensureInstallTimestampMs() {
+    const { [ANALYTICS_INSTALL_TS_KEY]: storedTimestamp = 0 } =
+        await chrome.storage.local.get([ANALYTICS_INSTALL_TS_KEY]);
+
+    if (Number.isFinite(storedTimestamp) && storedTimestamp > 0) {
+        return storedTimestamp;
+    }
+
+    const now = Date.now();
+    await chrome.storage.local.set({ [ANALYTICS_INSTALL_TS_KEY]: now });
+    return now;
+}
+
+async function trackRetentionMetrics(trigger, installReason = "") {
+    const installTimestampMs = await ensureInstallTimestampMs();
+    const now = Date.now();
+    const daysSinceInstall = Math.max(0, Math.floor((now - installTimestampMs) / (24 * 60 * 60 * 1000)));
+    const todayKey = getDayKey(new Date(now));
+
+    await sendAnalyticsEventSafe("extension_session_start", {
+        trigger,
+        install_reason: installReason || "none",
+        days_since_install: daysSinceInstall
+    });
+
+    if (trigger === "installed") {
+        await sendAnalyticsEventSafe("extension_installed", {
+            install_reason: installReason || "unknown"
+        });
+    }
+
+    const { [ANALYTICS_LAST_ACTIVE_DAY_KEY]: lastActiveDay = "" } =
+        await chrome.storage.local.get([ANALYTICS_LAST_ACTIVE_DAY_KEY]);
+
+    if (lastActiveDay !== todayKey) {
+        await sendAnalyticsEventSafe("retention_day_active", {
+            trigger,
+            days_since_install: daysSinceInstall
+        });
+        await chrome.storage.local.set({ [ANALYTICS_LAST_ACTIVE_DAY_KEY]: todayKey });
+    }
 }
 
 function normalizeScheduleDays(days) {
@@ -152,8 +291,20 @@ function limitMsFor(domain, blockedDomains) {
     return sec * 1000;
 }
 
+function createBlockedEventId() {
+    if (typeof crypto?.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function blockedUrl(domain, source = "limit") {
-    return chrome.runtime.getURL(`blocked.html?d=${encodeURIComponent(domain)}&source=${source}`);
+    const params = new URLSearchParams({
+        d: domain,
+        source,
+        eid: createBlockedEventId()
+    });
+    return chrome.runtime.getURL(`blocked.html?${params.toString()}`);
 }
 
 async function redirectOpenTabsForDomains(domains) {
@@ -398,6 +549,12 @@ async function verifyAndPersistWhopToken(token, source = "whop-callback") {
     payloadToStore[WHOP_PENDING_TOKEN_KEY] = nextPremium.active ? "" : trimmedToken;
 
     await chrome.storage.local.set(payloadToStore);
+
+    await sendAnalyticsEventSafe("premium_checkout_complete_result", {
+        source,
+        status: nextPremium.active ? "active" : "pending",
+        plan_name: nextPremium.planName
+    });
 
     return nextPremium;
 }
@@ -820,11 +977,17 @@ async function initializeExtension() {
 }
 
 chrome.runtime.onStartup?.addListener(() => {
-    initializeExtension().catch(console.error);
+    (async () => {
+        await initializeExtension();
+        await trackRetentionMetrics("startup");
+    })().catch(console.error);
 });
 
-chrome.runtime.onInstalled.addListener(() => {
-    initializeExtension().catch(console.error);
+chrome.runtime.onInstalled.addListener((details) => {
+    (async () => {
+        await initializeExtension();
+        await trackRetentionMetrics("installed", details?.reason || "unknown");
+    })().catch(console.error);
 });
 
 // Handle alarms
@@ -1068,6 +1231,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })();
         return true;
     }
+
+    if (request.action === "trackAnalyticsEvent") {
+        (async () => {
+            await sendAnalyticsEventSafe(request.eventName, request.params || {});
+            sendResponse({ success: true });
+        })();
+        return true;
+    }
 });
 
 chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
@@ -1102,6 +1273,10 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
                 popupOpened
             });
         } catch (error) {
+            await sendAnalyticsEventSafe("premium_checkout_complete_result", {
+                source: "whop_callback",
+                status: "error"
+            });
             sendResponse({
                 success: false,
                 error: error instanceof Error ? error.message : "Token verification failed"
