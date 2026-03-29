@@ -74,7 +74,7 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 2. The extension detects the active tab and tracks time spent on that domain.
 3. Once the time limit is exceeded:
    - The tab is redirected to a blocked page.
-  - The blocked page can emit an anonymous analytics event for active-usage tracking.
+   - The blocked page can emit an anonymous analytics event for active-usage tracking.
 4. Usage data resets daily.
 
 ---
