@@ -1187,25 +1187,22 @@ document.addEventListener("DOMContentLoaded", async () => {
         currentOnboardingState = onboardingStored;
     }
 
-    // Show onboarding if not completed
+    // Wire up onboarding button handlers and show overlay if onboarding is not yet completed
     if (!currentOnboardingState.completed) {
-        await showOnboarding();
-        
-        // Wire up onboarding button handlers
         $("onboardingNextBtn0")?.addEventListener("click", async () => {
             await setOnboardingStep(1);
             await showOnboardingStep(1);
         });
-        
+
         $("onboardingNextBtn1")?.addEventListener("click", async () => {
             await setOnboardingStep(2);
             await showOnboardingStep(2);
         });
-        
+
         $("onboardingPrevBtn1")?.addEventListener("click", async () => {
             await showOnboardingStep(0);
         });
-        
+
         $("onboardingPrevBtn2")?.addEventListener("click", async () => {
             await showOnboardingStep(1);
         });
@@ -1221,12 +1218,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         $("onboardingSkipBtn2")?.addEventListener("click", async () => {
             await skipOnboarding();
         });
-        
+
         $("onboardingCompleteBtn")?.addEventListener("click", async () => {
             await completeOnboardingAndSetupDefaults();
         });
-        
-        return; // Don't load the regular UI yet
+
+        await showOnboarding();
     }
 
     await loadSettingsFromStorage();
@@ -1367,7 +1364,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         await loadAll();
     });
 
-    await loadAll();
+    // Only render data immediately if onboarding is already complete;
+    // otherwise loadAll() is called by skipOnboarding/completeOnboardingAndSetupDefaults.
+    if (currentOnboardingState.completed) {
+        await loadAll();
+    }
 });
 
 window.addEventListener("unload", () => {
