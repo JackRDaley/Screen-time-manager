@@ -12,7 +12,9 @@ const KEYS = {
     scheduledBlocks: "scheduledBlocks", // [{ domain: string, startTime: number, endTime: number }]
     activeBlocks: "activeBlocks",       // [{ domain: string, startTime: number, endTime: number }]
     snoozedDomains: "snoozedDomains",   // { [domain]: expiresAt (ms) }
-    statsHistory: "statsHistory"        // { [dayKey]: { [domain]: { timeMs, visits } } }
+    statsHistory: "statsHistory",       // { [dayKey]: { [domain]: { timeMs, visits } } }
+    onboarding: "onboardingState",      // { step: 0|1|2, completed: boolean, completedAt: number|null }
+    onboardingMetrics: "onboardingMetrics" // { installed, setupStarted, setupCompleted, firstBlockEvent }
 };
 
 const PREMIUM_KEY = "premiumState";
@@ -26,6 +28,23 @@ const FREE_PLAN_LIMITS = Object.freeze({
     maxScheduledBlocks: 2
 });
 const ALL_SCHEDULE_DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
+
+const DEFAULT_ONBOARDING_STATE = Object.freeze({
+    step: 0,
+    completed: false,
+    completedAt: null
+});
+
+const DEFAULT_ONBOARDING_METRICS = Object.freeze({
+    installed: null,
+    setupStarted: null,
+    setupCompleted: null,
+    setupSkipped: null,
+    firstBlockEvent: null,
+    firstBlockedPageView: null,
+    day1Return: null,
+    day7Return: null
+});
 
 let activeTabId = null;
 let activeDomain = null;
@@ -750,6 +769,24 @@ async function reconcileActiveScheduledBlocks() {
     await redirectOpenTabsForDomains(nextActiveBlocks.map((block) => block.domain));
 }
 
+async function initializeOnboarding() {
+    // Initialize onboarding state on first install only
+    const { [KEYS.onboarding]: existingOnboarding } = await chrome.storage.local.get([KEYS.onboarding]);
+    if (!existingOnboarding) {
+        const now = Date.now();
+        await chrome.storage.local.set({
+            [KEYS.onboarding]: { ...DEFAULT_ONBOARDING_STATE, step: 0 },
+            [KEYS.onboardingMetrics]: { ...DEFAULT_ONBOARDING_METRICS, installed: now }
+        });
+    }
+}
+
+async function logOnboardingMetric(metricKey, value) {
+    const { [KEYS.onboardingMetrics]: metrics = {} } = await chrome.storage.local.get([KEYS.onboardingMetrics]);
+    const updated = { ...DEFAULT_ONBOARDING_METRICS, ...metrics, [metricKey]: value };
+    await chrome.storage.local.set({ [KEYS.onboardingMetrics]: updated });
+}
+
 async function initializeExtension() {
     await initActive();
     await createEnforceAlarm();
@@ -758,6 +795,7 @@ async function initializeExtension() {
     await scheduleAlarms();
     await reconcileActiveScheduledBlocks();
     await refreshStoredPremiumStatus("startup-sync").catch(() => null);
+    await initializeOnboarding().catch(() => null);
 }
 
 chrome.runtime.onStartup?.addListener(() => {
@@ -972,6 +1010,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const next = activeBlocks.filter((b) => b.domain !== domain);
             await chrome.storage.local.set({ [KEYS.activeBlocks]: next });
             await updateBlockRules();
+            sendResponse({ success: true });
+        })();
+        return true;
+    }
+
+    if (request.action === "logOnboardingMetric") {
+        const { metric, value } = request;
+        (async () => {
+            await logOnboardingMetric(metric, value);
             sendResponse({ success: true });
         })();
         return true;

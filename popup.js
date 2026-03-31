@@ -6,6 +6,13 @@ const WHOP_TOKEN_KEY = "whopAccessToken";
 const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/verify";
 const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
+const ONBOARDING_KEY = "onboardingState";
+const ONBOARDING_METRICS_KEY = "onboardingMetrics";
+const SUGGESTED_DEFAULTS = Object.freeze([
+    { domain: "youtube.com", limitMinutes: 30 },
+    { domain: "facebook.com", limitMinutes: 30 },
+    { domain: "x.com", limitMinutes: 30 }
+]);
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 60,
     use24HourTime: false
@@ -46,6 +53,8 @@ let rankingInteractionDepth = 0;
 let currentPremium = { ...DEFAULT_PREMIUM };
 let selectedScheduleDays = [];
 let editingScheduledBlockId = null;
+let currentOnboardingState = { step: 0, completed: false, completedAt: null };
+let selectedSuggestedSites = new Set(SUGGESTED_DEFAULTS.slice(0, 3).map(s => s.domain));
 
 const EMPTY_STATE_MESSAGES = Object.freeze({
     active: "No active sessions. Scheduled blocks and time-limited sites will appear here when they start.",
@@ -96,6 +105,113 @@ function stopActiveCountdownTicker() {
     if (activeCountdownTimer == null) return;
     clearInterval(activeCountdownTimer);
     activeCountdownTimer = null;
+}
+
+async function setOnboardingStep(step) {
+    currentOnboardingState.step = Math.max(0, Math.min(2, step));
+    await chrome.storage.local.set({ [ONBOARDING_KEY]: currentOnboardingState });
+}
+
+async function renderOnboardingSuggestedSites() {
+    const container = $("suggestedSitesContainer");
+    if (!container) return;
+    
+    container.innerHTML = SUGGESTED_DEFAULTS.map((site) => {
+        const isSelected = selectedSuggestedSites.has(site.domain);
+        return `
+            <div class="suggested-site">
+                <div class="suggested-site-info">
+                    <div class="suggested-site-domain">${site.domain}</div>
+                    <div class="suggested-site-default">${site.limitMinutes} min/day</div>
+                </div>
+                <input type="checkbox" data-domain="${site.domain}" ${isSelected ? 'checked' : ''} />
+            </div>
+        `;
+    }).join('');
+    
+    container.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+        checkbox.addEventListener('change', (e) => {
+            const domain = e.target.getAttribute('data-domain');
+            if (e.target.checked) {
+                selectedSuggestedSites.add(domain);
+            } else {
+                selectedSuggestedSites.delete(domain);
+            }
+        });
+    });
+}
+
+async function showOnboardingStep(step) {
+    const overlay = $("onboardingOverlay");
+    if (!overlay) return;
+    
+    // Hide all step screens
+    $("onboardingStep0").style.display = "none";
+    $("onboardingStep1").style.display = "none";
+    $("onboardingStep2").style.display = "none";
+    
+    // Show the requested step
+    const stepEl = $(`onboardingStep${step}`);
+    if (stepEl) {
+        stepEl.style.display = "flex";
+        if (step === 0) {
+            await renderOnboardingSuggestedSites();
+        }
+    }
+}
+
+async function showOnboarding() {
+    currentOnboardingState = { step: 0, completed: false, completedAt: null };
+    selectedSuggestedSites = new Set(SUGGESTED_DEFAULTS.slice(0, 3).map(s => s.domain));
+    const { [ONBOARDING_METRICS_KEY]: onboardingMetrics = {} } = await chrome.storage.local.get([ONBOARDING_METRICS_KEY]);
+    if (!onboardingMetrics?.setupStarted) {
+        await chrome.runtime.sendMessage({ action: "logOnboardingMetric", metric: "setupStarted", value: Date.now() }).catch(() => null);
+    }
+    const overlay = $("onboardingOverlay");
+    if (overlay) {
+        overlay.style.display = "flex";
+        overlay.classList.add("active");
+    }
+    await showOnboardingStep(0);
+}
+
+async function hideOnboarding() {
+    const overlay = $("onboardingOverlay");
+    if (overlay) {
+        overlay.style.display = "none";
+        overlay.classList.remove("active");
+    }
+}
+
+async function completeOnboardingAndSetupDefaults() {
+    // Apply selected sites with their default limits
+    for (const site of SUGGESTED_DEFAULTS) {
+        if (selectedSuggestedSites.has(site.domain)) {
+            await addDomain(site.domain, site.limitMinutes * 60);
+        }
+    }
+    
+    // Mark onboarding as complete in storage and background
+    const now = Date.now();
+    currentOnboardingState = { step: 2, completed: true, completedAt: now };
+    await chrome.storage.local.set({ [ONBOARDING_KEY]: currentOnboardingState });
+    await chrome.runtime.sendMessage({ action: "logOnboardingMetric", metric: "setupCompleted", value: now }).catch(() => null);
+    
+    // Hide onboarding and show dashboard
+    await hideOnboarding();
+    $("tab1").checked = true;
+    await loadAll();
+}
+
+async function skipOnboarding() {
+    const now = Date.now();
+    currentOnboardingState = { step: 0, completed: true, completedAt: now };
+    await chrome.storage.local.set({ [ONBOARDING_KEY]: currentOnboardingState });
+    await chrome.runtime.sendMessage({ action: "logOnboardingMetric", metric: "setupSkipped", value: now }).catch(() => null);
+
+    await hideOnboarding();
+    $("tab1").checked = true;
+    await loadAll();
 }
 
 function startPopupRefreshTicker() {
@@ -1064,6 +1180,54 @@ document.addEventListener("DOMContentLoaded", async () => {
     startPopupRefreshTicker();
     wireRankingInteractionGuards();
     initializeScheduleDayPicker();
+
+    // Load onboarding state
+    const { [ONBOARDING_KEY]: onboardingStored } = await chrome.storage.local.get([ONBOARDING_KEY]);
+    if (onboardingStored) {
+        currentOnboardingState = onboardingStored;
+    }
+
+    // Show onboarding if not completed
+    if (!currentOnboardingState.completed) {
+        await showOnboarding();
+        
+        // Wire up onboarding button handlers
+        $("onboardingNextBtn0")?.addEventListener("click", async () => {
+            await setOnboardingStep(1);
+            await showOnboardingStep(1);
+        });
+        
+        $("onboardingNextBtn1")?.addEventListener("click", async () => {
+            await setOnboardingStep(2);
+            await showOnboardingStep(2);
+        });
+        
+        $("onboardingPrevBtn1")?.addEventListener("click", async () => {
+            await showOnboardingStep(0);
+        });
+        
+        $("onboardingPrevBtn2")?.addEventListener("click", async () => {
+            await showOnboardingStep(1);
+        });
+
+        $("onboardingSkipBtn0")?.addEventListener("click", async () => {
+            await skipOnboarding();
+        });
+
+        $("onboardingSkipBtn1")?.addEventListener("click", async () => {
+            await skipOnboarding();
+        });
+
+        $("onboardingSkipBtn2")?.addEventListener("click", async () => {
+            await skipOnboarding();
+        });
+        
+        $("onboardingCompleteBtn")?.addEventListener("click", async () => {
+            await completeOnboardingAndSetupDefaults();
+        });
+        
+        return; // Don't load the regular UI yet
+    }
 
     await loadSettingsFromStorage();
     await loadMonetizationFromStorage();
