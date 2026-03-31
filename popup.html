@@ -8,6 +8,76 @@
 </head>
 <body>
 <div class="scene">
+    <!-- Onboarding Modal (shown on first install) -->
+    <div id="onboardingOverlay" class="onboarding-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle0" tabindex="-1">
+        <div id="onboardingStep0" class="onboarding-screen" style="display:none">
+            <div class="onboarding-content">
+                <div class="onboarding-header">
+                    <div id="onboardingTitle0" class="onboarding-title">Let's get set up in 60 seconds</div>
+                    <div class="onboarding-subtitle">Pick the sites you want to focus on</div>
+                </div>
+                <div class="onboarding-body">
+                    <div id="suggestedSitesContainer" class="suggested-sites">
+                        <!-- Dynamically populated with suggested sites -->
+                    </div>
+                </div>
+                <div class="onboarding-footer">
+                    <button id="onboardingSkipBtn0" class="btn btn-ghost onboarding-btn onboarding-skip" type="button">Skip setup</button>
+                    <button id="onboardingNextBtn0" class="btn onboarding-btn" type="button">Next &rarr;</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="onboardingStep1" class="onboarding-screen" style="display:none">
+            <div class="onboarding-content">
+                <div class="onboarding-header">
+                    <div class="onboarding-title">Here's what happens when you hit your limit</div>
+                    <div class="onboarding-subtitle">A friendly reminder will appear</div>
+                </div>
+                <div class="onboarding-body">
+                    <div class="onboarding-preview">
+                        <div class="preview-label">Blocked page example:</div>
+                        <div class="preview-box" aria-label="Blocked page preview">
+                            <div class="preview-badge">Time limit reached</div>
+                            <div class="preview-heading">Site blocked</div>
+                            <div class="preview-text">You've reached your limit for <span class="preview-domain">youtube.com</span></div>
+                            <div class="preview-buttons">
+                                <button class="btn btn-sm btn-ghost" type="button" disabled>Reset limit</button>
+                                <button class="btn btn-sm" type="button" disabled>Close tab</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="onboarding-footer">
+                    <button id="onboardingSkipBtn1" class="btn btn-ghost onboarding-btn onboarding-skip" type="button">Skip setup</button>
+                    <button id="onboardingPrevBtn1" class="btn btn-ghost onboarding-btn" type="button">&larr; Back</button>
+                    <button id="onboardingNextBtn1" class="btn onboarding-btn" type="button">Next &rarr;</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="onboardingStep2" class="onboarding-screen" style="display:none">
+            <div class="onboarding-content">
+                <div class="onboarding-header">
+                    <div class="onboarding-title">Reclaim your focus</div>
+                    <div class="onboarding-subtitle">10K+ users beating distraction daily. You're in good company.</div>
+                </div>
+                <div class="onboarding-body">
+                    <div class="onboarding-benefits">
+                        <div class="benefit-item">Track time spent without judgment</div>
+                        <div class="benefit-item">Set limits that actually stick</div>
+                        <div class="benefit-item">See your progress and build streaks</div>
+                    </div>
+                </div>
+                <div class="onboarding-footer">
+                    <button id="onboardingSkipBtn2" class="btn btn-ghost onboarding-btn onboarding-skip" type="button">Skip setup</button>
+                    <button id="onboardingPrevBtn2" class="btn btn-ghost onboarding-btn" type="button">&larr; Back</button>
+                    <button id="onboardingCompleteBtn" class="btn onboarding-btn" type="button">Get Started &rarr;</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <input type="radio" name="tabs" id="tab1" checked />
     <input type="radio" name="tabs" id="tab2" />
     <input type="radio" name="tabs" id="tab3" />
