@@ -14,7 +14,7 @@ const KEYS = {
     snoozedDomains: "snoozedDomains",   // { [domain]: expiresAt (ms) }
     statsHistory: "statsHistory",       // { [dayKey]: { [domain]: { timeMs, visits } } }
     onboarding: "onboardingState",      // { step: 0|1|2, completed: boolean, completedAt: number|null }
-    onboardingMetrics: "onboardingMetrics" // { installed, setupStarted, setupCompleted, firstBlockEvent }
+    onboardingMetrics: "onboardingMetrics" // { installed, setupStarted, setupCompleted, setupSkipped, firstBlockEvent, firstBlockedPageView, day1Return, day7Return }
 };
 
 const PREMIUM_KEY = "premiumState";
