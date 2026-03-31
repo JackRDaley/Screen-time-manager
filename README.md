@@ -1,191 +1,191 @@
-# Seminar-Project
-Screen time management chrome extension
+# Screen Time Blocker Extension
 
-## Monetization (Whop + Paywall)
+A lightweight Chrome extension that helps users stay focused by tracking time spent on specific websites and automatically blocking them once a limit is reached.
 
-This extension now supports a built-in paywall flow:
+---
 
-- Free tier:
-	- Up to 3 limited domains
-	- Up to 2 scheduled blocks
-- Premium tier:
-	- Unlimited limits
-	- Scheduling enabled
+## Features
 
-### How it works
+- Time Tracking  
+  Tracks how long users spend on selected websites in real time.
 
-1. In **Settings → Whop Billing**, set:
-	 - **Checkout URL**: your Whop checkout link
-	 - **Verify API URL**: your backend endpoint that verifies Whop entitlement
-	 - **Access token / receipt**: token returned by your purchase/login flow
-2. User clicks **Open Whop Checkout** to purchase.
-3. User clicks **Verify Premium Access**.
-4. Extension calls your verify endpoint and stores premium status in local storage.
+- Automatic Blocking  
+  Redirects the user to a custom block page when a time limit is exceeded.
 
-### Important security note
+- Domain-Based Control  
+  Allows setting limits for individual websites (e.g., youtube.com, twitter.com).
 
-Do **not** call Whop secret APIs directly from the extension.
-Put Whop SDK/API secret usage on your own server, then return a minimal response to the extension.
+- Usage Statistics  
+  Stores daily usage data including time spent and visit counts per domain.
 
-Expected verify endpoint response:
+- Notifications  
+  Alerts users when they are close to or have reached their limit.
 
-```json
-{
-	"active": true,
-	"planName": "Pro",
-	"expiresAt": "2026-12-31T23:59:59.000Z"
+- Custom UI  
+  Includes a clean popup interface and a styled block page.
+
+---
+
+## Tech Stack
+
+- JavaScript (Vanilla)
+- Chrome Extensions API (Manifest V3)
+- HTML and CSS
+
+---
+
+## Installation
+
+### Option 1: Load Locally (Recommended for Development)
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/your-repo-name.git
+   cd your-repo-name
+   ```
+
+2. Open Chrome and navigate to:
+   ```
+   chrome://extensions/
+   ```
+
+3. Enable Developer Mode:
+   - Toggle the switch in the top-right corner
+
+4. Load the extension:
+   - Click "Load unpacked"
+   - Select the project folder
+
+5. The extension should now appear in your Chrome toolbar.
+
+---
+
+### Option 2: Install from Chrome Web Store
+
+1. Visit the Chrome Web Store listing
+2. Click "Add to Chrome"
+3. Confirm installation
+
+---
+
+## How It Works
+
+1. The user adds a domain and sets a time limit.
+2. The extension detects the active tab and tracks time spent on that domain.
+3. Once the time limit is exceeded:
+   - The tab is redirected to a blocked page.
+   - The blocked page can emit an anonymous analytics event for active-usage tracking.
+4. Usage data resets daily.
+
+---
+
+## Google Analytics Tracking
+
+Blocked-page redirects can be tracked with GA4 through the Cloudflare Worker.
+
+- The extension sends one anonymous event per redirect to `/analytics/block-event`.
+- The Worker forwards that event to GA4 using the Measurement Protocol.
+- No GA secret is stored in the extension.
+
+To enable it:
+
+1. Create a GA4 Measurement Protocol API secret in your GA property.
+2. Set the Worker measurement id as an environment variable:
+  ```bash
+  wrangler vars set GA4_MEASUREMENT_ID
+  ```
+3. Set the API secret as a Worker secret:
+  ```bash
+  wrangler secret put GA4_API_SECRET
+  ```
+4. Deploy the Worker again.
+
+The emitted GA4 event name is `blocked_page_view` and includes:
+
+- `block_source` (`limit` or `scheduled`)
+- `extension_version`
+- `redirect_event_id`
+
+Use GA4's Active Users metric against this event if you want a rough measure of how many installs are still hitting real blocks.
+
+---
+
+## Project Structure
+
+```
+├── manifest.json        # Extension configuration
+├── background.js        # Core logic (tracking and enforcement)
+├── popup.html           # Extension UI
+├── popup.css            # Popup styling
+├── popup.js             # Popup logic
+├── blocked.html         # Blocked page
+├── icons/               # Extension icons
+└── assets/              # Images and UI assets
+```
+
+---
+
+## Permissions Explained
+
+- tabs  
+  Used to detect the active tab and redirect it when necessary.
+
+- storage  
+  Stores user settings and usage data locally.
+
+- alarms  
+  Triggers periodic checks to enforce time limits.
+
+- host_permissions  
+  Allows access to URLs to determine the current domain.
+
+- notifications  
+  Notifies users when limits are reached.
+
+---
+
+## Key Concepts
+
+### Domain Extraction
+Extracts the hostname from a URL and normalizes it:
+```
+example.com
+```
+
+### Time Tracking
+- Uses timestamps to calculate time spent on each domain
+- Updates via tab events and background alarms
+
+### Blocking Logic
+```
+if (timeSpent >= limit) {
+    redirect to blocked page
 }
 ```
 
-Expected request body from extension:
+---
 
-```json
-{
-	"token": "user_token_or_receipt",
-	"extension": "screen-time-manager"
-}
-```
+## Known Issues / Future Improvements
 
-If `active` is `true`, premium unlocks immediately in the popup.
+- Add scheduling (daily or weekly limits)
+- Improve domain management UI
+- Add cross-device sync support
+- Enhance notification system
 
-### Cloudflare Worker backend setup (recommended)
+---
 
-This repo now includes a Worker backend in `worker/` with:
+## Contributing
 
-- `GET /health`
-- `GET /whop/complete`
-- `POST /whop/issue-token`
-- `POST /whop/verify`
+Contributions are welcome. Feel free to fork the repository and submit pull requests.
 
-#### 1) Install and log in
+---
 
-```bash
-cd worker
-npm install
-npx wrangler login
-```
+## License
 
-#### 2) Set secrets/vars
+This project is licensed under the MIT License.
 
-Set your Whop secret in Cloudflare:
+---
 
-```bash
-npx wrangler secret put WHOP_API_KEY
-```
+## Contact
 
-Set your JWT signing secret in Cloudflare:
-
-```bash
-npx wrangler secret put JWT_SECRET
-```
-
-Set your Whop memberships config and token lifetime in `wrangler.toml` or deploy vars:
-
-- `WHOP_VERIFY_URL`
-- `WHOP_COMPANY_ID`
-- `WHOP_ACTIVE_STATUSES = "active,trialing"`
-- `TOKEN_TTL_DAYS = "7"`
-- `WHOP_EXTENSION_ID` (optional fallback extension id for checkout callback)
-
-For memberships mode, use:
-
-- `WHOP_VERIFY_URL = "https://api.whop.com/api/v1/memberships"`
-- `WHOP_COMPANY_ID = "biz_xxxxxxxxxxxxx"`
-
-For local/dev fallback token, keep:
-
-- `DEV_PREMIUM_TOKEN = "local-premium-token"`
-
-#### 3) Deploy
-
-```bash
-npm run deploy
-```
-
-Wrangler prints your Worker URL, for example:
-
-- `https://screen-time-manager-verify.<your-subdomain>.workers.dev`
-
-#### 4) Issue a premium token
-
-Call the Worker with a Whop user ID (`user_...`) or membership ID (`mem_...`):
-
-```bash
-curl -X POST https://your-worker.workers.dev/whop/issue-token \
-  -H "Content-Type: application/json" \
-	-d '{"token":"user_xxxxxxxxxxxxx"}'
-```
-
-Successful response:
-
-```json
-{
-  "active": true,
-  "planName": "Premium",
-  "expiresAt": "2026-03-24T12:00:00.000Z",
-  "token": "signed_jwt_here"
-}
-```
-
-#### 5) Configure extension
-
-In the extension popup, paste the returned signed `token` into **Access token / receipt** and click **Verify Premium Access**.
-
-The extension already posts to your Worker `/whop/verify` endpoint.
-
-### Optional: fully automatic checkout activation (no token paste)
-
-To avoid manual token input, configure Whop to redirect after checkout to your Worker callback:
-
-- `https://screen-time-manager.jackster0627.workers.dev/whop/complete`
-
-Flow:
-
-1. User starts checkout from the extension.
-2. Extension appends `ext=<chrome.runtime.id>` to the checkout URL.
-3. Whop redirects to `/whop/complete?token=...&ext=...`.
-4. Worker callback page sends `{ action: "whopCheckoutComplete", token }` to the extension.
-5. Background verifies token against `/whop/verify` and stores premium state automatically.
-
-Notes:
-
-- Keep `manifest.json` `externally_connectable.matches` aligned with your Worker domain.
-- If your checkout provider can’t pass `ext`, set `WHOP_EXTENSION_ID` in Worker vars for your production extension ID.
-
-#### 6) Test endpoints
-
-- Health: `https://...workers.dev/health`
-- Issue token: `POST https://...workers.dev/whop/issue-token`
-- Verify token: `POST https://...workers.dev/whop/verify`
-
-### What to commit (important)
-
-Commit these:
-
-- `worker/package.json`
-- `worker/wrangler.toml`
-- `worker/src/index.js`
-- `.gitignore`
-
-Do **not** commit:
-
-- `node_modules/`
-- `server/node_modules/`
-- `worker/node_modules/`
-- `server/.env`
-- `worker/.dev.vars`
-
-If you fully migrate to Workers, you can keep `server/` for local fallback or remove it later.
-
-## UI Overhaul Smoke Checklist
-
-- Open popup and verify all tabs render: Dashboard, Limits, Schedule, Settings.
-- Add limit with explicit minutes and with blank minutes (should use default from Settings).
-- Toggle 24-hour mode, save settings, close/reopen popup, and confirm preference persists.
-- Create scheduled blocks in both formats:
-	- 12-hour mode: 9:00 AM to 5:00 PM
-	- 24-hour mode: 09:00 to 17:00
-- Verify ranking cards show 3 rows with no clipping and dedicated progress line under each row.
-- Verify block-list rows show progress only when a valid limit exists; rows without limit show no progress bar.
-- Keep popup open for 30+ seconds while an active block runs and confirm countdown updates each second.
-- Make a change in another popup tab action (add/remove/reset) and confirm UI updates without manual refresh.
+For questions or feedback, refer to the Chrome Web Store listing or repository issues section.

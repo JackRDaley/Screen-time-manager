@@ -761,6 +761,41 @@ nav label {
     width: 100%;
 }
 
+.billing-troubleshoot {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface1);
+    padding: 8px;
+}
+
+.billing-troubleshoot > summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted);
+    list-style: none;
+}
+
+.billing-troubleshoot > summary::-webkit-details-marker {
+    display: none;
+}
+
+.billing-troubleshoot > summary::after {
+    content: " +";
+    color: var(--cyan);
+}
+
+.billing-troubleshoot[open] > summary::after {
+    content: " -";
+}
+
+.billing-troubleshoot-body {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .billing-actions .settings-saved {
     margin-top: 2px;
 }
