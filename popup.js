@@ -119,13 +119,13 @@ async function renderOnboardingSuggestedSites() {
     container.innerHTML = SUGGESTED_DEFAULTS.map((site) => {
         const isSelected = selectedSuggestedSites.has(site.domain);
         return `
-            <div class="suggested-site">
+            <label class="suggested-site">
                 <div class="suggested-site-info">
                     <div class="suggested-site-domain">${site.domain}</div>
                     <div class="suggested-site-default">${site.limitMinutes} min/day</div>
                 </div>
                 <input type="checkbox" data-domain="${site.domain}" ${isSelected ? 'checked' : ''} />
-            </div>
+            </label>
         `;
     }).join('');
     
