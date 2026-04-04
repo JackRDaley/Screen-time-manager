@@ -63,7 +63,7 @@ async function trackBlockedPageView() {
 function trackBlockedPageAction(action) {
     chrome.runtime.sendMessage({
         action: "trackAnalyticsEvent",
-        eventName: "block_page_action",
+        eventName: "blocked_page_action",
         params: {
             action,
             domain_host: d,
