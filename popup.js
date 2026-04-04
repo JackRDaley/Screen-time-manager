@@ -72,6 +72,13 @@ function trackAnalyticsEvent(eventName, params = {}) {
     }).catch(() => null);
 }
 
+function getOnboardingStepName(step) {
+    if (step === 0) return "welcome";
+    if (step === 1) return "suggested_sites";
+    if (step === 2) return "confirm";
+    return "unknown";
+}
+
 function isRankingInteractionActive() {
     return rankingInteractionDepth > 0;
 }
@@ -164,6 +171,10 @@ async function showOnboardingStep(step) {
     const stepEl = $(`onboardingStep${step}`);
     if (stepEl) {
         stepEl.style.display = "flex";
+        trackAnalyticsEvent("onboarding_step_viewed", {
+            step_name: getOnboardingStepName(step),
+            step_index: step
+        });
         if (step === 0) {
             await renderOnboardingSuggestedSites();
         }
@@ -177,6 +188,7 @@ async function showOnboarding() {
     if (!onboardingMetrics?.setupStarted) {
         await chrome.runtime.sendMessage({ action: "logOnboardingMetric", metric: "setupStarted", value: Date.now() }).catch(() => null);
     }
+    trackAnalyticsEvent("onboarding_started", { entrypoint: "popup_open" });
     const overlay = $("onboardingOverlay");
     if (overlay) {
         overlay.style.display = "flex";
@@ -197,7 +209,7 @@ async function completeOnboardingAndSetupDefaults() {
     // Apply selected sites with their default limits
     for (const site of SUGGESTED_DEFAULTS) {
         if (selectedSuggestedSites.has(site.domain)) {
-            await addDomain(site.domain, site.limitMinutes * 60);
+            await addDomain(site.domain, site.limitMinutes * 60, "onboarding_defaults");
         }
     }
     
@@ -206,6 +218,19 @@ async function completeOnboardingAndSetupDefaults() {
     currentOnboardingState = { step: 2, completed: true, completedAt: now };
     await chrome.storage.local.set({ [ONBOARDING_KEY]: currentOnboardingState });
     await chrome.runtime.sendMessage({ action: "logOnboardingMetric", metric: "setupCompleted", value: now }).catch(() => null);
+
+    const { [ONBOARDING_METRICS_KEY]: onboardingMetrics = {} } = await chrome.storage.local.get([ONBOARDING_METRICS_KEY]);
+    const setupStarted = Number(onboardingMetrics?.setupStarted || 0);
+    const totalDurationMs = setupStarted > 0 ? Math.max(0, now - setupStarted) : 0;
+    trackAnalyticsEvent("onboarding_step_completed", {
+        step_name: getOnboardingStepName(2),
+        step_index: 2
+    });
+    trackAnalyticsEvent("onboarding_completed", {
+        total_steps: 3,
+        total_duration_ms: totalDurationMs,
+        first_tool_configured: selectedSuggestedSites.size > 0 ? 1 : 0
+    });
     
     // Hide onboarding and show dashboard
     await hideOnboarding();
@@ -215,6 +240,9 @@ async function completeOnboardingAndSetupDefaults() {
 
 async function skipOnboarding() {
     const now = Date.now();
+    trackAnalyticsEvent("onboarding_skipped", {
+        step_name: getOnboardingStepName(currentOnboardingState.step)
+    });
     currentOnboardingState = { step: 0, completed: true, completedAt: now };
     await chrome.storage.local.set({ [ONBOARDING_KEY]: currentOnboardingState });
     await chrome.runtime.sendMessage({ action: "logOnboardingMetric", metric: "setupSkipped", value: now }).catch(() => null);
@@ -1059,14 +1087,29 @@ async function stopActiveBlock(domain) {
     const { activeBlocks = [] } = await chrome.storage.local.get(["activeBlocks"]);
     const next = (activeBlocks || []).filter((s) => s.domain !== domain);
     await chrome.storage.local.set({ activeBlocks: next });
+    if (activeBlocks.length !== next.length) {
+        trackAnalyticsEvent("schedule_block_deactivated", {
+            domain_host: domain,
+            deactivation_source: "popup_stop"
+        });
+    }
 }
 
 async function removeScheduledBlock(id) {
     const { scheduledBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks"]);
+    const removed = (scheduledBlocks || []).find((b) => b.id === id) || null;
     const next = scheduledBlocks.filter((b) => b.id !== id);
     await chrome.storage.local.set({ scheduledBlocks: next });
     chrome.alarms.clear(`startBlock_${id}`);
     chrome.alarms.clear(`endBlock_${id}`);
+
+    if (removed) {
+        trackAnalyticsEvent("schedule_deleted", {
+            schedule_id: id,
+            domain_host: removed.domain,
+            delete_source: "popup_remove"
+        });
+    }
 
     if (editingScheduledBlockId === id) {
         resetScheduledForm();
@@ -1198,7 +1241,7 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
                     return;
                 }
                 rankingInteractionDepth = 0;
-                await addDomain(r.domain, currentSettings.defaultLimitMinutes * 60);
+                await addDomain(r.domain, currentSettings.defaultLimitMinutes * 60, "ranking_add_limit");
                 await loadAll();
             });
             div.querySelector(".row-right").appendChild(addBtn);
@@ -1291,6 +1334,11 @@ async function removeDomain(domain) {
         activeBlocks: nextActive,
         alertsSent: nextAlerts
     });
+
+    trackAnalyticsEvent("domain_removed", {
+        domain_host: domain,
+        remove_reason: "user_remove"
+    });
 }
 
 async function resetDomainStats(domain) {
@@ -1313,10 +1361,12 @@ async function resetDomainStats(domain) {
     }
 }
 
-async function addDomain(domain, limitSeconds) {
+async function addDomain(domain, limitSeconds, entrypoint = "manual_form") {
     const { blockedDomains = {}, alertsSent = {}, statsToday = {}, allStatsToday = {} }
         = await chrome.storage.local.get(["blockedDomains", "alertsSent", "statsToday", "allStatsToday"]);
     const next = { ...blockedDomains };
+    const hadDomain = Boolean(blockedDomains[domain]);
+    const previousLimitSeconds = Number(blockedDomains?.[domain]?.limitSeconds || 0);
     next[domain] = { limitSeconds };
 
     const passiveStats = allStatsToday?.[domain] || { timeMs: 0, visits: 0 };
@@ -1332,6 +1382,21 @@ async function addDomain(domain, limitSeconds) {
     delete nextAlerts[domain];
     
     await chrome.storage.local.set({ blockedDomains: next, statsToday: nextStats, alertsSent: nextAlerts });
+
+    if (hadDomain) {
+        trackAnalyticsEvent("domain_limit_changed", {
+            domain_host: domain,
+            old_limit_ms: previousLimitSeconds * 1000,
+            new_limit_ms: limitSeconds * 1000,
+            change_source: entrypoint
+        });
+    } else {
+        trackAnalyticsEvent("domain_added", {
+            domain_host: domain,
+            limit_ms: limitSeconds * 1000,
+            entrypoint
+        });
+    }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -1349,11 +1414,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Wire up onboarding button handlers and show overlay if onboarding is not yet completed
     if (!currentOnboardingState.completed) {
         $("onboardingNextBtn0")?.addEventListener("click", async () => {
+            trackAnalyticsEvent("onboarding_step_completed", {
+                step_name: getOnboardingStepName(0),
+                step_index: 0
+            });
             await setOnboardingStep(1);
             await showOnboardingStep(1);
         });
 
         $("onboardingNextBtn1")?.addEventListener("click", async () => {
+            trackAnalyticsEvent("onboarding_step_completed", {
+                step_name: getOnboardingStepName(1),
+                step_index: 1
+            });
             await setOnboardingStep(2);
             await showOnboardingStep(2);
         });
@@ -1437,10 +1510,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     $("settingsForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
+        const previousSettings = { ...currentSettings };
         await saveSettingsToStorage({
             defaultLimitMinutes: Number(defaultLimitEl?.value),
             use24HourTime: Boolean(use24HourEl?.checked)
         });
+
+        if (previousSettings.defaultLimitMinutes !== currentSettings.defaultLimitMinutes) {
+            trackAnalyticsEvent("setting_toggled", {
+                setting_name: "default_limit_minutes",
+                new_value: currentSettings.defaultLimitMinutes,
+                surface: "settings"
+            });
+        }
+        if (previousSettings.use24HourTime !== currentSettings.use24HourTime) {
+            trackAnalyticsEvent("setting_toggled", {
+                setting_name: "use_24_hour_time",
+                new_value: currentSettings.use24HourTime ? 1 : 0,
+                surface: "settings"
+            });
+        }
 
         if (defaultLimitEl) defaultLimitEl.value = String(currentSettings.defaultLimitMinutes);
         if (use24HourEl) use24HourEl.checked = currentSettings.use24HourTime;
@@ -1476,7 +1565,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         $("domainInput").value = "";
         $("limitInput").value = "";
 
-        await addDomain(domain, limitSeconds);
+        await addDomain(domain, limitSeconds, "manual_form");
         await loadAll();
     });
 

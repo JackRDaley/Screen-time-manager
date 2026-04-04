@@ -29,6 +29,9 @@ const ANALYTICS_EVENT_URL = "https://screen-time-manager.jackster0627.workers.de
 const ANALYTICS_CLIENT_ID_KEY = "analyticsClientId";
 const ANALYTICS_INSTALL_TS_KEY = "analyticsInstallTimestampMs";
 const ANALYTICS_LAST_ACTIVE_DAY_KEY = "analyticsLastActiveDay";
+const ANALYTICS_LAST_ACTIVE_WEEK_KEY = "analyticsLastActiveWeek";
+const ANALYTICS_RETENTION_MILESTONES_KEY = "analyticsRetentionMilestones";
+const RETENTION_MILESTONE_DAYS = Object.freeze([1, 3, 7, 14, 30]);
 const PREMIUM_SYNC_ALARM = "premiumSync";
 const PREMIUM_SYNC_INTERVAL_MINUTES = 60;
 const FREE_PLAN_LIMITS = Object.freeze({
@@ -64,6 +67,47 @@ function getDayKey(d = new Date()) {
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
+}
+
+function getIsoWeekKey(d = new Date()) {
+    const date = new Date(d);
+    date.setHours(0, 0, 0, 0);
+
+    const day = date.getDay() || 7;
+    date.setDate(date.getDate() + 4 - day);
+
+    const yearStart = new Date(date.getFullYear(), 0, 1);
+    const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+
+    return `${date.getFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
+function parseDayKey(dayKey) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dayKey || ""))) {
+        return null;
+    }
+
+    const [year, month, day] = String(dayKey).split("-").map(Number);
+    const parsed = new Date(year, month - 1, day);
+
+    if (Number.isNaN(parsed.getTime())) {
+        return null;
+    }
+
+    parsed.setHours(0, 0, 0, 0);
+    return parsed;
+}
+
+function calculateInactiveGapDays(previousDayKey, currentDayKey) {
+    const previousDate = parseDayKey(previousDayKey);
+    const currentDate = parseDayKey(currentDayKey);
+
+    if (!previousDate || !currentDate) {
+        return 0;
+    }
+
+    const dayDifference = Math.floor((currentDate.getTime() - previousDate.getTime()) / 86400000);
+    return Math.max(0, dayDifference - 1);
 }
 
 function sanitizeAnalyticsText(value, fallback = "unknown", maxLength = 80) {
@@ -175,7 +219,9 @@ async function trackRetentionMetrics(trigger, installReason = "") {
     const installTimestampMs = await ensureInstallTimestampMs();
     const now = Date.now();
     const daysSinceInstall = Math.max(0, Math.floor((now - installTimestampMs) / (24 * 60 * 60 * 1000)));
-    const todayKey = getDayKey(new Date(now));
+    const nowDate = new Date(now);
+    const todayKey = getDayKey(nowDate);
+    const currentWeekKey = getIsoWeekKey(nowDate);
 
     await sendAnalyticsEventSafe("extension_session_start", {
         trigger,
@@ -189,15 +235,80 @@ async function trackRetentionMetrics(trigger, installReason = "") {
         });
     }
 
-    const { [ANALYTICS_LAST_ACTIVE_DAY_KEY]: lastActiveDay = "" } =
-        await chrome.storage.local.get([ANALYTICS_LAST_ACTIVE_DAY_KEY]);
+    const {
+        [ANALYTICS_LAST_ACTIVE_DAY_KEY]: lastActiveDay = "",
+        [ANALYTICS_LAST_ACTIVE_WEEK_KEY]: lastActiveWeek = "",
+        [ANALYTICS_RETENTION_MILESTONES_KEY]: milestoneState = {}
+    } = await chrome.storage.local.get([
+        ANALYTICS_LAST_ACTIVE_DAY_KEY,
+        ANALYTICS_LAST_ACTIVE_WEEK_KEY,
+        ANALYTICS_RETENTION_MILESTONES_KEY
+    ]);
 
-    if (lastActiveDay !== todayKey) {
+    const isFirstActivityToday = lastActiveDay !== todayKey;
+    const isFirstActivityThisWeek = lastActiveWeek !== currentWeekKey;
+    const nextStorageState = {};
+
+    if (isFirstActivityToday) {
         await sendAnalyticsEventSafe("retention_day_active", {
             trigger,
             days_since_install: daysSinceInstall
         });
-        await chrome.storage.local.set({ [ANALYTICS_LAST_ACTIVE_DAY_KEY]: todayKey });
+
+        await sendAnalyticsEventSafe("retention_activity_day_marked", {
+            trigger,
+            days_since_install: daysSinceInstall,
+            activity_day_key: todayKey,
+            activity_week_key: currentWeekKey,
+            previous_activity_day_key: lastActiveDay || "none",
+            is_first_activity_today: true,
+            is_first_activity_this_week: isFirstActivityThisWeek
+        });
+
+        const inactiveGapDays = calculateInactiveGapDays(lastActiveDay, todayKey);
+        if (inactiveGapDays >= 2) {
+            await sendAnalyticsEventSafe("retention_inactive_gap_resolved", {
+                trigger,
+                days_since_install: daysSinceInstall,
+                activity_day_key: todayKey,
+                activity_week_key: currentWeekKey,
+                previous_activity_day_key: lastActiveDay || "none",
+                inactive_gap_days: inactiveGapDays
+            });
+        }
+
+        nextStorageState[ANALYTICS_LAST_ACTIVE_DAY_KEY] = todayKey;
+    }
+
+    if (isFirstActivityThisWeek) {
+        await sendAnalyticsEventSafe("retention_weekly_active_marked", {
+            trigger,
+            days_since_install: daysSinceInstall,
+            activity_day_key: todayKey,
+            activity_week_key: currentWeekKey,
+            is_first_activity_this_week: true
+        });
+
+        nextStorageState[ANALYTICS_LAST_ACTIVE_WEEK_KEY] = currentWeekKey;
+    }
+
+    if (RETENTION_MILESTONE_DAYS.includes(daysSinceInstall) && !milestoneState[String(daysSinceInstall)]) {
+        await sendAnalyticsEventSafe("retention_milestone_reached", {
+            trigger,
+            days_since_install: daysSinceInstall,
+            milestone_day: daysSinceInstall,
+            activity_day_key: todayKey,
+            activity_week_key: currentWeekKey
+        });
+
+        nextStorageState[ANALYTICS_RETENTION_MILESTONES_KEY] = {
+            ...milestoneState,
+            [String(daysSinceInstall)]: now
+        };
+    }
+
+    if (Object.keys(nextStorageState).length > 0) {
+        await chrome.storage.local.set(nextStorageState);
     }
 }
 
@@ -293,6 +404,12 @@ async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false } 
 
                 // only redirect if the active tracked tab is STILL on this domain
                 if (t?.id != null && tabDomain === domain) {
+                    await sendAnalyticsEventSafe("limit_block_enforced", {
+                        domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+                        used_ms: cur.timeMs,
+                        limit_ms: limitMs,
+                        block_source: "limit"
+                    });
                     await chrome.tabs.update(t.id, { url: blockedUrl(domain) }).catch(() => {});
                 }
             }
@@ -472,6 +589,12 @@ async function checkAndSendAlerts(domain, blockedDomains, statsToday) {
             message: `You have ~${formatTimeSec(remainingSec)} left today.`,
             priority: 2
         });
+        await sendAnalyticsEventSafe("threshold_reached", {
+            domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+            threshold_percent: 90,
+            used_ms: usedMs,
+            limit_ms: limitMs
+        });
         sent["90"] = true;
     } else if (pct75 && !sent["75"]) {
         chrome.notifications.create({
@@ -480,6 +603,12 @@ async function checkAndSendAlerts(domain, blockedDomains, statsToday) {
             title: `75% of limit used: ${domain}`,
             message: `You have ~${formatTimeSec(remainingSec)} left today.`,
             priority: 1
+        });
+        await sendAnalyticsEventSafe("threshold_reached", {
+            domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+            threshold_percent: 75,
+            used_ms: usedMs,
+            limit_ms: limitMs
         });
         sent["75"] = true;
     }
@@ -504,6 +633,12 @@ async function enforceIfNeeded(tabId) {
 
     const usedMs = statsToday?.[domain]?.timeMs || 0;
     if (usedMs >= limitMs) {
+        await sendAnalyticsEventSafe("limit_block_enforced", {
+            domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+            used_ms: usedMs,
+            limit_ms: limitMs,
+            block_source: "limit"
+        });
         await chrome.tabs.update(tabId, { url: blockedUrl(domain) }).catch(() => {});
     }
 }
@@ -892,20 +1027,20 @@ async function refreshScheduledBlockRuntime(id) {
     const block = scheduled.map(normalizeScheduledBlock).find((entry) => entry.id === id);
 
     if (!block) {
-        await deactivateScheduledBlock(id);
+        await deactivateScheduledBlock(id, "reconcile_or_refresh");
         return false;
     }
 
     if (isScheduleActiveNow(block)) {
-        await activateScheduledBlock(id);
+        await activateScheduledBlock(id, "reconcile_or_refresh");
     } else {
-        await deactivateScheduledBlock(id);
+        await deactivateScheduledBlock(id, "reconcile_or_refresh");
     }
 
     return true;
 }
 
-async function activateScheduledBlock(id) {
+async function activateScheduledBlock(id, activationSource = "runtime") {
     const { [KEYS.scheduledBlocks]: scheduled = [], [KEYS.activeBlocks]: activeBlocks = [] } =
         await chrome.storage.local.get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
     const block = scheduled.map(normalizeScheduledBlock).find((entry) => entry.id === id);
@@ -935,6 +1070,11 @@ async function activateScheduledBlock(id) {
     await chrome.storage.local.set({ [KEYS.activeBlocks]: nextActiveBlocks });
     await updateBlockRules();
     await redirectOpenTabsForDomains([block.domain]);
+    await sendAnalyticsEventSafe("schedule_block_activated", {
+        schedule_id: id,
+        domain_host: sanitizeAnalyticsText(block.domain, "unknown", 100),
+        activation_source: activationSource
+    });
 
     const nextStart = getNextScheduledStartTime(block, Date.now() + 1000);
     const nextEnd = getNextScheduledEndTime(block, Date.now());
@@ -946,7 +1086,7 @@ async function activateScheduledBlock(id) {
     }
 }
 
-async function deactivateScheduledBlock(id) {
+async function deactivateScheduledBlock(id, deactivationSource = "runtime") {
     const { [KEYS.scheduledBlocks]: scheduled = [], [KEYS.activeBlocks]: activeBlocks = [] } =
         await chrome.storage.local.get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
     const block = scheduled.map(normalizeScheduledBlock).find((entry) => entry.id === id);
@@ -954,6 +1094,14 @@ async function deactivateScheduledBlock(id) {
 
     await chrome.storage.local.set({ [KEYS.activeBlocks]: nextActiveBlocks });
     await updateBlockRules();
+
+    if (activeBlocks.length !== nextActiveBlocks.length) {
+        await sendAnalyticsEventSafe("schedule_block_deactivated", {
+            schedule_id: id,
+            domain_host: sanitizeAnalyticsText(block?.domain || "unknown", "unknown", 100),
+            deactivation_source: deactivationSource
+        });
+    }
 
     if (block) {
         const nextStart = getNextScheduledStartTime(block, Date.now() + 1000);
@@ -1043,10 +1191,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await refreshStoredPremiumStatus("alarm-sync").catch(() => null);
     } else if (alarm.name.startsWith('startBlock_')) {
         const id = parseInt(alarm.name.split('_')[1], 10);
-        await activateScheduledBlock(id);
+        await activateScheduledBlock(id, "alarm_start");
     } else if (alarm.name.startsWith('endBlock_')) {
         const id = parseInt(alarm.name.split('_')[1], 10);
-        await deactivateScheduledBlock(id);
+        await deactivateScheduledBlock(id, "alarm_end");
     } else if (alarm.name.startsWith('snoozeEnd_')) {
         const domain = alarm.name.slice('snoozeEnd_'.length);
         const { [KEYS.snoozedDomains]: snoozedDomains = {} } =
@@ -1054,6 +1202,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         delete snoozedDomains[domain];
         await chrome.storage.local.set({ [KEYS.snoozedDomains]: snoozedDomains });
         await updateBlockRules();
+        await sendAnalyticsEventSafe("snooze_ended", {
+            domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+            resume_reason: "alarm_expired"
+        });
     }
 });
 
@@ -1154,8 +1306,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
 
             if (isScheduleActiveNow(nextBlock)) {
-                await activateScheduledBlock(id);
+                await activateScheduledBlock(id, "created_active_now");
             }
+
+            await sendAnalyticsEventSafe("schedule_created", {
+                schedule_id: id,
+                domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+                window_start_min: startTime,
+                window_end_min: endTime,
+                days_mask: normalizeScheduleDays(daysOfWeek).join(",")
+            });
 
             sendResponse({ success: true });
         });
@@ -1180,8 +1340,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 return;
             }
 
+            const previousBlock = scheduled[blockIndex];
             scheduled[blockIndex] = normalizeScheduledBlock({
-                ...scheduled[blockIndex],
+                ...previousBlock,
                 id,
                 domain,
                 startTime,
@@ -1191,6 +1352,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
             await refreshScheduledBlockRuntime(id);
+
+            let changedFieldsCount = 0;
+            if (previousBlock.domain !== domain) changedFieldsCount += 1;
+            if (previousBlock.startTime !== startTime) changedFieldsCount += 1;
+            if (previousBlock.endTime !== endTime) changedFieldsCount += 1;
+            if (normalizeScheduleDays(previousBlock.daysOfWeek).join(",") !== normalizeScheduleDays(daysOfWeek).join(",")) {
+                changedFieldsCount += 1;
+            }
+
+            await sendAnalyticsEventSafe("schedule_updated", {
+                schedule_id: id,
+                domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+                changed_fields_count: changedFieldsCount
+            });
 
             sendResponse({ success: true });
         });
@@ -1207,6 +1382,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             await chrome.storage.local.set({ [KEYS.snoozedDomains]: snoozedDomains });
             await updateBlockRules();
             chrome.alarms.create(`snoozeEnd_${domain}`, { when: expiresAt });
+            await sendAnalyticsEventSafe("snooze_started", {
+                domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+                snooze_minutes: minutes,
+                block_source: "scheduled"
+            });
             sendResponse({ success: true, expiresAt });
         })();
         return true;
@@ -1232,6 +1412,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const next = activeBlocks.filter((b) => b.domain !== domain);
             await chrome.storage.local.set({ [KEYS.activeBlocks]: next });
             await updateBlockRules();
+            if (activeBlocks.length !== next.length) {
+                await sendAnalyticsEventSafe("schedule_block_deactivated", {
+                    domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+                    deactivation_source: "manual_end"
+                });
+            }
             sendResponse({ success: true });
         })();
         return true;

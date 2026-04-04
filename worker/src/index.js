@@ -439,6 +439,23 @@ function sanitizeAnalyticsParams(value) {
     return sanitized;
 }
 
+function shouldLogAnalytics(env) {
+    const value = String(env.ANALYTICS_DEBUG_LOGS || "").trim().toLowerCase();
+    return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function logAnalyticsDebug(env, message, payload) {
+    if (!shouldLogAnalytics(env)) {
+        return;
+    }
+
+    try {
+        console.log(message, JSON.stringify(payload));
+    } catch {
+        console.log(message);
+    }
+}
+
 function buildGa4CollectUrl(env) {
     const measurementId = String(env.GA4_MEASUREMENT_ID || "").trim();
     const apiSecret = String(env.GA4_API_SECRET || "").trim();
@@ -921,14 +938,23 @@ export default {
             return json({ error: "Missing clientId" }, 400);
         }
 
+        const blockEventPayload = {
+            eventName: "blocked_page_view",
+            clientId,
+            params: {
+                block_source: sanitizeAnalyticsText(body?.source, "unknown", 40),
+                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
+                redirect_event_id: sanitizeAnalyticsText(body?.eventId, "missing", 64)
+            }
+        };
+        logAnalyticsDebug(env, "[analytics/block-event] forwarding", blockEventPayload);
+
         const result = await sendGa4Event(env, {
             clientId,
             eventName: "blocked_page_view",
             params: {
                 engagement_time_msec: 1,
-                block_source: sanitizeAnalyticsText(body?.source, "unknown", 40),
-                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
-                redirect_event_id: sanitizeAnalyticsText(body?.eventId, "missing", 64)
+                ...blockEventPayload.params
             }
         }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }));
 
@@ -953,14 +979,21 @@ export default {
         }
 
         const eventName = sanitizeAnalyticsEventName(body?.eventName, "extension_event");
+        const params = {
+            engagement_time_msec: 1,
+            extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
+            ...sanitizeAnalyticsParams(body?.params)
+        };
+        logAnalyticsDebug(env, "[analytics/event] forwarding", {
+            eventName,
+            clientId,
+            params
+        });
+
         const result = await sendGa4Event(env, {
             clientId,
             eventName,
-            params: {
-                engagement_time_msec: 1,
-                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
-                ...sanitizeAnalyticsParams(body?.params)
-            }
+            params
         }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : "Unknown error" }));
 
         if (!result.ok) {
