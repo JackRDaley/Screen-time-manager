@@ -60,6 +60,19 @@ async function trackBlockedPageView() {
     }
 }
 
+function trackBlockedPageAction(action) {
+    chrome.runtime.sendMessage({
+        action: "trackAnalyticsEvent",
+        eventName: "block_page_action",
+        params: {
+            action,
+            domain_host: d,
+            block_source: source,
+            redirect_event_id: eventId || "none"
+        }
+    }).catch(() => null);
+}
+
 trackBlockedPageView();
 
 if (source === "scheduled") {
@@ -86,6 +99,7 @@ if (source === "scheduled") {
 
 // Time-limit: reset stats and go to site
 document.getElementById("goBackBtn").addEventListener("click", async () => {
+    trackBlockedPageAction("go_back_reset");
     const { statsToday = {}, alertsSent = {} } = await chrome.storage.local.get(["statsToday", "alertsSent"]);
     const nextStats = { ...statsToday };
     delete nextStats[d];
@@ -97,6 +111,7 @@ document.getElementById("goBackBtn").addEventListener("click", async () => {
 
 // Time-limit: close tab
 document.getElementById("closeTabBtn").addEventListener("click", async () => {
+    trackBlockedPageAction("close_tab");
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id != null) chrome.tabs.remove(tab.id);
 });
@@ -104,6 +119,7 @@ document.getElementById("closeTabBtn").addEventListener("click", async () => {
 // Scheduled: snooze 5 min then redirect
 document.getElementById("snoozeBtn").addEventListener("click", async () => {
     try {
+        trackBlockedPageAction("snooze_5m");
         await chrome.runtime.sendMessage({ action: "snoozeBlock", domain: d, minutes: 5 });
         window.location.href = `https://${d}`;
     } catch (err) {
@@ -114,6 +130,7 @@ document.getElementById("snoozeBtn").addEventListener("click", async () => {
 // Scheduled: end session early
 document.getElementById("endSessionBtn").addEventListener("click", async () => {
     try {
+        trackBlockedPageAction("end_session");
         await chrome.runtime.sendMessage({ action: "endScheduledBlock", domain: d });
         window.location.href = `https://${d}`;
     } catch (err) {
