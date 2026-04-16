@@ -103,13 +103,13 @@ function getActiveRenderSignature(activeBlocks = [], blockedDomains = {}) {
 function closeRowMenus() {
     if (openRowMenuKey == null) return;
     openRowMenuKey = null;
-    loadAll();
+    void loadAll().catch(() => null);
 }
 
 function toggleRowMenu(type, id) {
     const nextKey = getRowMenuKey(type, id);
     openRowMenuKey = openRowMenuKey === nextKey ? null : nextKey;
-    loadAll();
+    void loadAll().catch(() => null);
 }
 
 document.addEventListener("click", (event) => {
