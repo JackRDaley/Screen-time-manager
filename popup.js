@@ -31,13 +31,13 @@ const FREE_PLAN_LIMITS = Object.freeze({
     maxScheduledBlocks: 2
 });
 const SCHEDULE_DAY_OPTIONS = Object.freeze([
-    { value: 0, label: "Sun" },
-    { value: 1, label: "Mon" },
-    { value: 2, label: "Tue" },
-    { value: 3, label: "Wed" },
-    { value: 4, label: "Thu" },
-    { value: 5, label: "Fri" },
-    { value: 6, label: "Sat" }
+    { value: 0, label: "Sun", short: "S" },
+    { value: 1, label: "Mon", short: "M" },
+    { value: 2, label: "Tue", short: "T" },
+    { value: 3, label: "Wed", short: "W" },
+    { value: 4, label: "Thu", short: "T" },
+    { value: 5, label: "Fri", short: "F" },
+    { value: 6, label: "Sat", short: "S" }
 ]);
 const ALL_SCHEDULE_DAYS = Object.freeze(SCHEDULE_DAY_OPTIONS.map((day) => day.value));
 
@@ -57,6 +57,8 @@ let selectedScheduleDays = [];
 let editingScheduledBlockId = null;
 let currentOnboardingState = { step: 0, completed: false, completedAt: null };
 let selectedSuggestedSites = new Set(SUGGESTED_DEFAULTS.slice(0, 3).map(s => s.domain));
+let openRowMenuKey = null;
+let lastActiveRenderSignature = null;
 
 const EMPTY_STATE_MESSAGES = Object.freeze({
     active: "No active sessions. Scheduled blocks and time-limited sites will appear here when they start.",
@@ -82,6 +84,45 @@ function getOnboardingStepName(step) {
 function isRankingInteractionActive() {
     return rankingInteractionDepth > 0;
 }
+
+function getRowMenuKey(type, id) {
+    return `${type}:${id}`;
+}
+
+function getActiveRenderSignature(activeBlocks = [], blockedDomains = {}) {
+    const activePart = (Array.isArray(activeBlocks) ? activeBlocks : [])
+        .map((block) => `${block?.id || ""}:${block?.domain || ""}:${block?.endTime || ""}`)
+        .join("|");
+    const blockedPart = Object.entries(blockedDomains || {})
+        .map(([domain, cfg]) => `${domain}:${cfg?.enabled === false ? 0 : 1}:${getLimitSecondsFromConfig(cfg) || 0}`)
+        .sort()
+        .join("|");
+    return `${activePart}::${blockedPart}`;
+}
+
+function closeRowMenus() {
+    if (openRowMenuKey == null) return;
+    openRowMenuKey = null;
+    void loadAll().catch(() => null);
+}
+
+function toggleRowMenu(type, id) {
+    const nextKey = getRowMenuKey(type, id);
+    openRowMenuKey = openRowMenuKey === nextKey ? null : nextKey;
+    void loadAll().catch(() => null);
+}
+
+document.addEventListener("click", (event) => {
+    if (!event.target.closest(".row-action-menu") && !event.target.closest("[data-action='menu']")) {
+        closeRowMenus();
+    }
+});
+
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        closeRowMenus();
+    }
+});
 
 function beginRankingInteraction() {
     rankingInteractionDepth += 1;
@@ -114,8 +155,44 @@ function wireRankingInteractionGuards() {
 function startActiveCountdownTicker() {
     if (activeCountdownTimer != null) return;
     activeCountdownTimer = setInterval(() => {
-        renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+        refreshActiveCountdowns(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
     }, 1000);
+}
+
+function refreshActiveCountdowns(activeBlocks = latestActiveBlocks, blockedDomains = latestBlockedDomains, statsToday = latestStatsToday) {
+    const list = $("activeList");
+    if (!list) return;
+
+    const active = Array.isArray(activeBlocks) ? activeBlocks : [];
+    const count = $("activeCount");
+    const statusPill = document.querySelector(".status-pill");
+
+    const timeLimitedActive = Object.entries(blockedDomains || {}).filter(([domain, cfg]) => {
+        if (!isLimitEnabled(cfg)) return false;
+        const limitSec = getLimitSecondsFromConfig(cfg);
+        if (!Number.isFinite(limitSec) || limitSec <= 0) return false;
+        const usedMs = statsToday?.[domain]?.timeMs || 0;
+        return usedMs >= limitSec * 1000;
+    }).length;
+
+    const totalActive = active.length + timeLimitedActive;
+    if (count) count.textContent = String(totalActive);
+    statusPill?.classList.toggle("is-inactive", totalActive === 0);
+
+    if (active.length === 0) return;
+
+    const now = Date.now();
+    list.querySelectorAll(".timer[data-domain]").forEach((timerEl) => {
+        const domain = timerEl.getAttribute("data-domain");
+        const block = active.find((entry) => entry.domain === domain);
+        if (!block || !block.endTime) return;
+
+        const remainingSec = Math.max(0, Math.floor((block.endTime - now) / 1000));
+        const nextText = remainingSec > 0 ? `${formatTimeSec(remainingSec)} left` : "";
+        if (timerEl.textContent !== nextText) {
+            timerEl.textContent = nextText;
+        }
+    });
 }
 
 function stopActiveCountdownTicker() {
@@ -259,7 +336,29 @@ function startPopupRefreshTicker() {
         popupRefreshInFlight = true;
         try {
             await chrome.runtime.sendMessage({ action: "flushActiveTimeNow" }).catch(() => null);
-            await loadAll();
+            const {
+                activeBlocks = [],
+                blockedDomains = {},
+                statsToday = {},
+                allStatsToday = {},
+                statsHistory = {}
+            } = await chrome.storage.local.get(["activeBlocks", "blockedDomains", "statsToday", "allStatsToday", "statsHistory"]);
+
+            latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
+            latestBlockedDomains = blockedDomains || {};
+            latestStatsToday = statsToday || {};
+
+            const range = $("statRange")?.value || "Today";
+            const rangeStats = getAggregatedStats(range, allStatsToday || {}, statsHistory || {});
+
+            updateStatStrip(rangeStats, latestBlockedDomains);
+
+            const nextSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
+            if (nextSignature !== lastActiveRenderSignature) {
+                renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+            } else {
+                refreshActiveCountdowns(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+            }
         } catch {
             // Ignore transient refresh errors in popup ticker.
         } finally {
@@ -721,7 +820,7 @@ function updateScheduledFormMode() {
             : "Create a new recurring block.";
     }
     if (submitBtn) {
-        submitBtn.textContent = isEditing ? "Save Changes" : "Schedule";
+        submitBtn.textContent = isEditing ? "Save Changes" : "Deploy Schedule";
     }
     if (cancelBtn) {
         cancelBtn.hidden = !isEditing;
@@ -772,7 +871,7 @@ function initializeScheduleDayPicker() {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "day-bubble";
-        button.textContent = day.label;
+        button.textContent = day.short || day.label;
         button.setAttribute("data-day", String(day.value));
         button.setAttribute("aria-label", day.label);
         button.addEventListener("click", () => toggleScheduleDay(day.value));
@@ -834,6 +933,10 @@ function getLimitSecondsFromConfig(cfg) {
     return null;
 }
 
+function isLimitEnabled(cfg) {
+    return cfg?.enabled !== false;
+}
+
 function applyScheduleInputMode() {
     const use24 = currentSettings.use24HourTime;
     const startEl = $("startTime");
@@ -875,10 +978,36 @@ function updateStatStrip(allStatsToday, blockedDomains) {
     const domains = Object.keys(allStatsToday || {});
     const totalMs = domains.reduce((s, d) => s + (allStatsToday[d]?.timeMs || 0), 0);
     const totalVisits = domains.reduce((s, d) => s + (allStatsToday[d]?.visits || 0), 0);
-    const blockedCount = Object.keys(blockedDomains || {}).length;
+    const blockedCount = Object.values(blockedDomains || {}).filter((cfg) => isLimitEnabled(cfg)).length;
     if ($("statScreenTime")) $("statScreenTime").textContent = formatTimeSec(Math.round(totalMs / 1000));
     if ($("statVisits"))     $("statVisits").textContent     = String(totalVisits);
     if ($("statBlocked"))    $("statBlocked").textContent    = String(blockedCount);
+}
+
+function updateStreakChip(statsHistory = {}, allStatsToday = {}) {
+    const streakHeaderValue = $("streakHeaderValue");
+
+    const hasUsage = (dayStats = {}) => Object.values(dayStats || {}).some((entry) => {
+        const timeMs = Number(entry?.timeMs || 0);
+        const visits = Number(entry?.visits || 0);
+        return timeMs > 0 || visits > 0;
+    });
+
+    let streakDays = 0;
+    const today = new Date();
+
+    for (let offset = 0; offset <= 31; offset += 1) {
+        const checkDate = new Date(today);
+        checkDate.setDate(today.getDate() - offset);
+        const dayKey = getDayKey(checkDate);
+        const dayStats = offset === 0 ? allStatsToday : statsHistory?.[dayKey];
+
+        if (!hasUsage(dayStats)) break;
+        streakDays += 1;
+    }
+
+    const displayText = streakDays <= 0 ? "—" : String(streakDays);
+    if (streakHeaderValue) streakHeaderValue.textContent = displayText;
 }
 
 async function enforceFreeTierDomainCap(blockedDomains = {}, statsToday = {}) {
@@ -1007,11 +1136,13 @@ async function loadAll() {
             latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
             latestBlockedDomains = effectiveBlockedDomains || {};
             latestStatsToday = effectiveStatsToday || {};
+            lastActiveRenderSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
 
             const range = $("statRange")?.value || "Today";
             const rangeStats = getAggregatedStats(range, allStatsToday, statsHistory);
 
             updateStatStrip(rangeStats, effectiveBlockedDomains);
+            updateStreakChip(statsHistory, allStatsToday);
             renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
             renderScheduled(effectiveScheduledBlocks, latestActiveBlocks);
             if (!isRankingInteractionActive()) {
@@ -1020,6 +1151,7 @@ async function loadAll() {
             }
             renderBlockList(effectiveBlockedDomains, effectiveStatsToday);
             applyPaywallUI(effectiveBlockedDomains, effectiveScheduledBlocks);
+            await chrome.runtime.sendMessage({ action: "refreshActionBadge" }).catch(() => null);
         } while (loadAllPending);
     } finally {
         loadAllInFlight = false;
@@ -1032,9 +1164,11 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
     const statusPill = document.querySelector(".status-pill");
 
     const active = Array.isArray(activeBlocks) ? activeBlocks : [];
+    lastActiveRenderSignature = getActiveRenderSignature(active, blockedDomains);
 
     // Count time-limited domains that have no remaining time today
     const timeLimitedActive = Object.entries(blockedDomains).filter(([domain, cfg]) => {
+        if (!isLimitEnabled(cfg)) return false;
         const limitSec = getLimitSecondsFromConfig(cfg);
         if (!Number.isFinite(limitSec) || limitSec <= 0) return false;
         const usedMs = statsToday?.[domain]?.timeMs || 0;
@@ -1063,15 +1197,16 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
         const remainingSec = Math.max(0, Math.floor((s.endTime - now) / 1000));
 
         const div = document.createElement("div");
-        div.className = "row";
+        div.className = "row row-accent-cyan";
+        div.setAttribute("data-domain", s.domain);
         div.innerHTML = `
         <div class="row-main">
             <div class="row-title">${s.domain}</div>
             <div class="row-meta">Ends: ${endsText}</div>
         </div>
         <div class="row-right">
-            ${remainingSec > 0 ? `<span class="timer">${formatTimeSec(remainingSec)} left</span>` : ""}
-            <button class="btn-ghost" data-domain="${s.domain}">Stop</button>
+            ${remainingSec > 0 ? `<span class="timer" data-domain="${s.domain}">${formatTimeSec(remainingSec)} left</span>` : ""}
+            <button class="tag action-chip action-chip-primary" data-domain="${s.domain}">Stop</button>
         </div>
         `;
         div.querySelector("button").addEventListener("click", async (e) => {
@@ -1141,29 +1276,65 @@ function renderScheduled(scheduledBlocks, activeBlocks = []) {
 
     scheduled.forEach((s) => {
         const isActive = active.some((b) => b.id === s.id);
+        const isEnabled = s.enabled !== false;
         const daySummary = formatScheduleDays(s.daysOfWeek);
+        const rowMenuKey = getRowMenuKey("scheduled", s.id);
+        const isMenuOpen = openRowMenuKey === rowMenuKey;
         const div = document.createElement("div");
-        div.className = "row";
+        div.className = `row ${!isEnabled ? "row-accent-muted is-disabled" : (isActive ? "row-accent-purple" : "row-accent-cyan")}`;
         div.innerHTML = `
         <div class="row-main">
             <div class="row-title">${s.domain}</div>
-            <div class="row-meta schedule-row-meta">${daySummary} · ${formatTimeForDisplay(s.startTime)} - ${formatTimeForDisplay(s.endTime)}</div>
+            <div class="row-metrics schedule-row-metrics">
+                <span class="tag metric-chip metric-chip-glass">${daySummary}</span>
+                <span class="tag metric-chip metric-chip-glass">${formatTimeForDisplay(s.startTime)} - ${formatTimeForDisplay(s.endTime)}</span>
+            </div>
         </div>
         <div class="row-right">
-            ${isActive ? '<span class="tag tag-red">Live</span>' : ''}
-            <button class="btn-ghost" data-action="edit">Edit</button>
-            <button class="btn-danger" data-action="remove" data-domain="${s.domain}" ${isActive ? "disabled title=\"Stop the active session before removing\"" : ""}>Cancel</button>
+            <label class="switch" title="Enable or pause this scheduled block">
+                <input class="switch-input" type="checkbox" data-action="toggle-enabled" ${isEnabled ? "checked" : ""} aria-label="Toggle ${s.domain} scheduled block" />
+                <span class="switch-slider" aria-hidden="true"></span>
+            </label>
+            <div class="row-action-menu-wrap">
+                <button class="tag action-chip action-chip-menu" data-action="menu" aria-expanded="${isMenuOpen ? "true" : "false"}" aria-label="Open actions for ${s.domain}">⋮</button>
+                <div class="row-action-menu ${isMenuOpen ? "is-open" : ""}" role="menu" aria-label="Scheduled block actions">
+                    <button class="tag action-chip action-chip-primary" data-action="edit" role="menuitem">Edit</button>
+                    <button class="tag action-chip action-chip-danger" data-action="remove" data-domain="${s.domain}" role="menuitem" ${isActive ? "disabled title=\"Stop the active session before removing\"" : ""}>Cancel</button>
+                </div>
+            </div>
         </div>
         `;
+        div.querySelector('[data-action="menu"]')?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            toggleRowMenu("scheduled", s.id);
+        });
+        div.querySelector('[data-action="toggle-enabled"]')?.addEventListener("change", async (e) => {
+            const enabled = Boolean(e.currentTarget.checked);
+            const response = await chrome.runtime.sendMessage({
+                action: "toggleScheduledBlockEnabled",
+                id: s.id,
+                enabled
+            }).catch(() => ({ success: false }));
+
+            if (!response?.success) {
+                e.currentTarget.checked = !enabled;
+                showFormError("scheduledFormMsg", response?.error || "Unable to update scheduled block state.");
+                return;
+            }
+
+            clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true);
+            await loadAll();
+        });
         div.querySelector('[data-action="edit"]')?.addEventListener("click", () => {
+            closeRowMenus();
             beginScheduledBlockEdit(s);
         });
-        if (!isActive) {
-            div.querySelector('[data-action="remove"]')?.addEventListener("click", async () => {
-                await removeScheduledBlock(s.id);
-                await loadAll();
-            });
-        }
+        div.querySelector('[data-action="remove"]')?.addEventListener("click", async () => {
+            if (isActive) return;
+            closeRowMenus();
+            await removeScheduledBlock(s.id);
+            await loadAll();
+        });
         list.appendChild(div);
     });
 }
@@ -1204,8 +1375,11 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
         const limitUsageText = `Limit used: ${formatTimeSec(usedLimitSec)} / ${formatTimeSec(limitSec || 0)}`;
         const pct = hasProgressBar ? Math.min(100, Math.round((usedLimitSec / limitSec) * 100)) : 0;
         const div = document.createElement("div");
+        const accentClass = hasProgressBar
+            ? (pct >= 100 ? "row-accent-red" : "row-accent-purple")
+            : (isBlocked ? "row-accent-cyan" : "row-accent-muted");
         if (hasProgressBar) {
-            div.className = "row row-ranking row-with-bar";
+            div.className = `row row-ranking row-with-bar ${accentClass}`;
             div.innerHTML = `
             <div class="row-top">
                 <div class="row-main-inline">
@@ -1213,27 +1387,27 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
                     <div class="row-title">${r.domain}</div>
                 </div>
                 <div class="row-right">
-                    <span class="tag tag-cyan">${metricValue}</span>
+                    <span class="tag metric-chip metric-chip-glass">${metricValue}</span>
                 </div>
             </div>
             <div class="row-meta">${limitUsageText}</div>
             <div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>
             `;
         } else {
-            div.className = "row row-ranking";
+            div.className = `row row-ranking ${accentClass}`;
             div.innerHTML = `
             <span class="rank-num ${rankClass}">${i + 1}</span>
             <div class="row-main">
                 <div class="row-title">${r.domain}</div>
             </div>
             <div class="row-right">
-                <span class="tag tag-cyan">${metricValue}</span>
+                <span class="tag metric-chip metric-chip-glass">${metricValue}</span>
             </div>
             `;
         }
         if (!isBlocked) {
             const addBtn = document.createElement("button");
-            addBtn.className = "btn-ghost";
+            addBtn.className = "tag action-chip action-chip-primary";
             addBtn.textContent = "+ Limit";
             addBtn.addEventListener("click", async () => {
                 if (!canAddMoreDomains(latestBlockedDomains)) {
@@ -1247,7 +1421,7 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
             div.querySelector(".row-right").appendChild(addBtn);
         } else {
             const blockedSpan = document.createElement("span");
-            blockedSpan.className = "tag tag-muted";
+            blockedSpan.className = "tag metric-chip metric-chip-glass metric-chip-muted";
             blockedSpan.textContent = "Limited";
             div.querySelector(".row-right").appendChild(blockedSpan);
         }
@@ -1273,6 +1447,7 @@ function renderBlockList(blockedDomains, statsToday) {
     entries
         .sort(([a], [b]) => a.localeCompare(b))
         .forEach(([domain, cfg]) => {
+        const isEnabled = isLimitEnabled(cfg);
         const st = statsToday?.[domain] || { timeMs: 0, visits: 0 };
         const timeSec = Math.round((st.timeMs || 0) / 1000);
 
@@ -1284,24 +1459,64 @@ function renderBlockList(blockedDomains, statsToday) {
         const pct = limitSec ? Math.min(100, Math.round((displayTimeSec / limitSec) * 100)) : 0;
 
         const div = document.createElement("div");
-        div.className = "row row-limit row-with-bar";
+        const rowMenuKey = getRowMenuKey("limit", domain);
+        const isMenuOpen = openRowMenuKey === rowMenuKey;
+        const accentClass = !isEnabled
+            ? "row-accent-muted"
+            : (pct >= 100 ? "row-accent-red" : (pct >= 85 ? "row-accent-purple" : "row-accent-cyan"));
+        const disabledClass = isEnabled ? "" : " is-disabled";
+        div.className = `row row-limit row-with-bar ${accentClass}${disabledClass}`;
         div.innerHTML = `
             <div class="row-top">
                 <div class="row-main">
                     <div class="row-title">${domain}</div>
-                    <div class="row-meta">Limit: ${limitText} · Today: ${formatTimeSec(displayTimeSec)} · ${st.visits || 0} visits</div>
+                    <div class="row-metrics">
+                        <span class="tag metric-chip metric-chip-glass">Limit ${limitText}</span>
+                        <span class="tag metric-chip metric-chip-glass">Today ${formatTimeSec(displayTimeSec)}</span>
+                        <span class="tag metric-chip metric-chip-glass">${st.visits || 0} visits</span>
+                    </div>
                 </div>
                 <div class="row-right">
-                    <button class="btn-ghost" data-domain="${domain}" data-action="reset">Reset</button>
-                    <button class="btn-danger" data-domain="${domain}" data-action="remove">Remove</button>
+                    <label class="switch" title="Enable or pause this limit">
+                        <input class="switch-input" type="checkbox" data-domain="${domain}" data-action="toggle-enabled" ${isEnabled ? "checked" : ""} aria-label="Toggle ${domain} limit" />
+                        <span class="switch-slider" aria-hidden="true"></span>
+                    </label>
+                    <div class="row-action-menu-wrap">
+                        <button class="tag action-chip action-chip-menu" data-action="menu" aria-expanded="${isMenuOpen ? "true" : "false"}" aria-label="Open actions for ${domain}">⋮</button>
+                        <div class="row-action-menu ${isMenuOpen ? "is-open" : ""}" role="menu" aria-label="Limit actions">
+                            <button class="tag action-chip action-chip-primary" data-domain="${domain}" data-action="reset" role="menuitem">Reset</button>
+                            <button class="tag action-chip action-chip-danger" data-domain="${domain}" data-action="remove" role="menuitem">Remove</button>
+                        </div>
+                    </div>
                 </div>
             </div>
             ${limitSec ? `<div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>` : ""}
         `;
-        div.querySelectorAll("button").forEach((btn) => {
+        div.querySelector('[data-action="menu"]')?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            toggleRowMenu("limit", domain);
+        });
+        div.querySelector('[data-action="toggle-enabled"]')?.addEventListener("change", async (e) => {
+            const enabled = Boolean(e.currentTarget.checked);
+            const response = await chrome.runtime.sendMessage({
+                action: "toggleDomainLimitEnabled",
+                domain,
+                enabled
+            }).catch(() => ({ success: false }));
+
+            if (!response?.success) {
+                e.currentTarget.checked = !enabled;
+                setPremiumStatusMessage(response?.error || "Unable to update limit state.", "error");
+                return;
+            }
+
+            await loadAll();
+        });
+        div.querySelectorAll("button[data-action='reset'], button[data-action='remove']").forEach((btn) => {
             btn.addEventListener("click", async (e) => {
                 const d = e.currentTarget.getAttribute("data-domain");
                 const action = e.currentTarget.getAttribute("data-action");
+                closeRowMenus();
                 if (action === "reset") {
                     await resetDomainStats(d);
                 } else if (action === "remove") {
@@ -1367,7 +1582,11 @@ async function addDomain(domain, limitSeconds, entrypoint = "manual_form") {
     const next = { ...blockedDomains };
     const hadDomain = Boolean(blockedDomains[domain]);
     const previousLimitSeconds = Number(blockedDomains?.[domain]?.limitSeconds || 0);
-    next[domain] = { limitSeconds };
+    next[domain] = {
+        ...blockedDomains?.[domain],
+        limitSeconds,
+        enabled: blockedDomains?.[domain]?.enabled !== false
+    };
 
     const passiveStats = allStatsToday?.[domain] || { timeMs: 0, visits: 0 };
     const existingStats = statsToday?.[domain] || { timeMs: 0, visits: 0 };

@@ -90,6 +90,10 @@
                 <div class="logo-sub">Focus &amp; Limits Manager</div>
             </div>
         </div>
+        <div class="streak-header" id="streakHeader" aria-live="polite">
+            <img class="streak-icon" src="streak_icon.png" alt="" aria-hidden="true" />
+            <span class="streak-header-value" id="streakHeaderValue">0</span>
+        </div>
         <div class="status-pill">
             <span class="pulse"></span>
             <span id="activeCount">0</span>&nbsp;active
@@ -106,7 +110,7 @@
     <div class="panels">
 
         <!-- ── Dashboard ──────────────────────────────── -->
-        <div class="panel" id="p1">
+        <div class="panel panel-dashboard" id="p1">
             <div class="stat-strip">
                 <div class="stat-box">
                     <div class="stat-lbl">Screen time</div>
@@ -154,7 +158,7 @@
         </div>
 
         <!-- ── Limits ─────────────────────────────────── -->
-        <div class="panel" id="p2">
+        <div class="panel panel-limits" id="p2">
             <div class="card" id="limitsPaywallCard" style="display:none">
                 <div class="card-head">
                     <div class="card-title">Premium Required</div>
@@ -175,7 +179,7 @@
                             <input id="domainInput" class="input" type="text" placeholder="Website (e.g. google.com)" autocomplete="off" />
                             <input id="limitInput" class="input input-min" type="number" min="1" max="1440" placeholder="mins" title="Daily limit (minutes)" />
                         </div>
-                        <button class="btn" type="submit" style="width:100%">Add</button>
+                        <button class="btn btn-gradient" type="submit" style="width:100%">Add</button>
                         <div id="addFormMsg" class="form-feedback" role="status" aria-live="polite"></div>
                     </form>
                 </div>
@@ -190,7 +194,7 @@
         </div>
 
         <!-- ── Schedule ───────────────────────────────── -->
-        <div class="panel" id="p3">
+        <div class="panel panel-schedule" id="p3">
             <div class="card" id="schedulePaywallCard" style="display:none">
                 <div class="card-head">
                     <div class="card-title">Premium Required</div>
@@ -207,19 +211,28 @@
                 </div>
                 <div class="card-body">
                     <form id="scheduledForm" novalidate>
-                        <div id="scheduledFormModeLabel" class="scheduled-form-mode-label">Create a new recurring block.</div>
-                        <input type="text" id="scheduledDomain" class="input" placeholder="Domain" required style="width:100%;margin-bottom:8px" />
-                        <div class="two-col">
-                            <input type="text" id="startTime" class="input" placeholder="Start (9:00 AM)" required />
-                            <input type="text" id="endTime" class="input" placeholder="End (5:00 PM)" required />
+                        <div id="scheduledFormModeLabel" class="scheduled-form-mode-label" hidden>Create a new recurring block.</div>
+                        <div class="schedule-field schedule-field-full">
+                            <label class="schedule-field-label" for="scheduledDomain">Domain</label>
+                            <input type="text" id="scheduledDomain" class="input" placeholder="e.g. google.com" required />
                         </div>
-                        <div class="schedule-days-wrap">
-                            <div class="schedule-days-label">Active on</div>
+                        <div class="schedule-grid schedule-grid-two">
+                            <div class="schedule-field">
+                                <label class="schedule-field-label" for="startTime">Start</label>
+                                <input type="text" id="startTime" class="input" placeholder="09:00 AM" required />
+                            </div>
+                            <div class="schedule-field">
+                                <label class="schedule-field-label" for="endTime">End</label>
+                                <input type="text" id="endTime" class="input" placeholder="05:00 PM" required />
+                            </div>
+                        </div>
+                        <div class="schedule-field schedule-field-full">
+                            <div class="schedule-field-label">Days</div>
                             <div id="scheduledDays" class="schedule-days" role="group" aria-label="Scheduled block active days"></div>
                         </div>
                         <div class="scheduled-form-actions">
-                            <button id="scheduledSubmitBtn" class="btn" type="submit">Schedule</button>
-                            <button id="cancelScheduledEditBtn" class="btn-ghost" type="button" hidden>Cancel</button>
+                            <button id="scheduledSubmitBtn" class="btn btn-gradient" type="submit" style="width:100%">Deploy Schedule</button>
+                            <button id="cancelScheduledEditBtn" class="btn-ghost scheduled-cancel" type="button" hidden>Cancel</button>
                         </div>
                         <div id="scheduledFormMsg" class="form-feedback" role="status" aria-live="polite"></div>
                     </form>

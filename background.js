@@ -62,6 +62,14 @@ let activeDomain = null;
 let activeStartMs = null;
 let dynamicRuleSync = Promise.resolve();
 
+const ACTION_BADGE_COLOR = Object.freeze({
+    background: "#8B6FFF",
+    text: "#FFFFFF"
+});
+const ENFORCE_GAP_FLOOR_MS = 90 * 1000;
+const ENFORCE_GAP_MULTIPLIER = 30;
+let lastEnforceAlarmAtMs = 0;
+
 function getDayKey(d = new Date()) {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -155,6 +163,63 @@ function sanitizeAnalyticsParams(params) {
     }
 
     return sanitized;
+}
+
+function formatBadgeDuration(sec) {
+    const totalSec = Math.max(0, Math.floor(sec || 0));
+    if (totalSec < 60) {
+        return `${totalSec}s`;
+    }
+
+    const totalMin = Math.floor(totalSec / 60);
+    if (totalMin < 60) {
+        return `${totalMin}m`;
+    }
+
+    const totalHours = Math.floor(totalMin / 60);
+    return `${Math.min(totalHours, 99)}h`;
+}
+
+async function setActionBadgeStyle() {
+    try {
+        await chrome.action.setBadgeBackgroundColor({ color: ACTION_BADGE_COLOR.background });
+    } catch {
+        // Ignore badge styling failures on browsers that do not support it.
+    }
+
+    if (typeof chrome.action.setBadgeTextColor === "function") {
+        try {
+            await chrome.action.setBadgeTextColor({ color: ACTION_BADGE_COLOR.text });
+        } catch {
+            // Ignore badge styling failures on browsers that do not support it.
+        }
+    }
+}
+
+async function syncActionBadge() {
+    await setActionBadgeStyle();
+
+    if (!activeDomain) {
+        await chrome.action.setBadgeText({ text: "" }).catch(() => {});
+        return;
+    }
+
+    const { [KEYS.blockedDomains]: blockedDomains = {}, [KEYS.statsToday]: statsToday = {} } =
+        await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday]);
+
+    const domain = activeDomain;
+    const storedTimeMs = statsToday?.[domain]?.timeMs || 0;
+    const liveTimeMs = activeStartMs ? Math.max(0, Date.now() - activeStartMs) : 0;
+    const usedTimeMs = storedTimeMs + liveTimeMs;
+    const limitMs = limitMsFor(domain, blockedDomains);
+
+    if (limitMs != null && limitMs > 0 && isBlockedDomain(domain, blockedDomains)) {
+        const usedPct = Math.min(100, Math.round((usedTimeMs / limitMs) * 100));
+        await chrome.action.setBadgeText({ text: `${usedPct}%` }).catch(() => {});
+        return;
+    }
+
+    await chrome.action.setBadgeText({ text: formatBadgeDuration(Math.round(usedTimeMs / 1000)) }).catch(() => {});
 }
 
 async function getOrCreateAnalyticsClientId() {
@@ -325,6 +390,7 @@ function normalizeScheduleDays(days) {
 function normalizeScheduledBlock(block) {
     return {
         ...block,
+        enabled: block?.enabled !== false,
         daysOfWeek: normalizeScheduleDays(block?.daysOfWeek)
     };
 }
@@ -418,11 +484,14 @@ async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false } 
 }
 
 function isBlockedDomain(domain, blockedDomains) {
-    return !!blockedDomains?.[domain];
+    const config = blockedDomains?.[domain];
+    return Boolean(config) && config.enabled !== false;
 }
 
 function limitMsFor(domain, blockedDomains) {
-    const sec = blockedDomains?.[domain]?.limitSeconds;
+    const config = blockedDomains?.[domain];
+    if (!config || config.enabled === false) return null;
+    const sec = config.limitSeconds;
     if (!Number.isFinite(sec) || sec <= 0) return null;
     return sec * 1000;
 }
@@ -844,16 +913,23 @@ async function flushAllStats() {
     await chrome.storage.local.set({ [KEYS.allStatsToday]: combined });
 }
 
-async function flushTime() {
+async function flushTime({ ignoreCurrentGap = false } = {}) {
     if (!activeDomain || !activeStartMs) return;
-    const deltaMs = Date.now() - activeStartMs;
-    activeStartMs = Date.now(); // reset start for continued tracking
-    if (deltaMs > 0) await updateDomainActivity(activeDomain, { deltaMs });
+    const nowMs = Date.now();
+    const deltaMs = nowMs - activeStartMs;
+    activeStartMs = nowMs; // reset start for continued tracking
+
+    // When a sleep/resume gap is detected by alarm drift, we reset baseline without counting stale time.
+    if (!ignoreCurrentGap && deltaMs > 0) {
+        await updateDomainActivity(activeDomain, { deltaMs });
+    }
     
     // immediately check if we should enforce on the active tab
     if (activeTabId != null) {
         await enforceIfNeeded(activeTabId);
     }
+
+    await syncActionBadge();
 }
 
 async function setActiveDomain(tabId, countVisit = false) {
@@ -867,11 +943,14 @@ async function setActiveDomain(tabId, countVisit = false) {
 
     activeDomain = d;
     activeStartMs = d ? Date.now() : null;
+
+    await syncActionBadge();
 }
 
 async function initActive() {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (tab?.id != null) await setActiveDomain(tab.id);
+    else await syncActionBadge();
 }
 
 async function ensureActiveTrackingState() {
@@ -914,6 +993,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     if (changeInfo.url.startsWith(chrome.runtime.getURL("blocked.html"))) {
         activeDomain = null;
         activeStartMs = null;
+        await syncActionBadge();
         return;
     }
 
@@ -934,10 +1014,12 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
         activeTabId = null;
         activeDomain = null;
         activeStartMs = null;
+        await syncActionBadge();
         return;
     }
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (tab?.id != null) await setActiveDomain(tab.id, false);
+    else await syncActionBadge();
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -945,6 +1027,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         activeTabId = null;
         activeDomain = null;
         activeStartMs = null;
+        syncActionBadge().catch(() => {});
     }
 });
 
@@ -1002,6 +1085,7 @@ function updateBlockRules() {
 async function scheduleAlarms() {
     const { [KEYS.scheduledBlocks]: scheduled = [] } = await chrome.storage.local.get([KEYS.scheduledBlocks]);
     scheduled.map(normalizeScheduledBlock).forEach((block) => {
+        if (!block.enabled) return;
         const startMs = getNextScheduledStartTime(block);
         const endMs = getNextScheduledEndTime(block);
         if (startMs != null) {
@@ -1031,6 +1115,11 @@ async function refreshScheduledBlockRuntime(id) {
         return false;
     }
 
+    if (!block.enabled) {
+        await deactivateScheduledBlock(id, "disabled");
+        return true;
+    }
+
     if (isScheduleActiveNow(block)) {
         await activateScheduledBlock(id, "reconcile_or_refresh");
     } else {
@@ -1045,6 +1134,7 @@ async function activateScheduledBlock(id, activationSource = "runtime") {
         await chrome.storage.local.get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
     const block = scheduled.map(normalizeScheduledBlock).find((entry) => entry.id === id);
     if (!block) return;
+    if (!block.enabled) return;
 
     const activeWindow = getScheduleActiveWindow(block, Date.now());
     if (!activeWindow) {
@@ -1103,7 +1193,7 @@ async function deactivateScheduledBlock(id, deactivationSource = "runtime") {
         });
     }
 
-    if (block) {
+    if (block?.enabled) {
         const nextStart = getNextScheduledStartTime(block, Date.now() + 1000);
         const nextEnd = getNextScheduledEndTime(block, Date.now() + 1000);
         if (nextStart != null) {
@@ -1119,6 +1209,7 @@ async function reconcileActiveScheduledBlocks() {
     const { [KEYS.scheduledBlocks]: scheduled = [] } = await chrome.storage.local.get([KEYS.scheduledBlocks]);
     const nextActiveBlocks = scheduled
         .map(normalizeScheduledBlock)
+        .filter((block) => block.enabled)
         .map((block) => ({ block, activeWindow: getScheduleActiveWindow(block) }))
         .filter(({ activeWindow }) => Boolean(activeWindow))
         .map(({ block, activeWindow }) => ({
@@ -1160,6 +1251,7 @@ async function initializeExtension() {
     await reconcileActiveScheduledBlocks();
     await refreshStoredPremiumStatus("startup-sync").catch(() => null);
     await initializeOnboarding().catch(() => null);
+    await syncActionBadge();
 }
 
 chrome.runtime.onStartup?.addListener(() => {
@@ -1179,8 +1271,24 @@ chrome.runtime.onInstalled.addListener((details) => {
 // Handle alarms
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === "enforce") {
+        const nowMs = Date.now();
+        const { [KEYS.enforceIntervalSec]: storedIntervalSec = 2 } =
+            await chrome.storage.local.get([KEYS.enforceIntervalSec]);
+        let intervalSec = Number(storedIntervalSec);
+        if (!Number.isFinite(intervalSec) || intervalSec <= 0) intervalSec = 2;
+
+        const expectedIntervalMs = intervalSec * 1000;
+        const driftThresholdMs = Math.max(
+            ENFORCE_GAP_FLOOR_MS,
+            expectedIntervalMs * ENFORCE_GAP_MULTIPLIER
+        );
+        const hasPreviousTick = lastEnforceAlarmAtMs > 0;
+        const elapsedSinceLastTick = hasPreviousTick ? nowMs - lastEnforceAlarmAtMs : 0;
+        const likelySleepGap = hasPreviousTick && elapsedSinceLastTick > driftThresholdMs;
+        lastEnforceAlarmAtMs = nowMs;
+
         await ensureActiveTrackingState();
-        await flushTime();
+        await flushTime({ ignoreCurrentGap: likelySleepGap });
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (activeTab?.id != null) await enforceIfNeeded(activeTab.id);
         await createEnforceAlarm();
@@ -1292,7 +1400,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 return;
             }
             const id = Date.now();
-            const nextBlock = normalizeScheduledBlock({ id, domain, startTime, endTime, daysOfWeek });
+            const nextBlock = normalizeScheduledBlock({ id, domain, startTime, endTime, daysOfWeek, enabled: true });
             scheduled.push(nextBlock);
             await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
             // Set alarms for next occurrences
@@ -1372,6 +1480,95 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    if (request.action === "toggleScheduledBlockEnabled") {
+        const id = Number(request.id);
+        const enabled = Boolean(request.enabled);
+
+        if (!Number.isInteger(id) || id <= 0) {
+            sendResponse({ success: false, error: "Scheduled block not found." });
+            return true;
+        }
+
+        chrome.storage.local.get([KEYS.scheduledBlocks], async (data) => {
+            const scheduled = (data[KEYS.scheduledBlocks] || []).map(normalizeScheduledBlock);
+            const blockIndex = scheduled.findIndex((block) => block.id === id);
+
+            if (blockIndex === -1) {
+                sendResponse({ success: false, error: "Scheduled block not found." });
+                return;
+            }
+
+            const previous = scheduled[blockIndex];
+            if (previous.enabled === enabled) {
+                sendResponse({ success: true });
+                return;
+            }
+
+            scheduled[blockIndex] = { ...previous, enabled };
+            await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
+            await refreshScheduledBlockRuntime(id);
+
+            await sendAnalyticsEventSafe("schedule_toggled", {
+                schedule_id: id,
+                domain_host: sanitizeAnalyticsText(previous.domain, "unknown", 100),
+                enabled: enabled ? 1 : 0
+            });
+
+            sendResponse({ success: true });
+        });
+        return true;
+    }
+
+    if (request.action === "toggleDomainLimitEnabled") {
+        const domain = String(request.domain || "").trim().toLowerCase();
+        const enabled = Boolean(request.enabled);
+
+        if (!domain) {
+            sendResponse({ success: false, error: "Domain not found." });
+            return true;
+        }
+
+        chrome.storage.local.get([KEYS.blockedDomains], async (data) => {
+            const blockedDomains = { ...(data[KEYS.blockedDomains] || {}) };
+            const existingConfig = blockedDomains[domain];
+
+            if (!existingConfig) {
+                sendResponse({ success: false, error: "Domain not found." });
+                return;
+            }
+
+            const previousEnabled = existingConfig.enabled !== false;
+            if (previousEnabled === enabled) {
+                sendResponse({ success: true });
+                return;
+            }
+
+            blockedDomains[domain] = {
+                ...existingConfig,
+                enabled
+            };
+
+            await chrome.storage.local.set({ [KEYS.blockedDomains]: blockedDomains });
+
+            if (enabled) {
+                const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+                if (activeTab?.id != null) {
+                    await enforceIfNeeded(activeTab.id);
+                }
+            }
+
+            await syncActionBadge();
+
+            await sendAnalyticsEventSafe("domain_limit_toggled", {
+                domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+                enabled: enabled ? 1 : 0
+            });
+
+            sendResponse({ success: true });
+        });
+        return true;
+    }
+
     if (request.action === "snoozeBlock") {
         const { domain, minutes = 5 } = request;
         (async () => {
@@ -1443,6 +1640,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     error: error instanceof Error ? error.message : "Premium refresh failed"
                 });
             }
+        })();
+        return true;
+    }
+
+    if (request.action === "refreshActionBadge") {
+        (async () => {
+            await syncActionBadge();
+            sendResponse({ success: true });
         })();
         return true;
     }
