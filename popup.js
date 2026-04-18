@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
 const SETTINGS_KEY = "uiSettings";
+const DASHBOARD_PREFS_KEY = "dashboardPrefs";
 const PREMIUM_KEY = "premiumState";
 const WHOP_TOKEN_KEY = "whopAccessToken";
 const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/verify";
@@ -18,6 +19,9 @@ const WHOP_LINK_STATE_KEY = "whopLinkState";
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 60,
     use24HourTime: false
+});
+const DEFAULT_DASHBOARD_PREFS = Object.freeze({
+    chartMode: "pie"
 });
 const DEFAULT_PREMIUM = Object.freeze({
     active: false,
@@ -40,12 +44,21 @@ const SCHEDULE_DAY_OPTIONS = Object.freeze([
     { value: 6, label: "Sat", short: "S" }
 ]);
 const ALL_SCHEDULE_DAYS = Object.freeze(SCHEDULE_DAY_OPTIONS.map((day) => day.value));
+const DISTRIBUTION_COLORS = Object.freeze([
+    "#22D9FF",
+    "#8B6FFF",
+    "#2EFFA8",
+    "#FFD166",
+    "#FF4D6D",
+    "#8DE4D6"
+]);
 
 let currentSettings = { ...DEFAULT_SETTINGS };
 let saveMessageTimer = null;
 let latestActiveBlocks = [];
 let latestBlockedDomains = {};
 let latestStatsToday = {};
+let latestSnoozeHistory = {};
 let activeCountdownTimer = null;
 let popupRefreshTimer = null;
 let popupRefreshInFlight = false;
@@ -59,6 +72,7 @@ let currentOnboardingState = { step: 0, completed: false, completedAt: null };
 let selectedSuggestedSites = new Set(SUGGESTED_DEFAULTS.slice(0, 3).map(s => s.domain));
 let openRowMenuKey = null;
 let lastActiveRenderSignature = null;
+let currentChartMode = "pie";
 
 const EMPTY_STATE_MESSAGES = Object.freeze({
     active: "No active sessions. Scheduled blocks and time-limited sites will appear here when they start.",
@@ -341,17 +355,20 @@ function startPopupRefreshTicker() {
                 blockedDomains = {},
                 statsToday = {},
                 allStatsToday = {},
-                statsHistory = {}
-            } = await chrome.storage.local.get(["activeBlocks", "blockedDomains", "statsToday", "allStatsToday", "statsHistory"]);
+                statsHistory = {},
+                snoozeHistory = {}
+            } = await chrome.storage.local.get(["activeBlocks", "blockedDomains", "statsToday", "allStatsToday", "statsHistory", "snoozeHistory"]);
 
             latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
             latestBlockedDomains = blockedDomains || {};
             latestStatsToday = statsToday || {};
+            latestSnoozeHistory = snoozeHistory || {};
 
             const range = $("statRange")?.value || "Today";
-            const rangeStats = getAggregatedStats(range, allStatsToday || {}, statsHistory || {});
+            const rangeContext = getRangeSelectionContext(range, allStatsToday || {}, statsHistory || {});
 
-            updateStatStrip(rangeStats, latestBlockedDomains);
+            updateStatStrip(rangeContext);
+            updateDashboardSubhead(rangeContext.label);
 
             const nextSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
             if (nextSignature !== lastActiveRenderSignature) {
@@ -383,6 +400,17 @@ function formatTimeSec(sec) {
     return `${s}s`;
 }
 
+function formatTimeStatSec(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+
+    if (h > 0) return `${h}h${m}m`;
+    if (m > 0) return `${m}m${s}s`;
+    return `${s}s`;
+}
+
 function getDayKey(d = new Date()) {
     const y = d.getFullYear();
     const mo = String(d.getMonth() + 1).padStart(2, "0");
@@ -390,34 +418,124 @@ function getDayKey(d = new Date()) {
     return `${y}-${mo}-${day}`;
 }
 
-function getAggregatedStats(range, allStatsToday, statsHistory) {
-    if (range === "Today") return allStatsToday;
-    const today = new Date();
+function parseDayKey(dayKey) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dayKey || ""))) {
+        return null;
+    }
+    const [year, month, day] = String(dayKey).split("-").map(Number);
+    const parsed = new Date(year, month - 1, day);
+    if (Number.isNaN(parsed.getTime())) {
+        return null;
+    }
+    parsed.setHours(0, 0, 0, 0);
+    return parsed;
+}
+
+function formatDayKey(dayKey) {
+    const parsed = parseDayKey(dayKey);
+    if (!parsed) return "Unknown";
+    return parsed.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric"
+    });
+}
+
+function getDayStats(dayKey, allStatsToday = {}, statsHistory = {}) {
+    if (dayKey === getDayKey()) {
+        return allStatsToday || {};
+    }
+    return statsHistory?.[dayKey] || {};
+}
+
+function buildDayKeysFromSpan(endDate, daysBack) {
+    const keys = [];
+    for (let i = daysBack; i >= 0; i -= 1) {
+        const d = new Date(endDate);
+        d.setDate(endDate.getDate() - i);
+        keys.push(getDayKey(d));
+    }
+    return keys;
+}
+
+function buildDayKeysInRange(startDate, endDate) {
+    const keys = [];
+    const current = new Date(startDate);
+    current.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(0, 0, 0, 0);
+
+    while (current <= end) {
+        keys.push(getDayKey(current));
+        current.setDate(current.getDate() + 1);
+    }
+    return keys;
+}
+
+function aggregateStatsForDayKeys(dayKeys = [], allStatsToday = {}, statsHistory = {}) {
     const result = {};
 
-    function mergeDayStats(dayStats) {
-        for (const [domain, stats] of Object.entries(dayStats || {})) {
+    dayKeys.forEach((dayKey) => {
+        const dayStats = getDayStats(dayKey, allStatsToday, statsHistory);
+        Object.entries(dayStats || {}).forEach(([domain, stats]) => {
             if (!result[domain]) result[domain] = { timeMs: 0, visits: 0 };
-            result[domain].timeMs += stats.timeMs || 0;
-            result[domain].visits += stats.visits || 0;
-        }
+            result[domain].timeMs += Number(stats?.timeMs || 0);
+            result[domain].visits += Number(stats?.visits || 0);
+        });
+    });
+
+    return result;
+}
+
+function getPreviousPeriodDayKeys(dayKeys = []) {
+    if (!Array.isArray(dayKeys) || dayKeys.length === 0) return [];
+    const first = parseDayKey(dayKeys[0]);
+    if (!first) return [];
+
+    const periodLength = dayKeys.length;
+    const previousEnd = new Date(first);
+    previousEnd.setDate(previousEnd.getDate() - 1);
+    const previousStart = new Date(previousEnd);
+    previousStart.setDate(previousEnd.getDate() - (periodLength - 1));
+
+    return buildDayKeysInRange(previousStart, previousEnd);
+}
+
+function getRangeSelectionContext(range, allStatsToday = {}, statsHistory = {}) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let dayKeys = [];
+    let label = range;
+
+    if (range === "Today") {
+        dayKeys = [getDayKey(today)];
+    } else if (range === "Yesterday") {
+        const yesterday = new Date(today);
+        yesterday.setDate(today.getDate() - 1);
+        dayKeys = [getDayKey(yesterday)];
+    } else if (range === "This week") {
+        dayKeys = buildDayKeysFromSpan(today, 6);
+    } else if (range === "This month") {
+        dayKeys = buildDayKeysFromSpan(today, 29);
+    } else {
+        dayKeys = [getDayKey(today)];
+        label = "Today";
     }
 
-    if (range === "Yesterday") {
-        const d = new Date(today);
-        d.setDate(d.getDate() - 1);
-        mergeDayStats(statsHistory[getDayKey(d)]);
-    } else {
-        // "This week" = today + 6 prior days; "This month" = today + 29 prior days
-        const days = range === "This week" ? 6 : 29;
-        mergeDayStats(allStatsToday);
-        for (let i = 1; i <= days; i++) {
-            const d = new Date(today);
-            d.setDate(d.getDate() - i);
-            mergeDayStats(statsHistory[getDayKey(d)]);
-        }
-    }
-    return result;
+    const stats = aggregateStatsForDayKeys(dayKeys, allStatsToday, statsHistory);
+    const previousKeys = getPreviousPeriodDayKeys(dayKeys);
+    const previousStats = aggregateStatsForDayKeys(previousKeys, allStatsToday, statsHistory);
+    const previousLabel = previousKeys.length
+        ? `${formatDayKey(previousKeys[0])} - ${formatDayKey(previousKeys[previousKeys.length - 1])}`
+        : "Previous period";
+
+    return {
+        label,
+        dayKeys,
+        stats,
+        previousStats,
+        previousLabel
+    };
 }
 
 function normalizeSettings(raw) {
@@ -427,6 +545,14 @@ function normalizeSettings(raw) {
             ? Math.min(1440, Math.floor(defaultLimitMinutes))
             : DEFAULT_SETTINGS.defaultLimitMinutes,
         use24HourTime: Boolean(raw?.use24HourTime)
+    };
+}
+
+function normalizeDashboardPrefs(raw) {
+    const chartMode = raw?.chartMode === "bar" ? "bar" : "pie";
+
+    return {
+        chartMode
     };
 }
 
@@ -503,6 +629,19 @@ async function loadSettingsFromStorage() {
     const { [SETTINGS_KEY]: stored } = await chrome.storage.local.get([SETTINGS_KEY]);
     currentSettings = normalizeSettings(stored);
     return currentSettings;
+}
+
+async function loadDashboardPrefsFromStorage() {
+    const { [DASHBOARD_PREFS_KEY]: stored } = await chrome.storage.local.get([DASHBOARD_PREFS_KEY]);
+    const normalized = normalizeDashboardPrefs(stored || DEFAULT_DASHBOARD_PREFS);
+    currentChartMode = normalized.chartMode;
+}
+
+async function saveDashboardPrefsToStorage() {
+    const payload = {
+        chartMode: currentChartMode
+    };
+    await chrome.storage.local.set({ [DASHBOARD_PREFS_KEY]: payload });
 }
 
 async function loadMonetizationFromStorage() {
@@ -974,14 +1113,185 @@ function showSettingsSavedMessage() {
     }, 1800);
 }
 
-function updateStatStrip(allStatsToday, blockedDomains) {
-    const domains = Object.keys(allStatsToday || {});
-    const totalMs = domains.reduce((s, d) => s + (allStatsToday[d]?.timeMs || 0), 0);
-    const totalVisits = domains.reduce((s, d) => s + (allStatsToday[d]?.visits || 0), 0);
-    const blockedCount = Object.values(blockedDomains || {}).filter((cfg) => isLimitEnabled(cfg)).length;
-    if ($("statScreenTime")) $("statScreenTime").textContent = formatTimeSec(Math.round(totalMs / 1000));
-    if ($("statVisits"))     $("statVisits").textContent     = String(totalVisits);
-    if ($("statBlocked"))    $("statBlocked").textContent    = String(blockedCount);
+function getSnoozeCountForDayKeys(dayKeys = [], snoozeHistory = {}) {
+    return (Array.isArray(dayKeys) ? dayKeys : []).reduce((sum, dayKey) => {
+        return sum + Number(snoozeHistory?.[dayKey] || 0);
+    }, 0);
+}
+
+function updateStatStrip(rangeContext) {
+    const currentStats = rangeContext?.stats || {};
+    const previousStats = rangeContext?.previousStats || {};
+
+    const currentTotals = getTotals(currentStats);
+    const previousTotals = getTotals(previousStats);
+    const currentSnoozes = getSnoozeCountForDayKeys(rangeContext?.dayKeys || [], latestSnoozeHistory);
+    const previousDayKeys = getPreviousPeriodDayKeys(rangeContext?.dayKeys || []);
+    const previousSnoozes = getSnoozeCountForDayKeys(previousDayKeys, latestSnoozeHistory);
+
+    if ($("statScreenTime")) {
+        $("statScreenTime").textContent = formatTimeStatSec(Math.round(currentTotals.totalMs / 1000));
+    }
+    if ($("statVisits")) {
+        $("statVisits").textContent = String(currentTotals.totalVisits);
+    }
+    if ($("statSnoozes")) {
+        $("statSnoozes").textContent = String(currentSnoozes);
+    }
+
+    if ($("statScreenTimeDelta")) {
+        $("statScreenTimeDelta").textContent = `${formatPercentDelta(currentTotals.totalMs, previousTotals.totalMs)}`;
+    }
+    if ($("statVisitsDelta")) {
+        $("statVisitsDelta").textContent = `${formatPercentDelta(currentTotals.totalVisits, previousTotals.totalVisits)}`;
+    }
+    if ($("statSnoozesDelta")) {
+        $("statSnoozesDelta").textContent = `${formatPercentDelta(currentSnoozes, previousSnoozes)}`;
+    }
+}
+
+function getTotals(stats = {}) {
+    const entries = Object.values(stats || {});
+    const totalMs = entries.reduce((sum, entry) => sum + Number(entry?.timeMs || 0), 0);
+    const totalVisits = entries.reduce((sum, entry) => sum + Number(entry?.visits || 0), 0);
+    return { totalMs, totalVisits };
+}
+
+function getTopDomains(stats = {}, sortBy = "timeMs", limit = 6) {
+    return Object.entries(stats || {})
+        .map(([domain, entry]) => ({
+            domain,
+            timeMs: Number(entry?.timeMs || 0),
+            visits: Number(entry?.visits || 0)
+        }))
+        .sort((a, b) => (sortBy === "visits" ? b.visits - a.visits : b.timeMs - a.timeMs))
+        .slice(0, limit);
+}
+
+function formatPercentDelta(current, previous) {
+    if (previous <= 0 && current <= 0) return "0%";
+    if (previous <= 0) return "+100%";
+    const pct = Math.round(((current - previous) / previous) * 100);
+    return `${pct > 0 ? "+" : ""}${pct}%`;
+}
+
+function updateDashboardSubhead(label) {
+    const subhead = $("dashboardSubhead");
+    if (!subhead) return;
+    subhead.textContent = `Showing ${label}`;
+}
+
+function renderPieDistribution(topRows, totalMs) {
+    const segments = topRows.map((row, index) => ({
+        color: DISTRIBUTION_COLORS[index % DISTRIBUTION_COLORS.length],
+        pct: totalMs > 0 ? Math.round((row.timeMs / totalMs) * 100) : 0
+    }));
+
+    let running = 0;
+    const gradientStops = segments.map((segment) => {
+        const start = running;
+        running += segment.pct;
+        return `${segment.color} ${start}% ${Math.min(running, 100)}%`;
+    });
+
+    const normalizedGradient = gradientStops.length > 0
+        ? gradientStops.join(", ")
+        : "rgba(255,255,255,.12) 0% 100%";
+
+    const pie = `<div class="distribution-pie" style="background: conic-gradient(${normalizedGradient});"></div>`;
+    const legend = `
+        <div class="distribution-legend">
+            ${topRows.map((row, index) => {
+                const pct = totalMs > 0 ? Math.max(1, Math.round((row.timeMs / totalMs) * 100)) : 0;
+                return `
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background:${DISTRIBUTION_COLORS[index % DISTRIBUTION_COLORS.length]}"></span>
+                        <span class="legend-label">${row.domain}</span>
+                        <span class="legend-value">${pct}%</span>
+                    </div>
+                `;
+            }).join("")}
+        </div>
+    `;
+
+    return `<div class="distribution-wrap">${pie}${legend}</div>`;
+}
+
+function renderBarDistribution(topRows, maxMs) {
+    return `
+        <div class="distribution-bars">
+            ${topRows.map((row) => {
+                const pct = maxMs > 0 ? Math.max(4, Math.round((row.timeMs / maxMs) * 100)) : 4;
+                const shortLabel = row.domain.length > 8 ? `${row.domain.slice(0, 7)}...` : row.domain;
+                return `
+                    <div class="distribution-bar-item">
+                        <div class="distribution-bar" style="height:${pct}px"></div>
+                        <div class="distribution-bar-value">${formatTimeSec(Math.round(row.timeMs / 1000))}</div>
+                        <div class="distribution-bar-label">${shortLabel}</div>
+                    </div>
+                `;
+            }).join("")}
+        </div>
+    `;
+}
+
+function renderSiteDistribution(rangeStats = {}, rangeLabel = "Today", chartMode = "pie") {
+    const list = $("siteDistribution");
+    const insight = $("chartInsight");
+    const title = $("chartCardTitle");
+    if (!list) return;
+
+    if (title) title.textContent = `Site Distribution · ${rangeLabel}`;
+
+    const topRows = getTopDomains(rangeStats, "timeMs", 6);
+    if (topRows.length === 0) {
+        list.classList.add("muted");
+        list.textContent = "No distribution data yet.";
+        if (insight) {
+            insight.classList.add("muted");
+            insight.classList.remove("is-actionable");
+            insight.textContent = "Insight will appear once enough data is available.";
+        }
+        return;
+    }
+
+    list.classList.remove("muted");
+    const totalMs = topRows.reduce((sum, row) => sum + row.timeMs, 0);
+    const maxMs = topRows.reduce((max, row) => Math.max(max, row.timeMs), 0);
+    list.innerHTML = chartMode === "bar"
+        ? renderBarDistribution(topRows, maxMs)
+        : renderPieDistribution(topRows, totalMs);
+
+    if (!insight) return;
+
+    const topSite = topRows[0];
+    const isLimited = Boolean(latestBlockedDomains?.[topSite.domain]);
+    const topTime = formatTimeSec(Math.round(topSite.timeMs / 1000));
+
+    if (isLimited) {
+        insight.classList.remove("muted", "is-actionable");
+        insight.innerHTML = `<div class="insight-copy">You've spent <strong>${topTime}</strong> on <strong>${topSite.domain}</strong> today. It's already limited.</div>`;
+        return;
+    }
+
+    if (!canAddMoreDomains(latestBlockedDomains)) {
+        insight.classList.remove("is-actionable");
+        insight.classList.add("muted");
+        insight.innerHTML = `<div class="insight-copy">You've spent <strong>${topTime}</strong> on <strong>${topSite.domain}</strong> today. Upgrade to pro to add another limit.</div>`;
+        return;
+    }
+
+    insight.classList.remove("muted");
+    insight.classList.add("is-actionable");
+    insight.innerHTML = `
+        <div class="insight-copy">You've spent <strong>${topTime}</strong> on <strong>${topSite.domain}</strong> today. Want to add a limit?</div>
+        <button class="tag action-chip action-chip-primary" id="chartInsightBlockBtn" type="button">Add limit</button>
+    `;
+
+    $("chartInsightBlockBtn")?.addEventListener("click", async () => {
+        await addDomain(topSite.domain, currentSettings.defaultLimitMinutes * 60, "chart_insight_add_limit");
+        await loadAll();
+    });
 }
 
 function updateStreakChip(statsHistory = {}, allStatsToday = {}) {
@@ -1118,11 +1428,12 @@ async function loadAll() {
                 statsToday = {},
                 allStatsToday = {},
                 statsHistory = {},
+                snoozeHistory = {},
                 activeBlocks = [],
                 scheduledBlocks = [],
                 [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS,
                 [PREMIUM_KEY]: premiumStored = DEFAULT_PREMIUM
-            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY]);
+            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "snoozeHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY]);
 
             currentSettings = normalizeSettings(storedSettings);
             currentPremium = normalizePremium(premiumStored);
@@ -1136,18 +1447,22 @@ async function loadAll() {
             latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
             latestBlockedDomains = effectiveBlockedDomains || {};
             latestStatsToday = effectiveStatsToday || {};
+            latestSnoozeHistory = snoozeHistory || {};
             lastActiveRenderSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
 
             const range = $("statRange")?.value || "Today";
-            const rangeStats = getAggregatedStats(range, allStatsToday, statsHistory);
+            const rangeContext = getRangeSelectionContext(range, allStatsToday, statsHistory);
+            const rangeStats = rangeContext.stats;
 
-            updateStatStrip(rangeStats, effectiveBlockedDomains);
+            updateStatStrip(rangeContext);
+            updateDashboardSubhead(rangeContext.label);
+            renderSiteDistribution(rangeStats, rangeContext.label, currentChartMode);
             updateStreakChip(statsHistory, allStatsToday);
             renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
             renderScheduled(effectiveScheduledBlocks, latestActiveBlocks);
             if (!isRankingInteractionActive()) {
-                renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "ranking", "timeSec", "Top by Time", range);
-                renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "rankingByVisits", "visits", "Top by Visits", range);
+                renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "ranking", "timeSec", "Top by Time", rangeContext.label);
+                renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "rankingByVisits", "visits", "Top by Visits", rangeContext.label);
             }
             renderBlockList(effectiveBlockedDomains, effectiveStatsToday);
             applyPaywallUI(effectiveBlockedDomains, effectiveScheduledBlocks);
@@ -1618,6 +1933,25 @@ async function addDomain(domain, limitSeconds, entrypoint = "manual_form") {
     }
 }
 
+function syncChartModeToggleUI() {
+    const pieBtn = $("chartModePie");
+    const barBtn = $("chartModeBar");
+    if (!pieBtn || !barBtn) return;
+
+    const isPie = currentChartMode !== "bar";
+    pieBtn.classList.toggle("is-active", isPie);
+    barBtn.classList.toggle("is-active", !isPie);
+    pieBtn.setAttribute("aria-selected", String(isPie));
+    barBtn.setAttribute("aria-selected", String(!isPie));
+}
+
+async function setChartMode(nextMode) {
+    currentChartMode = nextMode === "bar" ? "bar" : "pie";
+    syncChartModeToggleUI();
+    await saveDashboardPrefsToStorage();
+    await loadAll();
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
     startActiveCountdownTicker();
     startPopupRefreshTicker();
@@ -1678,7 +2012,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     await loadSettingsFromStorage();
+    await loadDashboardPrefsFromStorage();
     await loadMonetizationFromStorage();
+    syncChartModeToggleUI();
 
     const defaultLimitEl = $("defaultLimitMinutes");
     const use24HourEl = $("use24HourTime");
@@ -1726,6 +2062,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             await loadAll();
         });
     }
+
+    $("chartModePie")?.addEventListener("click", async () => {
+        await setChartMode("pie");
+    });
+    $("chartModeBar")?.addEventListener("click", async () => {
+        await setChartMode("bar");
+    });
 
     $("settingsForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -1876,7 +2219,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
         currentPremium = normalizePremium(changes[PREMIUM_KEY].newValue || DEFAULT_PREMIUM);
     }
 
-    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks) {
+    if (changes[DASHBOARD_PREFS_KEY]) {
+        const nextPrefs = normalizeDashboardPrefs(changes[DASHBOARD_PREFS_KEY].newValue || DEFAULT_DASHBOARD_PREFS);
+        currentChartMode = nextPrefs.chartMode;
+        syncChartModeToggleUI();
+    }
+
+    if (changes.snoozeHistory) {
+        latestSnoozeHistory = changes.snoozeHistory.newValue || {};
+    }
+
+    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes[DASHBOARD_PREFS_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks || changes.statsHistory || changes.snoozeHistory) {
         loadAll();
     }
 });
