@@ -3,8 +3,6 @@ const $ = (id) => document.getElementById(id);
 const SETTINGS_KEY = "uiSettings";
 const DASHBOARD_PREFS_KEY = "dashboardPrefs";
 const PREMIUM_KEY = "premiumState";
-const WHOP_TOKEN_KEY = "whopAccessToken";
-const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/verify";
 const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
 const ONBOARDING_KEY = "onboardingState";

@@ -534,17 +534,6 @@ function parseHourMinute(timeStr) {
     return { h, m };
 }
 
-function getNextTime(timeStr) {
-    const { h: hours, m: minutes } = parseHourMinute(timeStr);
-    const now = new Date();
-    const target = new Date(now);
-    target.setHours(hours, minutes, 0, 0);
-    if (target <= now) {
-        target.setDate(target.getDate() + 1);
-    }
-    return target.getTime();
-}
-
 function getTodayTime(timeStr, baseDate = new Date()) {
     const { h: hours, m: minutes } = parseHourMinute(timeStr);
     const target = new Date(baseDate);
@@ -1318,77 +1307,163 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
 });
 
-async function runSelfTest() {
-    const checks = [];
-
-    try {
-        const manifest = chrome.runtime.getManifest();
-        const resources = manifest.web_accessible_resources || [];
-        const hasBlockedPage = resources.some((entry) =>
-            Array.isArray(entry.resources) && entry.resources.includes("blocked.html")
-        );
-
-        checks.push({
-            name: "blocked page is web accessible",
-            pass: hasBlockedPage,
-            details: hasBlockedPage ? "blocked.html found in manifest" : "blocked.html missing from web_accessible_resources"
-        });
-    } catch (error) {
-        checks.push({
-            name: "blocked page is web accessible",
-            pass: false,
-            details: String(error)
-        });
-    }
-
-    try {
-        await updateBlockRules();
-        const rulesAfterFirstSync = await chrome.declarativeNetRequest.getDynamicRules();
-
-        await updateBlockRules();
-        const rulesAfterSecondSync = await chrome.declarativeNetRequest.getDynamicRules();
-
-        const idsOne = rulesAfterFirstSync.map((rule) => rule.id).sort((a, b) => a - b);
-        const idsTwo = rulesAfterSecondSync.map((rule) => rule.id).sort((a, b) => a - b);
-        const stableIds = JSON.stringify(idsOne) === JSON.stringify(idsTwo);
-
-        checks.push({
-            name: "dynamic rule sync is idempotent",
-            pass: stableIds,
-            details: stableIds ? `stable IDs: [${idsTwo.join(", ")}]` : "rule IDs changed between identical sync passes"
-        });
-
-        const uniqueCount = new Set(idsTwo).size;
-        checks.push({
-            name: "dynamic rule IDs are unique",
-            pass: uniqueCount === idsTwo.length,
-            details: uniqueCount === idsTwo.length ? `unique IDs: ${uniqueCount}` : "duplicate rule IDs detected"
-        });
-
-        const allRedirectRules = rulesAfterSecondSync.every((rule) => rule.action?.type === "redirect");
-        checks.push({
-            name: "scheduled rules use redirect action",
-            pass: allRedirectRules,
-            details: allRedirectRules ? "all dynamic rules are redirect rules" : "one or more dynamic rules are not redirect"
-        });
-    } catch (error) {
-        checks.push({
-            name: "dynamic rule validation",
-            pass: false,
-            details: String(error)
-        });
-    }
+function buildBackgroundMessageActionHandlers(deps) {
+    const {
+        ensureActiveTrackingState,
+        flushTime,
+        getActiveTabId,
+        enforceIfNeeded,
+        storage,
+        keys,
+        updateBlockRules,
+        sendAnalyticsEventSafe,
+        sanitizeAnalyticsText,
+        logOnboardingMetric,
+        refreshStoredPremiumStatus,
+        syncActionBadge,
+        verifyAndPersistWhopToken
+    } = deps;
 
     return {
-        ok: checks.every((check) => check.pass),
-        checkedAt: new Date().toISOString(),
-        checks
+        flushActiveTimeNow(_request, sendResponse) {
+            (async () => {
+                await ensureActiveTrackingState();
+                await flushTime();
+                const activeTabId = getActiveTabId();
+                if (activeTabId != null) {
+                    await enforceIfNeeded(activeTabId);
+                }
+                sendResponse({ success: true });
+            })().catch((error) => {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Failed to flush active time"
+                });
+            });
+        },
+
+        endScheduledBlock(request, sendResponse) {
+            const domain = String(request?.domain || "").trim();
+
+            (async () => {
+                const { [keys.activeBlocks]: activeBlocks = [] } =
+                    await storage.get([keys.activeBlocks]);
+                const next = activeBlocks.filter((block) => block.domain !== domain);
+                await storage.set({ [keys.activeBlocks]: next });
+                await updateBlockRules();
+                if (activeBlocks.length !== next.length) {
+                    await sendAnalyticsEventSafe("schedule_block_deactivated", {
+                        domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
+                        deactivation_source: "manual_end"
+                    });
+                }
+                sendResponse({ success: true });
+            })().catch((error) => {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Failed to end scheduled block"
+                });
+            });
+        },
+
+        logOnboardingMetric(request, sendResponse) {
+            const { metric, value } = request;
+
+            (async () => {
+                await logOnboardingMetric(metric, value);
+                sendResponse({ success: true });
+            })().catch((error) => {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Failed to log onboarding metric"
+                });
+            });
+        },
+
+        refreshPremiumStatus(_request, sendResponse) {
+            (async () => {
+                try {
+                    const result = await refreshStoredPremiumStatus("manual-refresh");
+                    sendResponse(result);
+                } catch (error) {
+                    sendResponse({
+                        success: false,
+                        error: error instanceof Error ? error.message : "Premium refresh failed"
+                    });
+                }
+            })();
+        },
+
+        refreshActionBadge(_request, sendResponse) {
+            (async () => {
+                await syncActionBadge();
+                sendResponse({ success: true });
+            })().catch((error) => {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Failed to refresh badge"
+                });
+            });
+        },
+
+        completeWhopCheckout(request, sendResponse) {
+            (async () => {
+                try {
+                    const premiumState = await verifyAndPersistWhopToken(request.token, "whop-popup-fallback");
+                    sendResponse({
+                        success: true,
+                        premiumState
+                    });
+                } catch (error) {
+                    sendResponse({
+                        success: false,
+                        error: error instanceof Error ? error.message : "Token verification failed"
+                    });
+                }
+            })();
+        },
+
+        trackAnalyticsEvent(request, sendResponse) {
+            (async () => {
+                await sendAnalyticsEventSafe(request.eventName, request.params || {});
+                sendResponse({ success: true });
+            })().catch((error) => {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Failed to track analytics event"
+                });
+            });
+        }
     };
 }
+
+const MESSAGE_ACTION_HANDLERS = buildBackgroundMessageActionHandlers({
+    ensureActiveTrackingState,
+    flushTime,
+    getActiveTabId: () => activeTabId,
+    enforceIfNeeded,
+    storage: chrome.storage.local,
+    keys: {
+        activeBlocks: KEYS.activeBlocks
+    },
+    updateBlockRules,
+    sendAnalyticsEventSafe,
+    sanitizeAnalyticsText,
+    logOnboardingMetric,
+    refreshStoredPremiumStatus,
+    syncActionBadge,
+    verifyAndPersistWhopToken
+});
 
 // Handle messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!request || typeof request !== "object") return;
+
+    const actionHandler = MESSAGE_ACTION_HANDLERS[request.action];
+    if (typeof actionHandler === "function") {
+        actionHandler(request, sendResponse);
+        return true;
+    }
 
     if (request.action === 'addScheduledBlock') {
         const { domain, startTime, endTime, daysOfWeek } = request;
@@ -1596,95 +1671,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 block_source: "scheduled"
             });
             sendResponse({ success: true, expiresAt });
-        })();
-        return true;
-    }
-
-    if (request.action === "flushActiveTimeNow") {
-        (async () => {
-            await ensureActiveTrackingState();
-            await flushTime();
-            if (activeTabId != null) {
-                await enforceIfNeeded(activeTabId);
-            }
-            sendResponse({ success: true });
-        })();
-        return true;
-    }
-
-    if (request.action === "endScheduledBlock") {
-        const { domain } = request;
-        (async () => {
-            const { [KEYS.activeBlocks]: activeBlocks = [] } =
-                await chrome.storage.local.get([KEYS.activeBlocks]);
-            const next = activeBlocks.filter((b) => b.domain !== domain);
-            await chrome.storage.local.set({ [KEYS.activeBlocks]: next });
-            await updateBlockRules();
-            if (activeBlocks.length !== next.length) {
-                await sendAnalyticsEventSafe("schedule_block_deactivated", {
-                    domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
-                    deactivation_source: "manual_end"
-                });
-            }
-            sendResponse({ success: true });
-        })();
-        return true;
-    }
-
-    if (request.action === "logOnboardingMetric") {
-        const { metric, value } = request;
-        (async () => {
-            await logOnboardingMetric(metric, value);
-            sendResponse({ success: true });
-        })();
-        return true;
-    }
-
-    if (request.action === "refreshPremiumStatus") {
-        (async () => {
-            try {
-                const result = await refreshStoredPremiumStatus("manual-refresh");
-                sendResponse(result);
-            } catch (error) {
-                sendResponse({
-                    success: false,
-                    error: error instanceof Error ? error.message : "Premium refresh failed"
-                });
-            }
-        })();
-        return true;
-    }
-
-    if (request.action === "refreshActionBadge") {
-        (async () => {
-            await syncActionBadge();
-            sendResponse({ success: true });
-        })();
-        return true;
-    }
-
-    if (request.action === "completeWhopCheckout") {
-        (async () => {
-            try {
-                const premiumState = await verifyAndPersistWhopToken(request.token, "whop-popup-fallback");
-                sendResponse({
-                    success: true,
-                    premiumState
-                });
-            } catch (error) {
-                sendResponse({
-                    success: false,
-                    error: error instanceof Error ? error.message : "Token verification failed"
-                });
-            }
-        })();
-        return true;
-    }
-
-    if (request.action === "trackAnalyticsEvent") {
-        (async () => {
-            await sendAnalyticsEventSafe(request.eventName, request.params || {});
-            sendResponse({ success: true });
         })();
         return true;
     }
