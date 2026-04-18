@@ -12,6 +12,7 @@ const KEYS = {
     scheduledBlocks: "scheduledBlocks", // [{ domain: string, startTime: number, endTime: number }]
     activeBlocks: "activeBlocks",       // [{ domain: string, startTime: number, endTime: number }]
     snoozedDomains: "snoozedDomains",   // { [domain]: expiresAt (ms) }
+    snoozeHistory: "snoozeHistory",     // { [dayKey]: number }
     statsHistory: "statsHistory",       // { [dayKey]: { [domain]: { timeMs, visits } } }
     onboarding: "onboardingState",      // { step: 0|1|2, completed: boolean, completedAt: number|null }
     onboardingMetrics: "onboardingMetrics" // { installed, setupStarted, setupCompleted, setupSkipped, firstBlockEvent, firstBlockedPageView, day1Return, day7Return }
@@ -1573,10 +1574,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const { domain, minutes = 5 } = request;
         (async () => {
             const expiresAt = Date.now() + minutes * 60 * 1000;
-            const { [KEYS.snoozedDomains]: snoozedDomains = {} } =
-                await chrome.storage.local.get([KEYS.snoozedDomains]);
+            const {
+                [KEYS.snoozedDomains]: snoozedDomains = {},
+                [KEYS.snoozeHistory]: snoozeHistory = {}
+            } = await chrome.storage.local.get([KEYS.snoozedDomains, KEYS.snoozeHistory]);
+
+            const todayKey = getDayKey();
+            const nextSnoozeHistory = { ...snoozeHistory };
+            nextSnoozeHistory[todayKey] = Number(nextSnoozeHistory[todayKey] || 0) + 1;
+
             snoozedDomains[domain] = expiresAt;
-            await chrome.storage.local.set({ [KEYS.snoozedDomains]: snoozedDomains });
+            await chrome.storage.local.set({
+                [KEYS.snoozedDomains]: snoozedDomains,
+                [KEYS.snoozeHistory]: nextSnoozeHistory
+            });
             await updateBlockRules();
             chrome.alarms.create(`snoozeEnd_${domain}`, { when: expiresAt });
             await sendAnalyticsEventSafe("snooze_started", {
