@@ -18,9 +18,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 60,
     use24HourTime: false
 });
-const DEFAULT_DASHBOARD_PREFS = Object.freeze({
-    chartMode: "pie"
-});
+
 const DEFAULT_PREMIUM = Object.freeze({
     active: false,
     planName: "Free",
@@ -56,6 +54,7 @@ let saveMessageTimer = null;
 let latestActiveBlocks = [];
 let latestBlockedDomains = {};
 let latestStatsToday = {};
+let latestHourlyUsageHistory = {};
 let latestSnoozeHistory = {};
 let activeCountdownTimer = null;
 let popupRefreshTimer = null;
@@ -70,7 +69,8 @@ let currentOnboardingState = { step: 0, completed: false, completedAt: null };
 let selectedSuggestedSites = new Set(SUGGESTED_DEFAULTS.slice(0, 3).map(s => s.domain));
 let openRowMenuKey = null;
 let lastActiveRenderSignature = null;
-let currentChartMode = "pie";
+let forceHourlyPreviewMode = false; // set to false for real data
+let lastRenderedHourlyStatsSignature = null;
 
 const EMPTY_STATE_MESSAGES = Object.freeze({
     active: "No active sessions. Scheduled blocks and time-limited sites will appear here when they start.",
@@ -221,7 +221,7 @@ async function setOnboardingStep(step) {
 async function renderOnboardingSuggestedSites() {
     const container = $("suggestedSitesContainer");
     if (!container) return;
-    
+
     container.innerHTML = SUGGESTED_DEFAULTS.map((site) => {
         const isSelected = selectedSuggestedSites.has(site.domain);
         return `
@@ -234,29 +234,16 @@ async function renderOnboardingSuggestedSites() {
             </label>
         `;
     }).join('');
-    
-    container.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
-        checkbox.addEventListener('change', (e) => {
-            const domain = e.target.getAttribute('data-domain');
-            if (e.target.checked) {
-                selectedSuggestedSites.add(domain);
-            } else {
-                selectedSuggestedSites.delete(domain);
-            }
-        });
-    });
 }
 
 async function showOnboardingStep(step) {
     const overlay = $("onboardingOverlay");
     if (!overlay) return;
-    
-    // Hide all step screens
+
     $("onboardingStep0").style.display = "none";
     $("onboardingStep1").style.display = "none";
     $("onboardingStep2").style.display = "none";
-    
-    // Show the requested step
+
     const stepEl = $(`onboardingStep${step}`);
     if (stepEl) {
         stepEl.style.display = "flex";
@@ -354,8 +341,9 @@ function startPopupRefreshTicker() {
                 statsToday = {},
                 allStatsToday = {},
                 statsHistory = {},
+                hourlyUsageHistory = {},
                 snoozeHistory = {}
-            } = await chrome.storage.local.get(["activeBlocks", "blockedDomains", "statsToday", "allStatsToday", "statsHistory", "snoozeHistory"]);
+            } = await chrome.storage.local.get(["activeBlocks", "blockedDomains", "statsToday", "allStatsToday", "statsHistory", "hourlyUsageHistory", "snoozeHistory"]);
 
             latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
             latestBlockedDomains = blockedDomains || {};
@@ -363,10 +351,11 @@ function startPopupRefreshTicker() {
             latestSnoozeHistory = snoozeHistory || {};
 
             const range = $("statRange")?.value || "Today";
-            const rangeContext = getRangeSelectionContext(range, allStatsToday || {}, statsHistory || {});
+            const rangeContext = getRangeSelectionContext(range, allStatsToday || {}, statsHistory || {}, hourlyUsageHistory || {});
 
             updateStatStrip(rangeContext);
             updateDashboardSubhead(rangeContext.label);
+            renderHourlyDistribution(rangeContext.hourlyStats, rangeContext.label);
 
             const nextSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
             if (nextSignature !== lastActiveRenderSignature) {
@@ -484,6 +473,124 @@ function aggregateStatsForDayKeys(dayKeys = [], allStatsToday = {}, statsHistory
     return result;
 }
 
+function normalizeHourlyBucket(bucket = {}) {
+    const normalizedDomains = {};
+    if (bucket?.domains && typeof bucket.domains === "object") {
+        Object.entries(bucket.domains).forEach(([domain, timeMs]) => {
+            const normalizedTimeMs = Number(timeMs || 0);
+            if (!domain || normalizedTimeMs <= 0) return;
+            normalizedDomains[domain] = normalizedTimeMs;
+        });
+    }
+
+    return {
+        timeMs: Number(bucket?.timeMs || 0),
+        visits: Number(bucket?.visits || 0),
+        domains: normalizedDomains,
+        hasDomainBreakdown: Boolean(bucket?.domains && typeof bucket.domains === "object")
+    };
+}
+
+function aggregateHourlyUsageForDayKeys(dayKeys = [], hourlyUsageHistory = {}) {
+    const result = Array.from({ length: 24 }, (_, hour) => ({
+        hour,
+        timeMs: 0,
+        visits: 0,
+        domains: {},
+        hasDomainBreakdown: false
+    }));
+
+    (Array.isArray(dayKeys) ? dayKeys : []).forEach((dayKey) => {
+        const dayStats = hourlyUsageHistory?.[dayKey] || {};
+        Object.entries(dayStats || {}).forEach(([hourKey, bucket]) => {
+            const hour = Number(hourKey);
+            if (!Number.isInteger(hour) || hour < 0 || hour > 23) return;
+
+            const normalized = normalizeHourlyBucket(bucket);
+            result[hour].timeMs += normalized.timeMs;
+            result[hour].visits += normalized.visits;
+            result[hour].hasDomainBreakdown = result[hour].hasDomainBreakdown || normalized.hasDomainBreakdown;
+
+            Object.entries(normalized.domains).forEach(([domain, domainTimeMs]) => {
+                if (!result[hour].domains[domain]) result[hour].domains[domain] = 0;
+                result[hour].domains[domain] += domainTimeMs;
+            });
+        });
+    });
+
+    return result;
+}
+
+function formatHourLabel(hour) {
+    const normalizedHour = ((Number(hour) || 0) % 24 + 24) % 24;
+    const period = normalizedHour >= 12 ? "p" : "a";
+    const displayHour = normalizedHour % 12 || 12;
+    return `${displayHour}${period}`;
+}
+
+function formatHourRange(hour) {
+    const startHour = ((Number(hour) || 0) % 24 + 24) % 24;
+    const endHour = (startHour + 1) % 24;
+    return `${formatHourLabel(startHour)}-${formatHourLabel(endHour)}`;
+}
+
+function formatHourDetailed(hour) {
+    const normalizedHour = ((Number(hour) || 0) % 24 + 24) % 24;
+    const period = normalizedHour >= 12 ? "PM" : "AM";
+    const displayHour = normalizedHour % 12 || 12;
+    return `${displayHour}:00 ${period}`;
+}
+
+function formatHourRangeDetailed(hour) {
+    const startHour = ((Number(hour) || 0) % 24 + 24) % 24;
+    const endHour = (startHour + 1) % 24;
+    return {
+        start: formatHourDetailed(startHour),
+        end: formatHourDetailed(endHour)
+    };
+}
+
+function formatHourRangeTooltip(hour) {
+    const startHour = ((Number(hour) || 0) % 24 + 24) % 24;
+    const endHour = (startHour + 1) % 24;
+
+    const startDisplay = startHour % 12 || 12;
+    const endDisplay = endHour % 12 || 12;
+    const startPeriod = startHour >= 12 ? "PM" : "AM";
+    const endPeriod = endHour >= 12 ? "PM" : "AM";
+
+    if (startPeriod === endPeriod) {
+        return `${startDisplay}-${endDisplay} ${endPeriod}`;
+    }
+
+    return `${startDisplay} ${startPeriod}-${endDisplay} ${endPeriod}`;
+}
+
+function buildPreviewHourlyStats() {
+    const previewDomains = ["youtube.com", "twitter.com", "reddit.com", "facebook.com", "hacker-news.com"];
+    return Array.from({ length: 24 }, (_, hour) => {
+        const pattern = [2, 1, 1, 0, 0, 1, 3, 5, 6, 4, 3, 5, 7, 6, 4, 3, 4, 5, 8, 10, 9, 6, 4, 3];
+        const units = pattern[hour] || 0;
+        const totalTimeMs = units * 9 * 60 * 1000;
+        
+        // Distribute time among domains with some randomness
+        const domains = {};
+        const domainCount = Math.min(3, Math.max(1, Math.floor(units / 2)));
+        const selectedDomains = previewDomains.slice(0, domainCount);
+        const timePerDomain = totalTimeMs / selectedDomains.length;
+        selectedDomains.forEach(domain => {
+            domains[domain] = timePerDomain * (0.8 + Math.random() * 0.4);
+        });
+        
+        return {
+            hour,
+            timeMs: totalTimeMs,
+            visits: Math.max(0, Math.round(units * 1.6)),
+            domains
+        };
+    });
+}
+
 function getPreviousPeriodDayKeys(dayKeys = []) {
     if (!Array.isArray(dayKeys) || dayKeys.length === 0) return [];
     const first = parseDayKey(dayKeys[0]);
@@ -498,7 +605,7 @@ function getPreviousPeriodDayKeys(dayKeys = []) {
     return buildDayKeysInRange(previousStart, previousEnd);
 }
 
-function getRangeSelectionContext(range, allStatsToday = {}, statsHistory = {}) {
+function getRangeSelectionContext(range, allStatsToday = {}, statsHistory = {}, hourlyUsageHistory = {}) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -521,6 +628,7 @@ function getRangeSelectionContext(range, allStatsToday = {}, statsHistory = {}) 
     }
 
     const stats = aggregateStatsForDayKeys(dayKeys, allStatsToday, statsHistory);
+    const hourlyStats = aggregateHourlyUsageForDayKeys(dayKeys, hourlyUsageHistory);
     const previousKeys = getPreviousPeriodDayKeys(dayKeys);
     const previousStats = aggregateStatsForDayKeys(previousKeys, allStatsToday, statsHistory);
     const previousLabel = previousKeys.length
@@ -531,6 +639,7 @@ function getRangeSelectionContext(range, allStatsToday = {}, statsHistory = {}) 
         label,
         dayKeys,
         stats,
+        hourlyStats,
         previousStats,
         previousLabel
     };
@@ -547,7 +656,7 @@ function normalizeSettings(raw) {
 }
 
 function normalizeDashboardPrefs(raw) {
-    const chartMode = raw?.chartMode === "bar" ? "bar" : "pie";
+    const chartMode = "bar";
 
     return {
         chartMode
@@ -1233,63 +1342,300 @@ function renderBarDistribution(topRows, maxMs) {
     `;
 }
 
-function renderSiteDistribution(rangeStats = {}, rangeLabel = "Today", chartMode = "pie") {
-    const list = $("siteDistribution");
-    const insight = $("chartInsight");
-    const title = $("chartCardTitle");
+function getTopDomainsForHour(hourData = {}, maxResults = 3) {
+    if (!hourData?.domains || typeof hourData.domains !== 'object') {
+        return [];
+    }
+    
+    const entries = Object.entries(hourData.domains)
+        .map(([domain, timeMs]) => ({ domain, timeMs: Number(timeMs || 0) }))
+        .filter(e => e.timeMs > 0)
+        .sort((a, b) => b.timeMs - a.timeMs)
+        .slice(0, maxResults);
+    
+    return entries;
+}
+
+function getIntensityForNormalizedValue(normalizedValue) {
+    // normalizedValue: 0 (low) to 1 (peak)
+    if (normalizedValue < 0.25) return "low";
+    if (normalizedValue < 0.5) return "medium";
+    if (normalizedValue < 0.75) return "high";
+    return "peak";
+}
+
+function getColorGradientForIntensity(normalizedValue) {
+    // normalizedValue: 0 (low/cool) to 1 (high/warm)
+    // Returns a linear gradient from cool cyan/blue to warm orange/red
+    const t = Math.max(0, Math.min(1, normalizedValue)); // Clamp 0-1
+    
+    if (t < 0.5) {
+        // Cool side: cyan to purple (0 to 0.5)
+        const ratio = t * 2; // 0 to 1
+        const startR = 34,   startG = 217,  startB = 255;  // Cyan
+        const endR = 139,    endG = 111,    endB = 255;    // Purple
+        const r = Math.round(startR + (endR - startR) * ratio);
+        const g = Math.round(startG + (endG - startG) * ratio);
+        const b = Math.round(startB + (endB - startB) * ratio);
+        return `linear-gradient(180deg, rgba(${r},${g},${b},.95), rgba(${Math.round(r*0.8)},${Math.round(g*0.8)},${Math.round(b*0.8)},.82))`;
+    } else {
+        // Warm side: purple to orange/red (0.5 to 1)
+        const ratio = (t - 0.5) * 2; // 0 to 1
+        const startR = 139,  startG = 111,  startB = 255;  // Purple
+        const endR = 255,    endG = 77,     endB = 109;    // Red
+        const r = Math.round(startR + (endR - startR) * ratio);
+        const g = Math.round(startG + (endG - startG) * ratio);
+        const b = Math.round(startB + (endB - startB) * ratio);
+        return `linear-gradient(180deg, rgba(${r},${g},${b},.95), rgba(${Math.round(r*0.85)},${Math.round(g*0.85)},${Math.round(b*0.85)},.82))`;
+    }
+}
+
+function renderHourlyDistribution(hourlyStats = [], rangeLabel = "Today") {
+    const list = $("hourlyDistribution");
+    const insight = $("usageInsight");
+    const title = $("usageCardTitle");
     if (!list) return;
 
-    if (title) title.textContent = `Site Distribution · ${rangeLabel}`;
-
-    const topRows = getTopDomains(rangeStats, "timeMs", 6);
-    if (topRows.length === 0) {
-        list.classList.add("muted");
-        list.textContent = "No distribution data yet.";
-        if (insight) {
-            insight.classList.add("muted");
-            insight.classList.remove("is-actionable");
-            insight.textContent = "Insight will appear once enough data is available.";
-        }
-        return;
+    // Create signature to detect if data changed
+    const currentSignature = JSON.stringify([hourlyStats, rangeLabel, forceHourlyPreviewMode]);
+    if (currentSignature === lastRenderedHourlyStatsSignature) {
+        return; // Skip re-render if data hasn't changed
     }
+    lastRenderedHourlyStatsSignature = currentSignature;
+
+    if (title) title.textContent = `Daily Usage Distribution · ${rangeLabel}`;
+
+    const buckets = Array.isArray(hourlyStats) ? hourlyStats : [];
+    // Force preview mode if forceHourlyPreviewMode is true
+    const hasUsage = !forceHourlyPreviewMode && buckets.some((bucket) => Number(bucket?.timeMs || 0) > 0);
+    const previewBuckets = hasUsage ? buckets : buildPreviewHourlyStats();
+    const isPreview = !hasUsage;
+
+    const maxMs = previewBuckets.reduce((max, bucket) => Math.max(max, Number(bucket?.timeMs || 0)), 0);
+    
+    // Find peak hour
+    let peakHour = -1;
+    let peakTimeMs = 0;
+    previewBuckets.forEach((bucket, hour) => {
+        const timeMs = Number(bucket?.timeMs || 0);
+        if (timeMs > peakTimeMs) {
+            peakTimeMs = timeMs;
+            peakHour = hour;
+        }
+    });
+
+    const topBuckets = previewBuckets
+        .filter((bucket) => Number(bucket?.timeMs || 0) > 0)
+        .map((bucket) => ({
+            hour: Number(bucket?.hour || 0),
+            timeMs: Number(bucket?.timeMs || 0)
+        }))
+        .sort((a, b) => b.timeMs - a.timeMs)
+        .slice(0, 3);
 
     list.classList.remove("muted");
-    const totalMs = topRows.reduce((sum, row) => sum + row.timeMs, 0);
-    const maxMs = topRows.reduce((max, row) => Math.max(max, row.timeMs), 0);
-    list.innerHTML = chartMode === "bar"
-        ? renderBarDistribution(topRows, maxMs)
-        : renderPieDistribution(topRows, totalMs);
+    list.innerHTML = `
+        <div class="hourly-chart-wrap">
+        <div class="hourly-chart" aria-label="Hourly usage distribution">
+            ${previewBuckets.map((bucket, hour) => {
+                const timeMs = Number(bucket?.timeMs || 0);
+                const heightPct = maxMs > 0 ? Math.max(6, Math.round((timeMs / maxMs) * 100)) : 6;
+                const label = hour % 3 === 0 ? formatHourLabel(hour) : "";
+                const domainData = JSON.stringify(getTopDomainsForHour(bucket, 3));
+                const hasDomainBreakdown = bucket?.hasDomainBreakdown === true;
+                const isPeak = hour === peakHour && peakTimeMs > 0;
+                
+                // Calculate normalized value and color gradient
+                const normalizedValue = maxMs > 0 ? timeMs / maxMs : 0;
+                const colorGradient = getColorGradientForIntensity(normalizedValue);
+                
+                return `
+                    <div class="hourly-slot${isPeak ? " is-peak" : ""}" 
+                         data-hour="${hour}"
+                         data-time-ms="${timeMs}"
+                         data-domains='${domainData}'
+                         data-has-domain-breakdown="${hasDomainBreakdown}"
+                         data-is-peak="${isPeak}"
+                         role="button"
+                         tabindex="0"
+                         aria-pressed="false"
+                         title="${formatHourRange(hour)}: ${formatTimeSec(Math.round(timeMs / 1000))}">
+                        <div class="hourly-slot-bar">
+                            <div class="hourly-slot-fill" style="height:${heightPct}%; background: ${colorGradient};"></div>
+                        </div>
+                        <div class="hourly-slot-label">${label || "&nbsp;"}</div>
+                    </div>
+                `;
+            }).join("")}
+        </div>
+        </div>
+    `;
 
     if (!insight) return;
 
-    const topSite = topRows[0];
-    const isLimited = Boolean(latestBlockedDomains?.[topSite.domain]);
-    const topTime = formatTimeSec(Math.round(topSite.timeMs / 1000));
-
-    if (isLimited) {
-        insight.classList.remove("muted", "is-actionable");
-        insight.innerHTML = `<div class="insight-copy">You've spent <strong>${topTime}</strong> on <strong>${topSite.domain}</strong> today. It's already limited.</div>`;
-        return;
-    }
-
-    if (!canAddMoreDomains(latestBlockedDomains)) {
-        insight.classList.remove("is-actionable");
+    if (isPreview) {
         insight.classList.add("muted");
-        insight.innerHTML = `<div class="insight-copy">You've spent <strong>${topTime}</strong> on <strong>${topSite.domain}</strong> today. Upgrade to pro to add another limit.</div>`;
-        return;
+        insight.textContent = "Click a bar to view details.";
+    } else {
+        insight.classList.remove("muted");
+        insight.textContent = "Select a bar to inspect this hour.";
     }
 
-    insight.classList.remove("muted");
-    insight.classList.add("is-actionable");
-    insight.innerHTML = `
-        <div class="insight-copy">You've spent <strong>${topTime}</strong> on <strong>${topSite.domain}</strong> today. Want to add a limit?</div>
-        <button class="tag action-chip action-chip-primary" id="chartInsightBlockBtn" type="button">Add limit</button>
-    `;
+    // Attach click event listeners for persistent detail pane updates.
+    // This runs after the placeholder text so selected-bar details are not overwritten.
+    attachHourlySlotClickHandlers(list, insight, isPreview, topBuckets, peakHour);
 
-    $("chartInsightBlockBtn")?.addEventListener("click", async () => {
-        await addDomain(topSite.domain, currentSettings.defaultLimitMinutes * 60, "chart_insight_add_limit");
-        await loadAll();
+    if (isPreview) {
+        return;
+    }
+}
+
+function attachHourlySlotClickHandlers(chartContainer, insightElement, isPreview, topBuckets, peakHour) {
+    if (!chartContainer) return;
+
+    const slots = chartContainer.querySelectorAll('.hourly-slot');
+
+    const toScheduleTime = (hour) => {
+        const normalizedHour = Number.isInteger(hour) ? ((hour % 24) + 24) % 24 : 0;
+        return `${String(normalizedHour).padStart(2, "0")}:00`;
+    };
+
+    const addScheduledBlockForHour = async (domain, hour) => {
+        const selectedHour = Number.isInteger(hour) ? hour : 0;
+        const startHour = ((selectedHour % 24) + 24) % 24;
+        const endHour = (startHour + 1) % 24;
+        const startTime = toScheduleTime(startHour);
+        const endTime = toScheduleTime(endHour);
+
+        const { scheduledBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks"]);
+        if (!canAddMoreScheduledBlocks(scheduledBlocks)) {
+            setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxScheduledBlocks} scheduled blocks.`, "error");
+            return false;
+        }
+
+        const response = await chrome.runtime.sendMessage({
+            action: "addScheduledBlock",
+            domain,
+            startTime,
+            endTime,
+            daysOfWeek: [...ALL_SCHEDULE_DAYS]
+        }).catch(() => ({ success: false, error: "Unable to save the scheduled block." }));
+
+        if (!response?.success) {
+            setPremiumStatusMessage(response?.error || "Unable to save the scheduled block.", "error");
+            return false;
+        }
+
+        return true;
+    };
+
+    const renderDetailsForSlot = (slot) => {
+        if (!insightElement) return;
+
+        const hour = parseInt(slot.getAttribute('data-hour'), 10);
+        const timeMs = parseInt(slot.getAttribute('data-time-ms'), 10);
+        const hasDomainBreakdown = slot.getAttribute('data-has-domain-breakdown') === 'true';
+        const isPeak = slot.getAttribute('data-is-peak') === 'true';
+        let domainsData = [];
+
+        try {
+            domainsData = JSON.parse(slot.getAttribute('data-domains') || '[]');
+        } catch {
+            domainsData = [];
+        }
+
+        slots.forEach((s) => {
+            s.classList.remove('is-selected');
+            s.setAttribute('aria-pressed', 'false');
+        });
+
+        slot.classList.add('is-selected');
+        slot.setAttribute('aria-pressed', 'true');
+
+        if (timeMs <= 0) {
+            insightElement.classList.add('muted');
+            insightElement.textContent = `${formatHourRangeTooltip(hour)} has no tracked usage.`;
+            return;
+        }
+
+        const detailedRange = formatHourRangeTooltip(hour);
+        const siteRows = domainsData
+            .map((d) => {
+                return `<div class="hourly-tip-site-row"><div class="hourly-tip-site-main"><div class="hourly-tip-site-domain">${d.domain}</div></div><div class="hourly-tip-site-time">${formatTimeSec(Math.round(d.timeMs / 1000))}</div></div>`;
+            })
+            .join('');
+
+        const totalSeconds = Math.round(timeMs / 1000);
+        const timeSpentText = `${formatTimeSec(totalSeconds)} spent`;
+
+        insightElement.classList.remove('muted');
+        insightElement.innerHTML = `
+            <div class="hourly-tip-header">
+                <div class="hourly-tip-time">${detailedRange}${isPeak ? ' · <span class="hourly-tip-inline-peak">Peak</span>' : ''}</div>
+                <div class="hourly-tip-time-spent">${timeSpentText}</div>
+            </div>
+
+            ${domainsData.length > 0
+                ? `<div class="hourly-tip-sites">${siteRows}</div>`
+                : `<div class="hourly-tip-sites"><div class="hourly-tip-empty">${hasDomainBreakdown ? "No tracked sites this hour" : "Site breakdown unavailable for this hour"}</div></div>`}
+
+            <div class="hourly-tip-footer">
+                <div class="hourly-tip-actions">
+                    <button class="hourly-action-btn primary is-compact" data-action="set-limit" data-hour="${hour}">Limit</button>
+                    <button class="hourly-action-btn secondary is-compact" data-action="schedule-hour" data-hour="${hour}">Schedule</button>
+                </div>
+            </div>
+        `;
+
+        insightElement.querySelectorAll('.hourly-action-btn').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const action = btn.getAttribute('data-action');
+                if (domainsData.length === 0) return;
+
+                const topDomain = domainsData[0].domain;
+                if (action === 'set-limit') {
+                    if (!canAddMoreDomains(latestBlockedDomains) && !latestBlockedDomains?.[topDomain]) {
+                        setPremiumStatusMessage(`Free plan allows up to ${FREE_PLAN_LIMITS.maxTrackedDomains} limited domains.`, "error");
+                        return;
+                    }
+                    await addDomain(topDomain, currentSettings.defaultLimitMinutes * 60, "hourly_chart_set_limit");
+                    await loadAll();
+                } else if (action === 'schedule-hour') {
+                    const created = await addScheduledBlockForHour(topDomain, hour);
+                    if (!created) return;
+                    await loadAll();
+                }
+            });
+        });
+    };
+
+    slots.forEach((slot) => {
+        slot.addEventListener('click', () => {
+            renderDetailsForSlot(slot);
+        });
+
+        slot.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                renderDetailsForSlot(slot);
+            }
+        });
     });
+
+    if (isPreview) return;
+
+    const defaultSlot = Array.from(slots).find((slot) => Number(slot.getAttribute('data-hour')) === peakHour)
+        || Array.from(slots).find((slot) => Number(slot.getAttribute('data-time-ms') || 0) > 0)
+        || slots[0];
+
+    if (defaultSlot) {
+        renderDetailsForSlot(defaultSlot);
+    } else if (insightElement) {
+        insightElement.classList.add('muted');
+        insightElement.textContent = topBuckets.length > 0
+            ? `Click a bar to inspect usage.`
+            : "No peak period yet";
+    }
 }
 
 function updateStreakChip(statsHistory = {}, allStatsToday = {}) {
@@ -1420,18 +1766,20 @@ async function loadAll() {
     try {
         do {
             loadAllPending = false;
+            lastRenderedHourlyStatsSignature = null; // Reset to force re-render on range change
 
             const {
                 blockedDomains = {},
                 statsToday = {},
                 allStatsToday = {},
                 statsHistory = {},
+                hourlyUsageHistory = {},
                 snoozeHistory = {},
                 activeBlocks = [],
                 scheduledBlocks = [],
                 [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS,
                 [PREMIUM_KEY]: premiumStored = DEFAULT_PREMIUM
-            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "snoozeHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY]);
+            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "hourlyUsageHistory", "snoozeHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY]);
 
             currentSettings = normalizeSettings(storedSettings);
             currentPremium = normalizePremium(premiumStored);
@@ -1449,12 +1797,12 @@ async function loadAll() {
             lastActiveRenderSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
 
             const range = $("statRange")?.value || "Today";
-            const rangeContext = getRangeSelectionContext(range, allStatsToday, statsHistory);
+            const rangeContext = getRangeSelectionContext(range, allStatsToday, statsHistory, hourlyUsageHistory);
             const rangeStats = rangeContext.stats;
 
             updateStatStrip(rangeContext);
             updateDashboardSubhead(rangeContext.label);
-            renderSiteDistribution(rangeStats, rangeContext.label, currentChartMode);
+            renderHourlyDistribution(rangeContext.hourlyStats, rangeContext.label);
             updateStreakChip(statsHistory, allStatsToday);
             renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
             renderScheduled(effectiveScheduledBlocks, latestActiveBlocks);
@@ -1473,6 +1821,7 @@ async function loadAll() {
 
 function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
     const list = $("activeList");
+    const card = $("activeCard");
     const count = $("activeCount");
     const statusPill = document.querySelector(".status-pill");
 
@@ -1493,11 +1842,13 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
     statusPill?.classList.toggle("is-inactive", totalActive === 0);
 
     if (active.length === 0) {
-        list.classList.add("muted");
-        list.textContent = EMPTY_STATE_MESSAGES.active;
-        list.classList.add("empty-state");
+        // Hide card if empty
+        if (card) card.style.display = "none";
         return;
     }
+
+    // Show card
+    if (card) card.style.display = "";
 
     list.classList.remove("muted");
     list.classList.remove("empty-state");
@@ -1740,10 +2091,12 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
         }
         rank.appendChild(div);
     });
+
 }
 
 function renderBlockList(blockedDomains, statsToday) {
-    const list = $("blockList");
+    const list = $("limitList") || $("blockList");
+    if (!list) return;
     const entries = Object.entries(blockedDomains || {});
 
     if (entries.length === 0) {
@@ -2227,7 +2580,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
         latestSnoozeHistory = changes.snoozeHistory.newValue || {};
     }
 
-    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes[DASHBOARD_PREFS_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks || changes.statsHistory || changes.snoozeHistory) {
+    if (changes.hourlyUsageHistory) {
+        latestHourlyUsageHistory = changes.hourlyUsageHistory.newValue || {};
+    }
+
+    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes[DASHBOARD_PREFS_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks || changes.statsHistory || changes.snoozeHistory || changes.hourlyUsageHistory) {
         loadAll();
     }
 });
