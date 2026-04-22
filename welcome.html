@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>Welcome | Screen Time Manager</title>
+        <link rel="stylesheet" href="welcome.css" />
+    </head>
+    <body>
+        <div class="grain" aria-hidden="true"></div>
+
+        <main class="layout">
+            <section class="hero">
+                <p class="kicker">Screen Time Manager</p>
+                <h1>Successfully installed</h1>
+                <p class="lede">
+                    Screen Time Manager is now running in your browser. Begin onboarding to lock in limits,
+                    set blocks, and stay in control.
+                </p>
+
+                <div class="meta" role="status" aria-live="polite">
+                    <span class="pill" id="reasonPill">Installed</span>
+                    <span class="pill" id="versionPill">Version</span>
+                </div>
+
+                <div class="actions">
+                    <button type="button" class="btn primary" id="openDashboardBtn">Open Dashboard</button>
+                    <button type="button" class="btn secondary" id="openGuideBtn">View Quick Guide</button>
+                </div>
+            </section>
+
+            <section class="checklist" aria-label="Quick setup checklist">
+                <h2>Lets get started</h2>
+                <ol>
+                    <li>Click Open Dashboard.</li>
+                    <li>Set a limit on a distracting site.</li>
+                    <li>Start taking back your time.</li>
+                </ol>
+                <div class="note-row">
+                    <p class="note">
+                        Tip: Pin this extension so limits are just a click away.
+                    </p>
+                </div>
+            </section>
+        </main>
+
+        <script src="welcome.js"></script>
+    </body>
+</html>

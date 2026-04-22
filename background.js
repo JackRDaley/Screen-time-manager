@@ -6,6 +6,7 @@ const KEYS = {
     blockedDomains: "blockedDomains", // { [domain]: { limitMinutes } }
     statsToday: "statsToday",         // { [domain]: { timeSec, visits, lastSeenDay } }
     allStatsToday: "allStatsToday",   // { [domain]: { timeMs, visits } } for all websites
+    hourlyUsageHistory: "hourlyUsageHistory", // { [dayKey]: { [hour]: { timeMs, visits } } }
     dayKey: "statsDayKey",            // "YYYY-MM-DD"
     enforceIntervalSec: "enforceIntervalSec", // optional: number of seconds between enforce checks
     alertsSent: "alertsSent",          // { [domain]: Set of alert thresholds already notified ("75", "90") }
@@ -15,7 +16,8 @@ const KEYS = {
     snoozeHistory: "snoozeHistory",     // { [dayKey]: number }
     statsHistory: "statsHistory",       // { [dayKey]: { [domain]: { timeMs, visits } } }
     onboarding: "onboardingState",      // { step: 0|1|2, completed: boolean, completedAt: number|null }
-    onboardingMetrics: "onboardingMetrics" // { installed, setupStarted, setupCompleted, setupSkipped, firstBlockEvent, firstBlockedPageView, day1Return, day7Return }
+    onboardingMetrics: "onboardingMetrics", // { installed, setupStarted, setupCompleted, setupSkipped, firstBlockEvent, firstBlockedPageView, day1Return, day7Return }
+    postInstallRedirectMeta: "postInstallRedirectMeta" // { reason: "install"|"update", version: string, shownAt: number }
 };
 
 const PREMIUM_KEY = "premiumState";
@@ -411,8 +413,11 @@ async function ensureDayReset() {
     const today = getDayKey();
     if (storedDay !== today) {
         if (storedDay) {
-            const { [KEYS.allStatsToday]: allStats = {}, [KEYS.statsHistory]: history = {} } =
-                await chrome.storage.local.get([KEYS.allStatsToday, KEYS.statsHistory]);
+            const {
+                [KEYS.allStatsToday]: allStats = {},
+                [KEYS.statsHistory]: history = {},
+                [KEYS.hourlyUsageHistory]: hourlyUsageHistory = {}
+            } = await chrome.storage.local.get([KEYS.allStatsToday, KEYS.statsHistory, KEYS.hourlyUsageHistory]);
             if (Object.keys(allStats).length > 0) {
                 history[storedDay] = allStats;
                 const cutoffDate = new Date();
@@ -421,10 +426,14 @@ async function ensureDayReset() {
                 for (const key of Object.keys(history)) {
                     if (key < cutoff) delete history[key];
                 }
+                for (const key of Object.keys(hourlyUsageHistory)) {
+                    if (key < cutoff) delete hourlyUsageHistory[key];
+                }
                 await chrome.storage.local.set({
                     [KEYS.statsHistory]: history,
                     [KEYS.statsToday]: {},
                     [KEYS.allStatsToday]: {},
+                    [KEYS.hourlyUsageHistory]: hourlyUsageHistory,
                     [KEYS.dayKey]: today
                 });
                 return;
@@ -434,13 +443,69 @@ async function ensureDayReset() {
     }
 }
 
-async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false } = {}) {
+function getOrCreateHourlyBucket(hourlyUsageHistory, dayKey, hourKey) {
+    if (!hourlyUsageHistory[dayKey]) {
+        hourlyUsageHistory[dayKey] = {};
+    }
+
+    if (!hourlyUsageHistory[dayKey][hourKey]) {
+        hourlyUsageHistory[dayKey][hourKey] = { timeMs: 0, visits: 0, domains: {} };
+    }
+
+    return hourlyUsageHistory[dayKey][hourKey];
+}
+
+function recordHourlyUsage(hourlyUsageHistory, startMs, endMs, countVisit = false, domain = null) {
+    if (!hourlyUsageHistory || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+        return hourlyUsageHistory;
+    }
+
+    let cursorMs = startMs;
+    while (cursorMs < endMs) {
+        const cursor = new Date(cursorMs);
+        const nextHour = new Date(cursor);
+        nextHour.setHours(nextHour.getHours() + 1, 0, 0, 0);
+        const segmentEndMs = Math.min(endMs, nextHour.getTime());
+        const durationMs = Math.max(0, segmentEndMs - cursorMs);
+
+        if (durationMs > 0) {
+            const dayKey = getDayKey(cursor);
+            const hourKey = String(cursor.getHours()).padStart(2, "0");
+            const bucket = getOrCreateHourlyBucket(hourlyUsageHistory, dayKey, hourKey);
+            bucket.timeMs += durationMs;
+            if (countVisit) {
+                bucket.visits += 1;
+            }
+            // Track per-domain hourly usage if domain provided
+            if (domain) {
+                if (!bucket.domains) bucket.domains = {};
+                if (!bucket.domains[domain]) bucket.domains[domain] = 0;
+                bucket.domains[domain] += durationMs;
+            }
+        }
+
+        cursorMs = segmentEndMs;
+    }
+
+    return hourlyUsageHistory;
+}
+
+async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false, startMs = null, endMs = null } = {}) {
     if (!domain) return;
     if (deltaMs <= 0 && !countVisit) return;
     await ensureDayReset();
 
-    const { blockedDomains = {}, [KEYS.statsToday]: stats = {}, [KEYS.allStatsToday]: allStats = {} } =
-        await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday, KEYS.allStatsToday]);
+    const storageKeys = [KEYS.blockedDomains, KEYS.statsToday, KEYS.allStatsToday];
+    if (deltaMs > 0) {
+        storageKeys.push(KEYS.hourlyUsageHistory);
+    }
+
+    const {
+        blockedDomains = {},
+        [KEYS.statsToday]: stats = {},
+        [KEYS.allStatsToday]: allStats = {},
+        [KEYS.hourlyUsageHistory]: hourlyUsageHistory = {}
+    } = await chrome.storage.local.get(storageKeys);
 
     const cur = stats[domain] || { timeMs: 0, visits: 0 };
     const allCur = allStats[domain] || { timeMs: 0, visits: 0 };
@@ -454,9 +519,24 @@ async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false } 
         allCur.visits = (allCur.visits || 0) + 1;
     }
 
+    if (deltaMs > 0) {
+        const usageStartMs = Number.isFinite(startMs) ? startMs : Date.now() - deltaMs;
+        const usageEndMs = Number.isFinite(endMs) ? endMs : usageStartMs + deltaMs;
+        recordHourlyUsage(hourlyUsageHistory, usageStartMs, usageEndMs, false, domain);
+    }
+
     stats[domain] = cur;
     allStats[domain] = allCur;
-    await chrome.storage.local.set({ [KEYS.statsToday]: stats, [KEYS.allStatsToday]: allStats });
+    const nextStorage = {
+        [KEYS.statsToday]: stats,
+        [KEYS.allStatsToday]: allStats
+    };
+
+    if (deltaMs > 0) {
+        nextStorage[KEYS.hourlyUsageHistory] = hourlyUsageHistory;
+    }
+
+    await chrome.storage.local.set(nextStorage);
 
     if (deltaMs > 0) {
         // Check for alerts after updating time
@@ -911,7 +991,7 @@ async function flushTime({ ignoreCurrentGap = false } = {}) {
 
     // When a sleep/resume gap is detected by alarm drift, we reset baseline without counting stale time.
     if (!ignoreCurrentGap && deltaMs > 0) {
-        await updateDomainActivity(activeDomain, { deltaMs });
+        await updateDomainActivity(activeDomain, { deltaMs, startMs: nowMs - deltaMs, endMs: nowMs });
     }
     
     // immediately check if we should enforce on the active tab
@@ -1244,6 +1324,73 @@ async function initializeExtension() {
     await syncActionBadge();
 }
 
+async function maybeOpenPostInstallRedirect(details) {
+    const installReason = String(details?.reason || "");
+    if (installReason !== "install" && installReason !== "update") {
+        return;
+    }
+
+    const version = String(chrome.runtime.getManifest()?.version || "unknown");
+    const shownAt = Date.now();
+    await chrome.storage.local.set({
+        [KEYS.postInstallRedirectMeta]: {
+            reason: installReason,
+            version,
+            shownAt
+        }
+    });
+
+    const welcomeUrl = new URL(chrome.runtime.getURL("welcome.html"));
+    welcomeUrl.searchParams.set("reason", installReason);
+    welcomeUrl.searchParams.set("version", version);
+
+    try {
+        await chrome.tabs.create({ url: welcomeUrl.toString(), active: true });
+        await sendAnalyticsEventSafe("post_install_redirect_shown", {
+            install_reason: installReason,
+            extension_version: sanitizeAnalyticsText(version, "unknown", 40)
+        });
+    } catch (error) {
+        await sendAnalyticsEventSafe("post_install_redirect_failed", {
+            install_reason: installReason,
+            extension_version: sanitizeAnalyticsText(version, "unknown", 40),
+            error_name: sanitizeAnalyticsText(error?.name, "unknown_error", 40)
+        });
+    }
+}
+
+async function maybeForceOpenExtensionOnInstall(details) {
+    const installReason = String(details?.reason || "");
+    if (installReason !== "install") {
+        return;
+    }
+
+    try {
+        if (typeof chrome.action?.openPopup === "function") {
+            await chrome.action.openPopup();
+            await sendAnalyticsEventSafe("post_install_extension_opened", {
+                method: "action_popup"
+            });
+            return;
+        }
+
+        throw new Error("open_popup_unavailable");
+    } catch (error) {
+        try {
+            await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html"), active: true });
+            await sendAnalyticsEventSafe("post_install_extension_opened", {
+                method: "popup_tab_fallback",
+                error_name: sanitizeAnalyticsText(error?.name, "unknown_error", 40)
+            });
+        } catch (fallbackError) {
+            await sendAnalyticsEventSafe("post_install_extension_open_failed", {
+                method: "popup_tab_fallback",
+                error_name: sanitizeAnalyticsText(fallbackError?.name, "unknown_error", 40)
+            });
+        }
+    }
+}
+
 chrome.runtime.onStartup?.addListener(() => {
     (async () => {
         await initializeExtension();
@@ -1254,6 +1401,8 @@ chrome.runtime.onStartup?.addListener(() => {
 chrome.runtime.onInstalled.addListener((details) => {
     (async () => {
         await initializeExtension();
+        await maybeOpenPostInstallRedirect(details);
+        await maybeForceOpenExtensionOnInstall(details);
         await trackRetentionMetrics("installed", details?.reason || "unknown");
     })().catch(console.error);
 });

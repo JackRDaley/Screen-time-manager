@@ -113,25 +113,46 @@
         <div class="panel panel-dashboard" id="p1">
             <div class="stat-strip">
                 <div class="stat-box">
-                    <div class="stat-lbl">Screen time</div>
-                    <div class="stat-value-row">
-                        <div class="stat-val" id="statScreenTime">—</div>
-                        <div class="stat-delta" id="statScreenTimeDelta">—</div>
+                    <div class="stat-main">
+                        <div class="stat-icon-circle" aria-hidden="true">
+                            <img class="stat-icon" src="clock-regular-full.svg" alt="" />
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-lbl">Screen time</div>
+                            <div class="stat-value-row">
+                                <div class="stat-val" id="statScreenTime">—</div>
+                            </div>
+                        </div>
                     </div>
+                    <div class="stat-delta" id="statScreenTimeDelta">—</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-lbl">Visits</div>
-                    <div class="stat-value-row">
-                        <div class="stat-val" id="statVisits">—</div>
-                        <div class="stat-delta" id="statVisitsDelta">—</div>
+                    <div class="stat-main">
+                        <div class="stat-icon-circle" aria-hidden="true">
+                            <img class="stat-icon" src="arrow-pointer-solid-full.svg" alt="" />
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-lbl">Visits</div>
+                            <div class="stat-value-row">
+                                <div class="stat-val" id="statVisits">—</div>
+                            </div>
+                        </div>
                     </div>
+                    <div class="stat-delta" id="statVisitsDelta">—</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-lbl">Snoozes</div>
-                    <div class="stat-value-row">
-                        <div class="stat-val" id="statSnoozes">—</div>
-                        <div class="stat-delta" id="statSnoozesDelta">—</div>
+                    <div class="stat-main">
+                        <div class="stat-icon-circle" aria-hidden="true">
+                            <img class="stat-icon" src="circle-pause-regular-full.svg" alt="" />
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-lbl">Snoozes</div>
+                            <div class="stat-value-row">
+                                <div class="stat-val" id="statSnoozes">—</div>
+                            </div>
+                        </div>
                     </div>
+                    <div class="stat-delta" id="statSnoozesDelta">—</div>
                 </div>
                 <div class="stat-filter-wrap">
                     <select class="stat-filter" id="statRange" aria-label="Stats range">
@@ -144,37 +165,45 @@
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card" id="activeCard" data-hide-if-empty="true">
                 <div class="card-head">
                     <div class="card-title">Active Sessions</div>
                 </div>
                 <div id="activeList" class="list muted">No active sessions.</div>
             </div>
 
-            <div class="card">
+            <div class="card" id="rankingCard">
                 <div class="card-head">
-                    <div class="card-title" id="chartCardTitle">Site Distribution &middot; Today</div>
-                    <div class="chart-toggle" role="tablist" aria-label="Chart mode">
-                        <button class="chart-toggle-btn is-active" id="chartModePie" type="button" data-chart-mode="pie" role="tab" aria-selected="true">Pie</button>
-                        <button class="chart-toggle-btn" id="chartModeBar" type="button" data-chart-mode="bar" role="tab" aria-selected="false">Bar</button>
-                    </div>
-                </div>
-                <div id="siteDistribution" class="list muted">No data yet.</div>
-                <div id="chartInsight" class="chart-insight muted">Insight will appear once enough data is available.</div>
-            </div>
-
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title">Top Sites &middot; Time</div>
+                    <div class="card-title">Time Spent</div>
                 </div>
                 <div id="ranking" class="list muted">No data yet.</div>
             </div>
 
-            <div class="card">
+            <div class="card" id="rankingByVisitsCard">
                 <div class="card-head">
-                    <div class="card-title">Top Sites &middot; Visits</div>
+                    <div class="card-title">Most Visited</div>
                 </div>
                 <div id="rankingByVisits" class="list muted">No data yet.</div>
+            </div>
+
+            <div class="usage-row">
+                <div class="card" id="usageCard">
+                    <div class="card-head">
+                        <div class="card-title" id="usageCardTitle">Hourly Usage</div>
+                    </div>
+                    <div class="hourly-chart-section">
+                        <div id="hourlyDistribution" class="hourly-distribution muted">No data yet.</div>
+                    </div>
+                </div>
+
+                <div class="card" id="usageCardInfo">
+                    <div class="card-head">
+                        <div class="card-title">Usage info</div>
+                    </div>
+                    <div class="card-body">
+                        <div id="usageInsight" class="muted">Click a bar to view details.</div>
+                    </div>
+                </div>
             </div>
 
         </div>
@@ -209,9 +238,9 @@
 
             <div class="card">
                 <div class="card-head">
-                    <div class="card-title">Block List</div>
+                    <div class="card-title">Limit List</div>
                 </div>
-                <div id="blockList" class="list muted">No blocked sites yet.</div>
+                <div id="limitList" class="list muted">No limits set yet.</div>
             </div>
         </div>
 
