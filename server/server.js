@@ -6,7 +6,21 @@ import { z } from "zod";
 const app = express();
 const port = Number(process.env.PORT || 8787);
 
-app.use(cors({ origin: true }));
+const EXTENSION_ORIGIN_RE = /^chrome-extension:\/\/[a-p]{32}$/i;
+
+app.use(cors({
+	origin(origin, callback) {
+		if (!origin) {
+			return callback(null, false);
+		}
+
+		if (EXTENSION_ORIGIN_RE.test(origin)) {
+			return callback(null, true);
+		}
+
+		return callback(null, false);
+	}
+}));
 app.use(express.json({ limit: "64kb" }));
 
 const verifyBodySchema = z.object({
@@ -65,21 +79,35 @@ async function verifyWithWhop(token) {
 		};
 	}
 
-	const response = await fetch(whopVerifyUrl, {
-		method: "POST",
-		headers: {
-		"Content-Type": "application/json",
-		Authorization: `Bearer ${whopApiKey}`
-		},
-		body: JSON.stringify({ token })
-	});
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-	if (!response.ok) {
-		throw new Error(`Whop verify failed with status ${response.status}`);
+	try {
+		const response = await fetch(whopVerifyUrl, {
+			method: "POST",
+			headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${whopApiKey}`
+			},
+			body: JSON.stringify({ token }),
+			signal: controller.signal
+		});
+
+		if (!response.ok) {
+			throw new Error(`Whop verify failed with status ${response.status}`);
+		}
+
+		const data = await response.json();
+		return normalizeWhopResult(data);
+	} catch (error) {
+		if (error?.name === "AbortError") {
+			throw new Error("Whop verify timed out");
+		}
+
+		throw error;
+	} finally {
+		clearTimeout(timeoutId);
 	}
-
-	const data = await response.json();
-	return normalizeWhopResult(data);
 }
 
 app.get("/health", (_req, res) => {

@@ -14,6 +14,14 @@ function json(data, status = 200, extraHeaders = {}) {
     });
 }
 
+function getRequestOrigin(request) {
+    return String(request.headers.get("Origin") || request.headers.get("origin") || "");
+}
+
+function isTrustedExtensionOrigin(origin) {
+    return /^chrome-extension:\/\/[a-p]{32}$/i.test(String(origin || ""));
+}
+
 function bytesToBase64Url(bytes) {
     let binary = "";
     for (const byte of bytes) {
@@ -916,8 +924,20 @@ const WEBHOOK_DEACTIVATE_EVENTS = new Set([
 export default {
     async fetch(request, env) {
         const url = new URL(request.url);
+        const requestOrigin = getRequestOrigin(request);
 
         if (request.method === "OPTIONS") {
+        if (url.pathname === "/analytics/block-event" || url.pathname === "/analytics/event") {
+            if (!isTrustedExtensionOrigin(requestOrigin)) {
+                return json({ error: "Forbidden" }, 403);
+            }
+
+            return json({ ok: true }, 204, {
+                "Access-Control-Allow-Origin": requestOrigin,
+                "Vary": "Origin"
+            });
+        }
+
         return json({ ok: true }, 204);
         }
 
@@ -926,6 +946,10 @@ export default {
         }
 
         if (request.method === "POST" && url.pathname === "/analytics/block-event") {
+        if (!isTrustedExtensionOrigin(requestOrigin)) {
+            return json({ error: "Forbidden" }, 403);
+        }
+
         let body;
         try {
             body = await parseJsonBody(request);
@@ -962,10 +986,17 @@ export default {
             return json({ error: "Analytics forwarding failed", message: result.error }, 502);
         }
 
-        return json({ ok: true, skipped: Boolean(result.skipped), reason: result.reason || null });
+        return json({ ok: true, skipped: Boolean(result.skipped), reason: result.reason || null }, 200, {
+            "Access-Control-Allow-Origin": requestOrigin,
+            "Vary": "Origin"
+        });
         }
 
         if (request.method === "POST" && url.pathname === "/analytics/event") {
+        if (!isTrustedExtensionOrigin(requestOrigin)) {
+            return json({ error: "Forbidden" }, 403);
+        }
+
         let body;
         try {
             body = await parseJsonBody(request);
@@ -1000,7 +1031,10 @@ export default {
             return json({ error: "Analytics forwarding failed", message: result.error }, 502);
         }
 
-        return json({ ok: true, skipped: Boolean(result.skipped), reason: result.reason || null, eventName });
+        return json({ ok: true, skipped: Boolean(result.skipped), reason: result.reason || null, eventName }, 200, {
+            "Access-Control-Allow-Origin": requestOrigin,
+            "Vary": "Origin"
+        });
         }
 
         if (request.method === "GET" && url.pathname === "/whop/complete") {

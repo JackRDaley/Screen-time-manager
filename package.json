@@ -2,10 +2,14 @@
   "name": "screen-time-manager",
   "private": true,
   "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "wrangler": "^4.74.0"
   }
 }

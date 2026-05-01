@@ -167,9 +167,9 @@
 
             <div class="card" id="activeCard" data-hide-if-empty="true">
                 <div class="card-head">
-                    <div class="card-title">Active Sessions</div>
+                    <div class="card-title">Active Blocks</div>
                 </div>
-                <div id="activeList" class="list muted">No active sessions.</div>
+                <div id="activeList" class="list muted">No active blocks.</div>
             </div>
 
             <div class="card" id="rankingCard">
@@ -230,6 +230,14 @@
                             <input id="domainInput" class="input" type="text" placeholder="Website (e.g. google.com)" autocomplete="off" />
                             <input id="limitInput" class="input input-min" type="number" min="1" max="1440" placeholder="mins" title="Daily limit (minutes)" />
                         </div>
+                        <div class="input-row">
+                            <select id="limitTier" class="input" title="Enforcement tier">
+                                <option value="lenient">Lenient</option>
+                                <option value="standard" selected>Standard</option>
+                                <option value="strict">Strict</option>
+                                <option value="immutable">Immutable</option>
+                            </select>
+                        </div>
                         <button class="btn btn-gradient" type="submit" style="width:100%">Add</button>
                         <div id="addFormMsg" class="form-feedback" role="status" aria-live="polite"></div>
                     </form>
@@ -281,6 +289,15 @@
                             <div class="schedule-field-label">Days</div>
                             <div id="scheduledDays" class="schedule-days" role="group" aria-label="Scheduled block active days"></div>
                         </div>
+                        <div class="schedule-field schedule-field-full">
+                            <label class="schedule-field-label" for="scheduledTier">Enforcement Tier</label>
+                            <select id="scheduledTier" class="input" aria-label="Scheduled block tier">
+                                <option value="lenient">Lenient</option>
+                                <option value="standard" selected>Standard</option>
+                                <option value="strict">Strict</option>
+                                <option value="immutable">Immutable</option>
+                            </select>
+                        </div>
                         <div class="scheduled-form-actions">
                             <button id="scheduledSubmitBtn" class="btn btn-gradient" type="submit" style="width:100%">Deploy Schedule</button>
                             <button id="cancelScheduledEditBtn" class="btn-ghost scheduled-cancel" type="button" hidden>Cancel</button>
@@ -316,6 +333,7 @@
                                 <label class="settings-label" for="use24HourTime">Use 24-hour schedule inputs</label>
                                 <input id="use24HourTime" class="settings-toggle" type="checkbox" />
                             </div>
+
                         </div>
 
                         <div class="settings-actions">
@@ -323,6 +341,19 @@
                             <div id="settingsSavedMsg" class="settings-saved" role="status" aria-live="polite">Settings saved</div>
                         </div>
                     </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head">
+                    <div class="card-title">Emergency Override</div>
+                </div>
+                <div class="card-body">
+                    <div class="emergency-override-card" role="group" aria-label="Emergency Override">
+                        <div class="emergency-override-copy">Bypass an immutable limit. One use per day.</div>
+                        <button id="immutableAdminOverrideBtn" class="emergency-override-btn" type="button">Use Override</button>
+                        <div id="immutableOverrideMsg" class="form-feedback" role="status" aria-live="polite"></div>
+                    </div>
                 </div>
             </div>
 
@@ -353,6 +384,7 @@
 
     </div><!-- /panels -->
 </div><!-- /scene -->
+<script src="shared-extension-utils.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

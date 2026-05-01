@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
+const { formatTimeSec, getDayKey, parseDayKey } = globalThis.StmSharedUtils || {};
 
 const SETTINGS_KEY = "uiSettings";
-const DASHBOARD_PREFS_KEY = "dashboardPrefs";
 const PREMIUM_KEY = "premiumState";
 const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
@@ -30,6 +30,16 @@ const FREE_PLAN_LIMITS = Object.freeze({
     maxTrackedDomains: 3,
     maxScheduledBlocks: 2
 });
+const ENFORCEMENT_TIERS = Object.freeze({
+    LENIENT: "lenient",
+    STANDARD: "standard",
+    STRICT: "strict",
+    IMMUTABLE: "immutable"
+});
+const DEFAULT_TIER_NEW_RULE = ENFORCEMENT_TIERS.STANDARD;
+const DEFAULT_TIER_LEGACY = ENFORCEMENT_TIERS.LENIENT;
+const IMMUTABLE_ADMIN_OVERRIDE_KEY = "immutableAdminOverrideEnabled";
+const IMMUTABLE_ADMIN_OVERRIDE_LAST_USED_KEY = "immutableAdminOverrideLastUsedDay";
 const SCHEDULE_DAY_OPTIONS = Object.freeze([
     { value: 0, label: "Sun", short: "S" },
     { value: 1, label: "Mon", short: "M" },
@@ -40,20 +50,13 @@ const SCHEDULE_DAY_OPTIONS = Object.freeze([
     { value: 6, label: "Sat", short: "S" }
 ]);
 const ALL_SCHEDULE_DAYS = Object.freeze(SCHEDULE_DAY_OPTIONS.map((day) => day.value));
-const DISTRIBUTION_COLORS = Object.freeze([
-    "#22D9FF",
-    "#8B6FFF",
-    "#2EFFA8",
-    "#FFD166",
-    "#FF4D6D",
-    "#8DE4D6"
-]);
 
 let currentSettings = { ...DEFAULT_SETTINGS };
 let saveMessageTimer = null;
 let latestActiveBlocks = [];
 let latestBlockedDomains = {};
 let latestStatsToday = {};
+let latestSnoozedDomains = {};
 let latestHourlyUsageHistory = {};
 let latestSnoozeHistory = {};
 let activeCountdownTimer = null;
@@ -69,7 +72,6 @@ let currentOnboardingState = { step: 0, completed: false, completedAt: null };
 let selectedSuggestedSites = new Set(SUGGESTED_DEFAULTS.slice(0, 3).map(s => s.domain));
 let openRowMenuKey = null;
 let lastActiveRenderSignature = null;
-let forceHourlyPreviewMode = false; // set to false for real data
 let lastRenderedHourlyStatsSignature = null;
 
 const EMPTY_STATE_MESSAGES = Object.freeze({
@@ -101,7 +103,60 @@ function getRowMenuKey(type, id) {
     return `${type}:${id}`;
 }
 
-function getActiveRenderSignature(activeBlocks = [], blockedDomains = {}) {
+function getFreeTierDomainCapSelection(blockedDomains = {}, statsToday = {}) {
+    if (isPremiumActive()) {
+        return {
+            blockedDomains,
+            statsToday,
+            keptDomains: new Set(Object.keys(blockedDomains || {})),
+            trimmedCount: 0
+        };
+    }
+
+    const entries = Object.entries(blockedDomains || {});
+    const maxAllowed = FREE_PLAN_LIMITS.maxTrackedDomains;
+    if (entries.length <= maxAllowed) {
+        return {
+            blockedDomains,
+            statsToday,
+            keptDomains: new Set(entries.map(([domain]) => domain)),
+            trimmedCount: 0
+        };
+    }
+
+    const ranked = entries
+        .map(([domain, cfg]) => ({
+            domain,
+            cfg,
+            timeMs: statsToday?.[domain]?.timeMs || 0,
+            visits: statsToday?.[domain]?.visits || 0
+        }))
+        .sort((a, b) => b.timeMs - a.timeMs || b.visits - a.visits || a.domain.localeCompare(b.domain));
+
+    const keptDomains = new Set(ranked.slice(0, maxAllowed).map((entry) => entry.domain));
+    const nextBlockedDomains = {};
+    for (const [domain, cfg] of entries) {
+        if (keptDomains.has(domain)) {
+            nextBlockedDomains[domain] = cfg;
+        }
+    }
+
+    const nextStatsToday = {};
+    for (const [domain, stats] of Object.entries(statsToday || {})) {
+        if (keptDomains.has(domain)) {
+            nextStatsToday[domain] = stats;
+        }
+    }
+
+    return {
+        blockedDomains: nextBlockedDomains,
+        statsToday: nextStatsToday,
+        keptDomains,
+        trimmedCount: entries.length - keptDomains.size
+    };
+}
+
+function getActiveRenderSignature(activeBlocks = [], blockedDomains = {}, snoozedDomains = {}) {
     const activePart = (Array.isArray(activeBlocks) ? activeBlocks : [])
         .map((block) => `${block?.id || ""}:${block?.domain || ""}:${block?.endTime || ""}`)
         .join("|");
@@ -109,7 +164,16 @@ function getActiveRenderSignature(activeBlocks = [], blockedDomains = {}) {
         .map(([domain, cfg]) => `${domain}:${cfg?.enabled === false ? 0 : 1}:${getLimitSecondsFromConfig(cfg) || 0}`)
         .sort()
         .join("|");
-    return `${activePart}::${blockedPart}`;
+    const now = Date.now();
+    const snoozePart = Object.entries(snoozedDomains || {})
+        .map(([domain, entry]) => `${domain}:${Number(entry?.expiresAt || entry || 0)}`)
+        .filter((entry) => {
+            const expiresAt = Number(entry.split(":")[1] || 0);
+            return Number.isFinite(expiresAt) && expiresAt > now;
+        })
+        .sort()
+        .join("|");
+    return `${activePart}::${blockedPart}::${snoozePart}`;
 }
 
 function closeRowMenus() {
@@ -167,19 +231,22 @@ function wireRankingInteractionGuards() {
 function startActiveCountdownTicker() {
     if (activeCountdownTimer != null) return;
     activeCountdownTimer = setInterval(() => {
-        refreshActiveCountdowns(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+        refreshActiveCountdowns(latestActiveBlocks, latestBlockedDomains, latestStatsToday, latestSnoozedDomains);
     }, 1000);
 }
 
-function refreshActiveCountdowns(activeBlocks = latestActiveBlocks, blockedDomains = latestBlockedDomains, statsToday = latestStatsToday) {
+function refreshActiveCountdowns(activeBlocks = latestActiveBlocks, blockedDomains = latestBlockedDomains, statsToday = latestStatsToday, snoozedDomains = latestSnoozedDomains) {
     const list = $("activeList");
     if (!list) return;
 
-    const active = Array.isArray(activeBlocks) ? activeBlocks : [];
+    const active = Array.isArray(activeBlocks) ? activeBlocks.filter((entry) => Boolean(entry?.domain)) : [];
     const count = $("activeCount");
     const statusPill = document.querySelector(".status-pill");
+    const now = Date.now();
+    const activeDomains = new Set(active.map((entry) => entry.domain));
 
     const timeLimitedActive = Object.entries(blockedDomains || {}).filter(([domain, cfg]) => {
+        if (activeDomains.has(domain)) return false;
         if (!isLimitEnabled(cfg)) return false;
         const limitSec = getLimitSecondsFromConfig(cfg);
         if (!Number.isFinite(limitSec) || limitSec <= 0) return false;
@@ -187,20 +254,30 @@ function refreshActiveCountdowns(activeBlocks = latestActiveBlocks, blockedDomai
         return usedMs >= limitSec * 1000;
     }).length;
 
-    const totalActive = active.length + timeLimitedActive;
+    const totalActive = activeDomains.size + timeLimitedActive;
     if (count) count.textContent = String(totalActive);
     statusPill?.classList.toggle("is-inactive", totalActive === 0);
 
-    if (active.length === 0) return;
+    if (totalActive === 0) return;
 
-    const now = Date.now();
     list.querySelectorAll(".timer[data-domain]").forEach((timerEl) => {
         const domain = timerEl.getAttribute("data-domain");
-        const block = active.find((entry) => entry.domain === domain);
-        if (!block || !block.endTime) return;
+        const timerType = timerEl.getAttribute("data-timer-type") || "block";
+        let nextText = "";
 
-        const remainingSec = Math.max(0, Math.floor((block.endTime - now) / 1000));
-        const nextText = remainingSec > 0 ? `${formatTimeSec(remainingSec)} left` : "";
+        if (timerType === "pause") {
+            const entry = snoozedDomains?.[domain];
+            const expiresAt = Number(entry?.expiresAt || entry || 0);
+            const remainingSec = Math.max(0, Math.floor((expiresAt - now) / 1000));
+            nextText = remainingSec > 0 ? formatCountdownMSS(remainingSec) : "";
+        } else {
+            const block = active.find((entry) => entry.domain === domain);
+            if (block?.endTime) {
+                const remainingSec = Math.max(0, Math.floor((block.endTime - now) / 1000));
+                nextText = remainingSec > 0 ? `${formatTimeSec(remainingSec)} left` : "";
+            }
+        }
+
         if (timerEl.textContent !== nextText) {
             timerEl.textContent = nextText;
         }
@@ -342,13 +419,18 @@ function startPopupRefreshTicker() {
                 allStatsToday = {},
                 statsHistory = {},
                 hourlyUsageHistory = {},
-                snoozeHistory = {}
-            } = await chrome.storage.local.get(["activeBlocks", "blockedDomains", "statsToday", "allStatsToday", "statsHistory", "hourlyUsageHistory", "snoozeHistory"]);
+                snoozeHistory = {},
+                snoozedDomains = {}
+            } = await chrome.storage.local.get(["activeBlocks", "blockedDomains", "statsToday", "allStatsToday", "statsHistory", "hourlyUsageHistory", "snoozeHistory", "snoozedDomains"]);
 
-            latestActiveBlocks = Array.isArray(activeBlocks) ? activeBlocks : [];
-            latestBlockedDomains = blockedDomains || {};
-            latestStatsToday = statsToday || {};
+            const freeTierSelection = getFreeTierDomainCapSelection(blockedDomains, statsToday);
+            latestActiveBlocks = Array.isArray(activeBlocks)
+                ? activeBlocks.filter((block) => freeTierSelection.keptDomains.has(block.domain))
+                : [];
+            latestBlockedDomains = freeTierSelection.blockedDomains || {};
+            latestStatsToday = freeTierSelection.statsToday || {};
             latestSnoozeHistory = snoozeHistory || {};
+            latestSnoozedDomains = snoozedDomains || {};
 
             const range = $("statRange")?.value || "Today";
             const rangeContext = getRangeSelectionContext(range, allStatsToday || {}, statsHistory || {}, hourlyUsageHistory || {});
@@ -357,11 +439,20 @@ function startPopupRefreshTicker() {
             updateDashboardSubhead(rangeContext.label);
             renderHourlyDistribution(rangeContext.hourlyStats, rangeContext.label);
 
-            const nextSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
-            if (nextSignature !== lastActiveRenderSignature) {
-                renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+            const nextSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains, latestSnoozedDomains);
+            const activeList = $("activeList");
+            const activeListInteracting = Boolean(
+                activeList &&
+                (
+                    activeList.matches(":hover") ||
+                    (document.activeElement && activeList.contains(document.activeElement))
+                )
+            );
+
+            if (nextSignature !== lastActiveRenderSignature && !activeListInteracting) {
+                renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday, latestSnoozedDomains);
             } else {
-                refreshActiveCountdowns(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+                refreshActiveCountdowns(latestActiveBlocks, latestBlockedDomains, latestStatsToday, latestSnoozedDomains);
             }
         } catch {
             // Ignore transient refresh errors in popup ticker.
@@ -377,16 +468,6 @@ function stopPopupRefreshTicker() {
     popupRefreshTimer = null;
 }
 
-function formatTimeSec(sec) {
-    sec = Math.max(0, Math.floor(sec || 0));
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
-}
-
 function formatTimeStatSec(sec) {
     sec = Math.max(0, Math.floor(sec || 0));
     const h = Math.floor(sec / 3600);
@@ -396,26 +477,6 @@ function formatTimeStatSec(sec) {
     if (h > 0) return `${h}h${m}m`;
     if (m > 0) return `${m}m${s}s`;
     return `${s}s`;
-}
-
-function getDayKey(d = new Date()) {
-    const y = d.getFullYear();
-    const mo = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${mo}-${day}`;
-}
-
-function parseDayKey(dayKey) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dayKey || ""))) {
-        return null;
-    }
-    const [year, month, day] = String(dayKey).split("-").map(Number);
-    const parsed = new Date(year, month - 1, day);
-    if (Number.isNaN(parsed.getTime())) {
-        return null;
-    }
-    parsed.setHours(0, 0, 0, 0);
-    return parsed;
 }
 
 function formatDayKey(dayKey) {
@@ -534,22 +595,6 @@ function formatHourRange(hour) {
     return `${formatHourLabel(startHour)}-${formatHourLabel(endHour)}`;
 }
 
-function formatHourDetailed(hour) {
-    const normalizedHour = ((Number(hour) || 0) % 24 + 24) % 24;
-    const period = normalizedHour >= 12 ? "PM" : "AM";
-    const displayHour = normalizedHour % 12 || 12;
-    return `${displayHour}:00 ${period}`;
-}
-
-function formatHourRangeDetailed(hour) {
-    const startHour = ((Number(hour) || 0) % 24 + 24) % 24;
-    const endHour = (startHour + 1) % 24;
-    return {
-        start: formatHourDetailed(startHour),
-        end: formatHourDetailed(endHour)
-    };
-}
-
 function formatHourRangeTooltip(hour) {
     const startHour = ((Number(hour) || 0) % 24 + 24) % 24;
     const endHour = (startHour + 1) % 24;
@@ -564,6 +609,13 @@ function formatHourRangeTooltip(hour) {
     }
 
     return `${startDisplay} ${startPeriod}-${endDisplay} ${endPeriod}`;
+}
+
+function formatCountdownMSS(seconds) {
+    const totalSeconds = Math.max(0, Math.floor(seconds || 0));
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainingSeconds = totalSeconds % 60;
+    return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function buildPreviewHourlyStats() {
@@ -655,14 +707,6 @@ function normalizeSettings(raw) {
     };
 }
 
-function normalizeDashboardPrefs(raw) {
-    const chartMode = "bar";
-
-    return {
-        chartMode
-    };
-}
-
 function normalizePremium(raw) {
     return {
         active: Boolean(raw?.active),
@@ -736,19 +780,6 @@ async function loadSettingsFromStorage() {
     const { [SETTINGS_KEY]: stored } = await chrome.storage.local.get([SETTINGS_KEY]);
     currentSettings = normalizeSettings(stored);
     return currentSettings;
-}
-
-async function loadDashboardPrefsFromStorage() {
-    const { [DASHBOARD_PREFS_KEY]: stored } = await chrome.storage.local.get([DASHBOARD_PREFS_KEY]);
-    const normalized = normalizeDashboardPrefs(stored || DEFAULT_DASHBOARD_PREFS);
-    currentChartMode = normalized.chartMode;
-}
-
-async function saveDashboardPrefsToStorage() {
-    const payload = {
-        chartMode: currentChartMode
-    };
-    await chrome.storage.local.set({ [DASHBOARD_PREFS_KEY]: payload });
 }
 
 async function loadMonetizationFromStorage() {
@@ -1036,6 +1067,83 @@ function formatScheduleDays(days) {
         .join(", ");
 }
 
+function normalizeTier(rawTier, fallbackTier = DEFAULT_TIER_LEGACY) {
+    const value = String(rawTier || "").trim().toLowerCase();
+    if (Object.values(ENFORCEMENT_TIERS).includes(value)) {
+        return value;
+    }
+    return fallbackTier;
+}
+
+function formatTierLabel(tier) {
+    const normalized = normalizeTier(tier);
+    if (normalized === ENFORCEMENT_TIERS.LENIENT) return "Lenient";
+    if (normalized === ENFORCEMENT_TIERS.STANDARD) return "Standard";
+    if (normalized === ENFORCEMENT_TIERS.STRICT) return "Strict";
+    if (normalized === ENFORCEMENT_TIERS.IMMUTABLE) return "Immutable";
+    return "Lenient";
+}
+
+function hasActiveImmutableLimit(activeBlocks = [], blockedDomains = {}, statsToday = {}, snoozedDomains = {}) {
+    const now = Date.now();
+
+    const immutableScheduledActive = (Array.isArray(activeBlocks) ? activeBlocks : []).some((block) => {
+        const tier = normalizeTier(block?.tier, DEFAULT_TIER_LEGACY);
+        const endTime = Number(block?.endTime || 0);
+        return tier === ENFORCEMENT_TIERS.IMMUTABLE && Number.isFinite(endTime) && endTime > now;
+    });
+
+    if (immutableScheduledActive) return true;
+
+    return Object.entries(blockedDomains || {}).some(([domain, cfg]) => {
+        if (!isLimitEnabled(cfg)) return false;
+        if (normalizeTier(cfg?.tier, DEFAULT_TIER_LEGACY) !== ENFORCEMENT_TIERS.IMMUTABLE) return false;
+
+        const limitSec = getLimitSecondsFromConfig(cfg);
+        if (!Number.isFinite(limitSec) || limitSec <= 0) return false;
+
+        const usedMs = Number(statsToday?.[domain]?.timeMs || 0);
+        if (usedMs < limitSec * 1000) return false;
+
+        const snoozeEntry = snoozedDomains?.[domain];
+        const snoozeExpiresAt = Number(snoozeEntry?.expiresAt || snoozeEntry || 0);
+        return !Number.isFinite(snoozeExpiresAt) || snoozeExpiresAt <= now;
+    });
+}
+
+function updateImmutableOverrideButton(hasImmutableActive, lastUsedDay = "") {
+    const button = $("immutableAdminOverrideBtn");
+    const messageEl = $("immutableOverrideMsg");
+    if (!button) return;
+
+    const todayKey = getDayKey();
+    const usedToday = String(lastUsedDay || "") === todayKey;
+
+    button.textContent = "Use Override";
+    button.classList.remove("is-used", "is-unavailable");
+    button.disabled = false;
+    if (messageEl) {
+        messageEl.textContent = "";
+        messageEl.classList.remove("is-error");
+    }
+
+    if (usedToday) {
+        button.textContent = "Override Used";
+        button.disabled = true;
+        button.classList.add("is-used");
+        return;
+    }
+
+    if (!hasImmutableActive) {
+        button.disabled = true;
+        button.classList.add("is-unavailable");
+        if (messageEl) {
+            messageEl.textContent = "No immutable limits active";
+        }
+        return;
+    }
+}
+
 function syncScheduleDayPicker() {
     const container = $("scheduledDays");
     if (!container) return;
@@ -1078,6 +1186,9 @@ function resetScheduledForm() {
     $("scheduledDomain").value = "";
     $("startTime").value = "";
     $("endTime").value = "";
+    if ($("scheduledTier")) {
+        $("scheduledTier").value = DEFAULT_TIER_NEW_RULE;
+    }
     setSelectedScheduleDays([]);
     clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true);
     updateScheduledFormMode();
@@ -1090,6 +1201,9 @@ function beginScheduledBlockEdit(block) {
     $("scheduledDomain").value = block.domain || "";
     $("startTime").value = block.startTime ? formatTimeForDisplay(block.startTime) : "";
     $("endTime").value = block.endTime ? formatTimeForDisplay(block.endTime) : "";
+    if ($("scheduledTier")) {
+        $("scheduledTier").value = normalizeTier(block.tier, DEFAULT_TIER_NEW_RULE);
+    }
     setSelectedScheduleDays(block.daysOfWeek);
     clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true);
     updateScheduledFormMode();
@@ -1183,6 +1297,20 @@ function isLimitEnabled(cfg) {
     return cfg?.enabled !== false;
 }
 
+function isLimitCurrentlyBlocking(domain, cfg, statsToday = {}, snoozedDomains = {}) {
+    if (!isLimitEnabled(cfg)) return false;
+
+    const limitSec = getLimitSecondsFromConfig(cfg);
+    if (!Number.isFinite(limitSec) || limitSec <= 0) return false;
+
+    const usedMs = Number(statsToday?.[domain]?.timeMs || 0);
+    if (usedMs < limitSec * 1000) return false;
+
+    const snoozeEntry = snoozedDomains?.[domain];
+    const snoozeExpiresAt = Number(snoozeEntry?.expiresAt || snoozeEntry || 0);
+    return !Number.isFinite(snoozeExpiresAt) || snoozeExpiresAt <= Date.now();
+}
+
 function applyScheduleInputMode() {
     const use24 = currentSettings.use24HourTime;
     const startEl = $("startTime");
@@ -1264,17 +1392,6 @@ function getTotals(stats = {}) {
     return { totalMs, totalVisits };
 }
 
-function getTopDomains(stats = {}, sortBy = "timeMs", limit = 6) {
-    return Object.entries(stats || {})
-        .map(([domain, entry]) => ({
-            domain,
-            timeMs: Number(entry?.timeMs || 0),
-            visits: Number(entry?.visits || 0)
-        }))
-        .sort((a, b) => (sortBy === "visits" ? b.visits - a.visits : b.timeMs - a.timeMs))
-        .slice(0, limit);
-}
-
 function formatPercentDelta(current, previous) {
     if (previous <= 0 && current <= 0) return "0%";
     if (previous <= 0) return "+100%";
@@ -1286,60 +1403,6 @@ function updateDashboardSubhead(label) {
     const subhead = $("dashboardSubhead");
     if (!subhead) return;
     subhead.textContent = `Showing ${label}`;
-}
-
-function renderPieDistribution(topRows, totalMs) {
-    const segments = topRows.map((row, index) => ({
-        color: DISTRIBUTION_COLORS[index % DISTRIBUTION_COLORS.length],
-        pct: totalMs > 0 ? Math.round((row.timeMs / totalMs) * 100) : 0
-    }));
-
-    let running = 0;
-    const gradientStops = segments.map((segment) => {
-        const start = running;
-        running += segment.pct;
-        return `${segment.color} ${start}% ${Math.min(running, 100)}%`;
-    });
-
-    const normalizedGradient = gradientStops.length > 0
-        ? gradientStops.join(", ")
-        : "rgba(255,255,255,.12) 0% 100%";
-
-    const pie = `<div class="distribution-pie" style="background: conic-gradient(${normalizedGradient});"></div>`;
-    const legend = `
-        <div class="distribution-legend">
-            ${topRows.map((row, index) => {
-                const pct = totalMs > 0 ? Math.max(1, Math.round((row.timeMs / totalMs) * 100)) : 0;
-                return `
-                    <div class="legend-item">
-                        <span class="legend-dot" style="background:${DISTRIBUTION_COLORS[index % DISTRIBUTION_COLORS.length]}"></span>
-                        <span class="legend-label">${row.domain}</span>
-                        <span class="legend-value">${pct}%</span>
-                    </div>
-                `;
-            }).join("")}
-        </div>
-    `;
-
-    return `<div class="distribution-wrap">${pie}${legend}</div>`;
-}
-
-function renderBarDistribution(topRows, maxMs) {
-    return `
-        <div class="distribution-bars">
-            ${topRows.map((row) => {
-                const pct = maxMs > 0 ? Math.max(4, Math.round((row.timeMs / maxMs) * 100)) : 4;
-                const shortLabel = row.domain.length > 8 ? `${row.domain.slice(0, 7)}...` : row.domain;
-                return `
-                    <div class="distribution-bar-item">
-                        <div class="distribution-bar" style="height:${pct}px"></div>
-                        <div class="distribution-bar-value">${formatTimeSec(Math.round(row.timeMs / 1000))}</div>
-                        <div class="distribution-bar-label">${shortLabel}</div>
-                    </div>
-                `;
-            }).join("")}
-        </div>
-    `;
 }
 
 function getTopDomainsForHour(hourData = {}, maxResults = 3) {
@@ -1354,14 +1417,6 @@ function getTopDomainsForHour(hourData = {}, maxResults = 3) {
         .slice(0, maxResults);
     
     return entries;
-}
-
-function getIntensityForNormalizedValue(normalizedValue) {
-    // normalizedValue: 0 (low) to 1 (peak)
-    if (normalizedValue < 0.25) return "low";
-    if (normalizedValue < 0.5) return "medium";
-    if (normalizedValue < 0.75) return "high";
-    return "peak";
 }
 
 function getColorGradientForIntensity(normalizedValue) {
@@ -1397,7 +1452,7 @@ function renderHourlyDistribution(hourlyStats = [], rangeLabel = "Today") {
     if (!list) return;
 
     // Create signature to detect if data changed
-    const currentSignature = JSON.stringify([hourlyStats, rangeLabel, forceHourlyPreviewMode]);
+    const currentSignature = JSON.stringify([hourlyStats, rangeLabel]);
     if (currentSignature === lastRenderedHourlyStatsSignature) {
         return; // Skip re-render if data hasn't changed
     }
@@ -1406,8 +1461,7 @@ function renderHourlyDistribution(hourlyStats = [], rangeLabel = "Today") {
     if (title) title.textContent = `Daily Usage Distribution · ${rangeLabel}`;
 
     const buckets = Array.isArray(hourlyStats) ? hourlyStats : [];
-    // Force preview mode if forceHourlyPreviewMode is true
-    const hasUsage = !forceHourlyPreviewMode && buckets.some((bucket) => Number(bucket?.timeMs || 0) > 0);
+    const hasUsage = buckets.some((bucket) => Number(bucket?.timeMs || 0) > 0);
     const previewBuckets = hasUsage ? buckets : buildPreviewHourlyStats();
     const isPreview = !hasUsage;
 
@@ -1665,63 +1719,38 @@ function updateStreakChip(statsHistory = {}, allStatsToday = {}) {
 }
 
 async function enforceFreeTierDomainCap(blockedDomains = {}, statsToday = {}) {
-    if (isPremiumActive()) {
-        return { blockedDomains, statsToday, trimmedCount: 0 };
-    }
-
-    const entries = Object.entries(blockedDomains || {});
-    const maxAllowed = FREE_PLAN_LIMITS.maxTrackedDomains;
-    if (entries.length <= maxAllowed) {
-        return { blockedDomains, statsToday, trimmedCount: 0 };
-    }
-
-    const ranked = entries
-        .map(([domain, cfg]) => ({
-            domain,
-            cfg,
-            timeMs: statsToday?.[domain]?.timeMs || 0,
-            visits: statsToday?.[domain]?.visits || 0
-        }))
-        .sort((a, b) => b.timeMs - a.timeMs || b.visits - a.visits || a.domain.localeCompare(b.domain));
-
-    const keptDomains = new Set(ranked.slice(0, maxAllowed).map((entry) => entry.domain));
-    const nextBlockedDomains = {};
-    for (const [domain, cfg] of entries) {
-        if (keptDomains.has(domain)) {
-            nextBlockedDomains[domain] = cfg;
-        }
-    }
-
-    const nextStatsToday = {};
-    for (const [domain, stats] of Object.entries(statsToday || {})) {
-        if (keptDomains.has(domain)) {
-            nextStatsToday[domain] = stats;
-        }
+    const selection = getFreeTierDomainCapSelection(blockedDomains, statsToday);
+    if (selection.trimmedCount === 0) {
+        return {
+            blockedDomains: selection.blockedDomains,
+            statsToday: selection.statsToday,
+            trimmedCount: 0
+        };
     }
 
     const { alertsSent = {}, activeBlocks = [] } = await chrome.storage.local.get(["alertsSent", "activeBlocks"]);
     const nextAlerts = {};
     for (const [domain, sent] of Object.entries(alertsSent || {})) {
-        if (keptDomains.has(domain)) {
+        if (selection.keptDomains.has(domain)) {
             nextAlerts[domain] = sent;
         }
     }
 
-    const nextActiveBlocks = (activeBlocks || []).filter((block) => keptDomains.has(block.domain));
+    const nextActiveBlocks = (activeBlocks || []).filter((block) => selection.keptDomains.has(block.domain));
 
     await chrome.storage.local.set({
-        blockedDomains: nextBlockedDomains,
-        statsToday: nextStatsToday,
+        blockedDomains: selection.blockedDomains,
+        statsToday: selection.statsToday,
         alertsSent: nextAlerts,
         activeBlocks: nextActiveBlocks
     });
 
-    const trimmedCount = entries.length - keptDomains.size;
+    const trimmedCount = selection.trimmedCount;
     setPremiumStatusMessage(`Premium inactive: removed ${trimmedCount} domain(s) to match free tier.`, "error");
 
     return {
-        blockedDomains: nextBlockedDomains,
-        statsToday: nextStatsToday,
+        blockedDomains: selection.blockedDomains,
+        statsToday: selection.statsToday,
         trimmedCount
     };
 }
@@ -1775,11 +1804,13 @@ async function loadAll() {
                 statsHistory = {},
                 hourlyUsageHistory = {},
                 snoozeHistory = {},
+                snoozedDomains = {},
+                [IMMUTABLE_ADMIN_OVERRIDE_LAST_USED_KEY]: immutableAdminOverrideLastUsedDay = "",
                 activeBlocks = [],
                 scheduledBlocks = [],
                 [SETTINGS_KEY]: storedSettings = DEFAULT_SETTINGS,
                 [PREMIUM_KEY]: premiumStored = DEFAULT_PREMIUM
-            } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "hourlyUsageHistory", "snoozeHistory", "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY]);
+                    } = await chrome.storage.local.get(["blockedDomains", "statsToday", "allStatsToday", "statsHistory", "hourlyUsageHistory", "snoozeHistory", "snoozedDomains", IMMUTABLE_ADMIN_OVERRIDE_LAST_USED_KEY, "activeBlocks", "scheduledBlocks", SETTINGS_KEY, PREMIUM_KEY]);
 
             currentSettings = normalizeSettings(storedSettings);
             currentPremium = normalizePremium(premiumStored);
@@ -1794,7 +1825,10 @@ async function loadAll() {
             latestBlockedDomains = effectiveBlockedDomains || {};
             latestStatsToday = effectiveStatsToday || {};
             latestSnoozeHistory = snoozeHistory || {};
-            lastActiveRenderSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains);
+            latestSnoozedDomains = snoozedDomains || {};
+            lastActiveRenderSignature = getActiveRenderSignature(latestActiveBlocks, latestBlockedDomains, latestSnoozedDomains);
+            const hasImmutableActive = hasActiveImmutableLimit(latestActiveBlocks, latestBlockedDomains, latestStatsToday, latestSnoozedDomains);
+            updateImmutableOverrideButton(hasImmutableActive, String(immutableAdminOverrideLastUsedDay || ""));
 
             const range = $("statRange")?.value || "Today";
             const rangeContext = getRangeSelectionContext(range, allStatsToday, statsHistory, hourlyUsageHistory);
@@ -1804,13 +1838,13 @@ async function loadAll() {
             updateDashboardSubhead(rangeContext.label);
             renderHourlyDistribution(rangeContext.hourlyStats, rangeContext.label);
             updateStreakChip(statsHistory, allStatsToday);
-            renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday);
+            renderActive(latestActiveBlocks, latestBlockedDomains, latestStatsToday, latestSnoozedDomains);
             renderScheduled(effectiveScheduledBlocks, latestActiveBlocks);
             if (!isRankingInteractionActive()) {
                 renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "ranking", "timeSec", "Top by Time", rangeContext.label);
                 renderRanking(effectiveBlockedDomains, effectiveStatsToday, rangeStats, "rankingByVisits", "visits", "Top by Visits", rangeContext.label);
             }
-            renderBlockList(effectiveBlockedDomains, effectiveStatsToday);
+            renderBlockList(effectiveBlockedDomains, effectiveStatsToday, latestActiveBlocks, latestSnoozedDomains);
             applyPaywallUI(effectiveBlockedDomains, effectiveScheduledBlocks);
             await chrome.runtime.sendMessage({ action: "refreshActionBadge" }).catch(() => null);
         } while (loadAllPending);
@@ -1819,29 +1853,61 @@ async function loadAll() {
     }
 }
 
-function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
+function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}, snoozedDomains = {}) {
     const list = $("activeList");
     const card = $("activeCard");
     const count = $("activeCount");
     const statusPill = document.querySelector(".status-pill");
 
     const active = Array.isArray(activeBlocks) ? activeBlocks : [];
-    lastActiveRenderSignature = getActiveRenderSignature(active, blockedDomains);
+    const now = Date.now();
+    lastActiveRenderSignature = getActiveRenderSignature(active, blockedDomains, snoozedDomains);
+    const activeDomains = new Set(active.map((entry) => entry.domain).filter(Boolean));
 
     // Count time-limited domains that have no remaining time today
-    const timeLimitedActive = Object.entries(blockedDomains).filter(([domain, cfg]) => {
+    const timeLimitedActiveDomains = Object.entries(blockedDomains).filter(([domain, cfg]) => {
+        if (activeDomains.has(domain)) return false;
         if (!isLimitEnabled(cfg)) return false;
         const limitSec = getLimitSecondsFromConfig(cfg);
         if (!Number.isFinite(limitSec) || limitSec <= 0) return false;
         const usedMs = statsToday?.[domain]?.timeMs || 0;
-        return usedMs >= limitSec * 1000;
-    }).length;
+        if (usedMs < limitSec * 1000) return false;
+        return true;
+    }).map(([domain, cfg]) => ({
+        type: "limit",
+        domain,
+        tierLabel: formatTierLabel(cfg?.tier || DEFAULT_TIER_LEGACY),
+        limitSec: getLimitSecondsFromConfig(cfg) || 0,
+        usedSec: Math.round((statsToday?.[domain]?.timeMs || 0) / 1000)
+    }));
 
-    const totalActive = active.length + timeLimitedActive;
+    const limitReachedDomains = new Set(timeLimitedActiveDomains.map((entry) => entry.domain));
+
+    // Show paused rows only when pause and limit reached are both active for the same domain.
+    const activeSnoozes = Object.entries(snoozedDomains || {})
+        .map(([domain, entry]) => {
+            if (activeDomains.has(domain)) return null;
+            if (!limitReachedDomains.has(domain)) return null;
+            const expiresAt = Number(entry?.expiresAt || entry || 0);
+            const cfg = blockedDomains?.[domain];
+            if (!Number.isFinite(expiresAt) || expiresAt <= now || !isLimitEnabled(cfg)) return null;
+            return {
+                type: "pause",
+                domain,
+                expiresAt,
+                tierLabel: formatTierLabel(entry?.tier || cfg?.tier || DEFAULT_TIER_LEGACY)
+            };
+        })
+        .filter(Boolean);
+
+    const pausedDomains = new Set(activeSnoozes.map((entry) => entry.domain));
+    const visibleLimitRows = timeLimitedActiveDomains.filter((entry) => !pausedDomains.has(entry.domain));
+
+    const totalActive = active.length + activeSnoozes.length + visibleLimitRows.length;
     count.textContent = String(totalActive);
     statusPill?.classList.toggle("is-inactive", totalActive === 0);
 
-    if (active.length === 0) {
+    if (totalActive === 0) {
         // Hide card if empty
         if (card) card.style.display = "none";
         return;
@@ -1855,7 +1921,6 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
     list.innerHTML = "";
 
     active.forEach((s) => {
-        const now = Date.now();
         const endsAt = s.endTime ? new Date(s.endTime) : null;
         const endsText = endsAt ? endsAt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "—";
         const remainingSec = Math.max(0, Math.floor((s.endTime - now) / 1000));
@@ -1863,14 +1928,16 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
         const div = document.createElement("div");
         div.className = "row row-accent-cyan";
         div.setAttribute("data-domain", s.domain);
+        const tierLabel = formatTierLabel(s.tier || DEFAULT_TIER_NEW_RULE);
         div.innerHTML = `
         <div class="row-main">
             <div class="row-title">${s.domain}</div>
             <div class="row-meta">Ends: ${endsText}</div>
+            <div class="row-metrics"><span class="tag metric-chip metric-chip-glass">${tierLabel}</span></div>
         </div>
         <div class="row-right">
-            ${remainingSec > 0 ? `<span class="timer" data-domain="${s.domain}">${formatTimeSec(remainingSec)} left</span>` : ""}
-            <button class="tag action-chip action-chip-primary" data-domain="${s.domain}">Stop</button>
+            ${remainingSec > 0 ? `<span class="timer" data-domain="${s.domain}" data-timer-type="block">${formatTimeSec(remainingSec)} left</span>` : ""}
+            <button type="button" class="tag action-chip action-chip-primary" data-domain="${s.domain}">Stop</button>
         </div>
         `;
         div.querySelector("button").addEventListener("click", async (e) => {
@@ -1878,6 +1945,57 @@ function renderActive(activeBlocks, blockedDomains = {}, statsToday = {}) {
             await stopActiveBlock(domain);
             await loadAll();
         });
+        list.appendChild(div);
+    });
+
+    activeSnoozes.forEach((session) => {
+        const remainingSec = Math.max(0, Math.floor((session.expiresAt - now) / 1000));
+        const div = document.createElement("div");
+        div.className = "row row-accent-purple is-paused";
+        div.setAttribute("data-domain", session.domain);
+        div.innerHTML = `
+        <div class="row-main">
+            <div class="row-title">${session.domain}</div>
+        </div>
+        <div class="row-right">
+            <span class="tag metric-chip metric-chip-glass">${session.tierLabel}</span>
+            ${remainingSec > 0 ? `<span class="timer" data-domain="${session.domain}" data-timer-type="pause">${formatCountdownMSS(remainingSec)}</span>` : ""}
+            <button type="button" class="tag action-chip action-chip-primary" data-domain="${session.domain}" data-action="end-pause">End Pause</button>
+        </div>
+        `;
+        div.querySelector('button[data-action="end-pause"]')?.addEventListener("click", async (e) => {
+            const domain = e.currentTarget.getAttribute("data-domain");
+            const response = await chrome.runtime.sendMessage({
+                action: "clearDomainSnooze",
+                domain,
+                reason: "popup_end_pause"
+            }).catch(() => ({ success: false }));
+
+            if (!response?.success) {
+                setPremiumStatusMessage(response?.error || "Unable to end pause.", "error");
+                return;
+            }
+
+            await loadAll();
+        });
+        list.appendChild(div);
+    });
+
+    visibleLimitRows.forEach((session) => {
+        const div = document.createElement("div");
+        div.className = "row row-with-bar row-accent-red";
+        div.setAttribute("data-domain", session.domain);
+        div.innerHTML = `
+        <div class="row-top">
+            <div class="row-main">
+                <div class="row-title">${session.domain}</div>
+            </div>
+            <div class="row-right">
+                <div class="row-metrics"><span class="tag metric-chip metric-chip-glass">${session.tierLabel}</span></div>
+                <span class="tag metric-chip metric-chip-glass">Daily limit reached</span>
+            </div>
+        </div>
+        `;
         list.appendChild(div);
     });
 }
@@ -1895,7 +2013,15 @@ async function stopActiveBlock(domain) {
 }
 
 async function removeScheduledBlock(id) {
-    const { scheduledBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks"]);
+    const { scheduledBlocks = [], activeBlocks = [] } = await chrome.storage.local.get(["scheduledBlocks", "activeBlocks"]);
+    
+    // Check if this scheduled block is currently active
+    const isCurrentlyActive = (activeBlocks || []).some((b) => b.id === id);
+    if (isCurrentlyActive) {
+        setPremiumStatusMessage("Cannot remove scheduled block: it is currently active and blocking websites. Stop the block first.", "error");
+        return;
+    }
+    
     const removed = (scheduledBlocks || []).find((b) => b.id === id) || null;
     const next = scheduledBlocks.filter((b) => b.id !== id);
     await chrome.storage.local.set({ scheduledBlocks: next });
@@ -1944,12 +2070,14 @@ function renderScheduled(scheduledBlocks, activeBlocks = []) {
         const daySummary = formatScheduleDays(s.daysOfWeek);
         const rowMenuKey = getRowMenuKey("scheduled", s.id);
         const isMenuOpen = openRowMenuKey === rowMenuKey;
+        const tierLabel = formatTierLabel(s.tier || DEFAULT_TIER_NEW_RULE);
         const div = document.createElement("div");
         div.className = `row ${!isEnabled ? "row-accent-muted is-disabled" : (isActive ? "row-accent-purple" : "row-accent-cyan")}`;
         div.innerHTML = `
         <div class="row-main">
             <div class="row-title">${s.domain}</div>
             <div class="row-metrics schedule-row-metrics">
+                <span class="tag metric-chip metric-chip-glass">${tierLabel}</span>
                 <span class="tag metric-chip metric-chip-glass">${daySummary}</span>
                 <span class="tag metric-chip metric-chip-glass">${formatTimeForDisplay(s.startTime)} - ${formatTimeForDisplay(s.endTime)}</span>
             </div>
@@ -2094,7 +2222,7 @@ function renderRanking(blockedDomains, statsToday, allStatsToday, elementId, sor
 
 }
 
-function renderBlockList(blockedDomains, statsToday) {
+function renderBlockList(blockedDomains, statsToday, activeBlocks = [], snoozedDomains = {}) {
     const list = $("limitList") || $("blockList");
     if (!list) return;
     const entries = Object.entries(blockedDomains || {});
@@ -2124,9 +2252,12 @@ function renderBlockList(blockedDomains, statsToday) {
         const displayTimeSec = (limitSec != null && timeSec >= limitSec) ? limitSec : timeSec;
         const pct = limitSec ? Math.min(100, Math.round((displayTimeSec / limitSec) * 100)) : 0;
 
+        const isCurrentlyBlocking = (activeBlocks || []).some((b) => b.domain === domain)
+            || isLimitCurrentlyBlocking(domain, cfg, statsToday, snoozedDomains);
         const div = document.createElement("div");
         const rowMenuKey = getRowMenuKey("limit", domain);
         const isMenuOpen = openRowMenuKey === rowMenuKey;
+        const tierLabel = formatTierLabel(cfg?.tier || DEFAULT_TIER_LEGACY);
         const accentClass = !isEnabled
             ? "row-accent-muted"
             : (pct >= 100 ? "row-accent-red" : (pct >= 85 ? "row-accent-purple" : "row-accent-cyan"));
@@ -2137,21 +2268,21 @@ function renderBlockList(blockedDomains, statsToday) {
                 <div class="row-main">
                     <div class="row-title">${domain}</div>
                     <div class="row-metrics">
+                        <span class="tag metric-chip metric-chip-glass">${tierLabel}</span>
                         <span class="tag metric-chip metric-chip-glass">Limit ${limitText}</span>
                         <span class="tag metric-chip metric-chip-glass">Today ${formatTimeSec(displayTimeSec)}</span>
                         <span class="tag metric-chip metric-chip-glass">${st.visits || 0} visits</span>
                     </div>
                 </div>
                 <div class="row-right">
-                    <label class="switch" title="Enable or pause this limit">
-                        <input class="switch-input" type="checkbox" data-domain="${domain}" data-action="toggle-enabled" ${isEnabled ? "checked" : ""} aria-label="Toggle ${domain} limit" />
+                    <label class="switch" title="${isCurrentlyBlocking ? "Stop the active session before changing this limit" : "Enable or pause this limit"}">
+                        <input class="switch-input" type="checkbox" data-domain="${domain}" data-action="toggle-enabled" ${isEnabled ? "checked" : ""} ${isCurrentlyBlocking ? "disabled" : ""} aria-label="Toggle ${domain} limit" />
                         <span class="switch-slider" aria-hidden="true"></span>
                     </label>
                     <div class="row-action-menu-wrap">
                         <button class="tag action-chip action-chip-menu" data-action="menu" aria-expanded="${isMenuOpen ? "true" : "false"}" aria-label="Open actions for ${domain}">⋮</button>
                         <div class="row-action-menu ${isMenuOpen ? "is-open" : ""}" role="menu" aria-label="Limit actions">
-                            <button class="tag action-chip action-chip-primary" data-domain="${domain}" data-action="reset" role="menuitem">Reset</button>
-                            <button class="tag action-chip action-chip-danger" data-domain="${domain}" data-action="remove" role="menuitem">Remove</button>
+                            <button class="tag action-chip action-chip-danger" data-domain="${domain}" data-action="remove" role="menuitem" ${isCurrentlyBlocking ? "disabled title=\"Stop the active session before removing\"" : ""}>Remove</button>
                         </div>
                     </div>
                 </div>
@@ -2163,6 +2294,11 @@ function renderBlockList(blockedDomains, statsToday) {
             toggleRowMenu("limit", domain);
         });
         div.querySelector('[data-action="toggle-enabled"]')?.addEventListener("change", async (e) => {
+            if (isCurrentlyBlocking) {
+                e.currentTarget.checked = isEnabled;
+                return;
+            }
+
             const enabled = Boolean(e.currentTarget.checked);
             const response = await chrome.runtime.sendMessage({
                 action: "toggleDomainLimitEnabled",
@@ -2178,26 +2314,28 @@ function renderBlockList(blockedDomains, statsToday) {
 
             await loadAll();
         });
-        div.querySelectorAll("button[data-action='reset'], button[data-action='remove']").forEach((btn) => {
-            btn.addEventListener("click", async (e) => {
-                const d = e.currentTarget.getAttribute("data-domain");
-                const action = e.currentTarget.getAttribute("data-action");
-                closeRowMenus();
-                if (action === "reset") {
-                    await resetDomainStats(d);
-                } else if (action === "remove") {
-                    await removeDomain(d);
-                }
-                await loadAll();
-            });
+        div.querySelector("button[data-action='remove']")?.addEventListener("click", async (e) => {
+            const d = e.currentTarget.getAttribute("data-domain");
+            closeRowMenus();
+            await removeDomain(d);
+            await loadAll();
         });
         list.appendChild(div);
     });
 }
 
 async function removeDomain(domain) {
-    const { blockedDomains = {}, statsToday = {}, activeBlocks = [], alertsSent = {} }
-        = await chrome.storage.local.get(["blockedDomains", "statsToday", "activeBlocks", "alertsSent"]);
+    const { blockedDomains = {}, statsToday = {}, activeBlocks = [], snoozedDomains = {}, alertsSent = {} }
+        = await chrome.storage.local.get(["blockedDomains", "statsToday", "activeBlocks", "snoozedDomains", "alertsSent"]);
+    
+    // Prevent removal if the limit is actively blocking a website or a scheduled session is live
+    const isCurrentlyBlocking = (activeBlocks || []).some((b) => b.domain === domain)
+        || isLimitCurrentlyBlocking(domain, blockedDomains?.[domain], statsToday, snoozedDomains);
+    if (isCurrentlyBlocking) {
+        setPremiumStatusMessage(`Cannot remove ${domain}: it is currently blocking websites. Stop the block first.`, "error");
+        return;
+    }
+    
     const nextBlocked = { ...blockedDomains };
     delete nextBlocked[domain];
 
@@ -2216,33 +2354,28 @@ async function removeDomain(domain) {
         alertsSent: nextAlerts
     });
 
+    const clearResponse = await chrome.runtime.sendMessage({
+        action: "clearDomainSnooze",
+        domain,
+        reason: "limit_removed"
+    }).catch(() => ({ success: false }));
+
+    if (!clearResponse?.success) {
+        const { snoozedDomains = {} } = await chrome.storage.local.get(["snoozedDomains"]);
+        if (Object.prototype.hasOwnProperty.call(snoozedDomains, domain)) {
+            const nextSnoozed = { ...snoozedDomains };
+            delete nextSnoozed[domain];
+            await chrome.storage.local.set({ snoozedDomains: nextSnoozed });
+        }
+    }
+
     trackAnalyticsEvent("domain_removed", {
         domain_host: domain,
         remove_reason: "user_remove"
     });
 }
 
-async function resetDomainStats(domain) {
-    const { statsToday = {}, alertsSent = {} } = await chrome.storage.local.get(["statsToday", "alertsSent"]);
-    const nextStats = { ...statsToday };
-    delete nextStats[domain];
-    
-    const nextAlerts = { ...alertsSent };
-    delete nextAlerts[domain];
-    
-    await chrome.storage.local.set({ statsToday: nextStats, alertsSent: nextAlerts });
-    
-    // redirect the active tab to the domain if it's currently blocked on it
-    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (activeTab?.id != null) {
-        const isBlockedPage = activeTab.url?.includes("blocked.html") && activeTab.url?.includes(encodeURIComponent(domain));
-        if (isBlockedPage) {
-            await chrome.tabs.update(activeTab.id, { url: `https://${domain}` });
-        }
-    }
-}
-
-async function addDomain(domain, limitSeconds, entrypoint = "manual_form") {
+async function addDomain(domain, limitSeconds, entrypoint = "manual_form", tier = DEFAULT_TIER_NEW_RULE) {
     const { blockedDomains = {}, alertsSent = {}, statsToday = {}, allStatsToday = {} }
         = await chrome.storage.local.get(["blockedDomains", "alertsSent", "statsToday", "allStatsToday"]);
     const next = { ...blockedDomains };
@@ -2251,6 +2384,7 @@ async function addDomain(domain, limitSeconds, entrypoint = "manual_form") {
     next[domain] = {
         ...blockedDomains?.[domain],
         limitSeconds,
+        tier: normalizeTier(tier, blockedDomains?.[domain]?.tier || DEFAULT_TIER_NEW_RULE),
         enabled: blockedDomains?.[domain]?.enabled !== false
     };
 
@@ -2282,25 +2416,6 @@ async function addDomain(domain, limitSeconds, entrypoint = "manual_form") {
             entrypoint
         });
     }
-}
-
-function syncChartModeToggleUI() {
-    const pieBtn = $("chartModePie");
-    const barBtn = $("chartModeBar");
-    if (!pieBtn || !barBtn) return;
-
-    const isPie = currentChartMode !== "bar";
-    pieBtn.classList.toggle("is-active", isPie);
-    barBtn.classList.toggle("is-active", !isPie);
-    pieBtn.setAttribute("aria-selected", String(isPie));
-    barBtn.setAttribute("aria-selected", String(!isPie));
-}
-
-async function setChartMode(nextMode) {
-    currentChartMode = nextMode === "bar" ? "bar" : "pie";
-    syncChartModeToggleUI();
-    await saveDashboardPrefsToStorage();
-    await loadAll();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -2363,9 +2478,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     await loadSettingsFromStorage();
-    await loadDashboardPrefsFromStorage();
     await loadMonetizationFromStorage();
-    syncChartModeToggleUI();
 
     const defaultLimitEl = $("defaultLimitMinutes");
     const use24HourEl = $("use24HourTime");
@@ -2382,6 +2495,76 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("scheduledDays")?.addEventListener("click", () => clearFormFeedback("scheduledFormMsg", ["scheduledDomain", "startTime", "endTime"], true));
     $("cancelScheduledEditBtn")?.addEventListener("click", () => resetScheduledForm());
     updateScheduledFormMode();
+
+    try {
+        const overrideStorage = await chrome.storage.local.get([
+            IMMUTABLE_ADMIN_OVERRIDE_LAST_USED_KEY
+        ]);
+        const hasImmutableActive = hasActiveImmutableLimit(latestActiveBlocks, latestBlockedDomains, latestStatsToday, latestSnoozedDomains);
+        updateImmutableOverrideButton(
+            hasImmutableActive,
+            String(overrideStorage?.[IMMUTABLE_ADMIN_OVERRIDE_LAST_USED_KEY] || "")
+        );
+
+        $("immutableAdminOverrideBtn")?.addEventListener("click", async () => {
+            const storage = await chrome.storage.local.get([
+                IMMUTABLE_ADMIN_OVERRIDE_KEY,
+                IMMUTABLE_ADMIN_OVERRIDE_LAST_USED_KEY,
+                "activeBlocks",
+                "blockedDomains",
+                "statsToday",
+                "snoozedDomains"
+            ]);
+            const immutableAdminOverrideEnabled = Boolean(storage?.[IMMUTABLE_ADMIN_OVERRIDE_KEY]);
+            const immutableAdminOverrideLastUsedDay = String(storage?.[IMMUTABLE_ADMIN_OVERRIDE_LAST_USED_KEY] || "");
+            const hasImmutableActive = hasActiveImmutableLimit(
+                storage?.activeBlocks || [],
+                storage?.blockedDomains || {},
+                storage?.statsToday || {},
+                storage?.snoozedDomains || {}
+            );
+            const todayKey = getDayKey();
+            const isUsedToday = String(immutableAdminOverrideLastUsedDay || "") === todayKey;
+            const currentlyEnabled = Boolean(immutableAdminOverrideEnabled);
+
+            if (isUsedToday) {
+                updateImmutableOverrideButton(hasImmutableActive, immutableAdminOverrideLastUsedDay);
+                return;
+            }
+
+            if (!hasImmutableActive) {
+                return { blockedDomains, statsToday, trimmedCount: 0, keptDomains: new Set(Object.keys(blockedDomains || {})) };
+                return;
+            }
+
+            if (currentlyEnabled) {
+                updateImmutableOverrideButton(hasImmutableActive, immutableAdminOverrideLastUsedDay);
+                return { blockedDomains, statsToday, trimmedCount: 0, keptDomains: new Set(entries.map(([domain]) => domain)) };
+            }
+
+            const confirmed = window.confirm("This will bypass immutable blocks for this session. You only get one per day.");
+            if (!confirmed) {
+                return;
+            }
+
+            const nextEnabled = true;
+            const response = await chrome.runtime.sendMessage({
+                action: "setImmutableAdminOverride",
+                enabled: nextEnabled
+            }).catch(() => ({ success: false }));
+
+            if (!response?.success) {
+                setPremiumStatusMessage(response?.error || "Unable to update immutable override.", "error");
+                updateImmutableOverrideButton(hasImmutableActive, immutableAdminOverrideLastUsedDay);
+                return;
+            }
+
+            updateImmutableOverrideButton(hasImmutableActive, immutableAdminOverrideLastUsedDay);
+            await loadAll();
+        });
+    } catch (error) {
+        console.error("Immutable override controls failed to initialize", error);
+    }
 
     $("verifyWhopBtn")?.addEventListener("click", async () => {
         await verifyWhopAccess();
@@ -2401,9 +2584,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (startupRefresh?.pendingActivation) {
         setPremiumStatusMessage("Checkout detected. Activation may take a few seconds. Click Sync Premium Status soon.", "error");
     }
-
-    $("upgradeBtnFromLimits")?.addEventListener("click", () => openWhopCheckout("limits_paywall"));
-    $("upgradeBtnFromSchedule")?.addEventListener("click", () => openWhopCheckout("schedule_paywall"));
     $("manageWhopBtn")?.addEventListener("click", openWhopManage);
 
     const statRangeSelect = document.getElementById("statRange");
@@ -2413,13 +2593,6 @@ document.addEventListener("DOMContentLoaded", async () => {
             await loadAll();
         });
     }
-
-    $("chartModePie")?.addEventListener("click", async () => {
-        await setChartMode("pie");
-    });
-    $("chartModeBar")?.addEventListener("click", async () => {
-        await setChartMode("bar");
-    });
 
     $("settingsForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -2462,6 +2635,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         const domain = normalizeDomain($("domainInput").value);
         const rawLimitValue = $("limitInput").value.trim();
+        const tier = normalizeTier($("limitTier")?.value || DEFAULT_TIER_NEW_RULE, DEFAULT_TIER_NEW_RULE);
         const parsedMinutes = Number(rawLimitValue);
         const limitMinutes = rawLimitValue === "" ? currentSettings.defaultLimitMinutes : parsedMinutes;
         const limitSeconds = Math.floor(limitMinutes * 60);
@@ -2478,7 +2652,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         $("domainInput").value = "";
         $("limitInput").value = "";
 
-        await addDomain(domain, limitSeconds, "manual_form");
+        await addDomain(domain, limitSeconds, "manual_form", tier);
         await loadAll();
     });
 
@@ -2497,6 +2671,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const domain = normalizeDomain($("scheduledDomain").value);
         const startTimeInput = $("startTime").value.trim();
         const endTimeInput = $("endTime").value.trim();
+        const tier = normalizeTier($("scheduledTier")?.value || DEFAULT_TIER_NEW_RULE, DEFAULT_TIER_NEW_RULE);
         const daysOfWeek = [...selectedScheduleDays].sort((a, b) => a - b);
 
         const startTime = parseTimeInput(startTimeInput, currentSettings.use24HourTime);
@@ -2527,7 +2702,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             domain,
             startTime,
             endTime,
-            daysOfWeek
+            daysOfWeek,
+            tier
         });
         if (!response?.success) {
             showFormError("scheduledFormMsg", response?.error || "Unable to save the scheduled block.");
@@ -2570,12 +2746,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
         currentPremium = normalizePremium(changes[PREMIUM_KEY].newValue || DEFAULT_PREMIUM);
     }
 
-    if (changes[DASHBOARD_PREFS_KEY]) {
-        const nextPrefs = normalizeDashboardPrefs(changes[DASHBOARD_PREFS_KEY].newValue || DEFAULT_DASHBOARD_PREFS);
-        currentChartMode = nextPrefs.chartMode;
-        syncChartModeToggleUI();
-    }
-
     if (changes.snoozeHistory) {
         latestSnoozeHistory = changes.snoozeHistory.newValue || {};
     }
@@ -2584,7 +2754,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
         latestHourlyUsageHistory = changes.hourlyUsageHistory.newValue || {};
     }
 
-    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes[DASHBOARD_PREFS_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks || changes.statsHistory || changes.snoozeHistory || changes.hourlyUsageHistory) {
+    if (changes[SETTINGS_KEY] || changes[PREMIUM_KEY] || changes.statsToday || changes.allStatsToday || changes.blockedDomains || changes.activeBlocks || changes.scheduledBlocks || changes.statsHistory || changes.snoozeHistory || changes.hourlyUsageHistory) {
         loadAll();
     }
 });
