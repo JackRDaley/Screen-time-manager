@@ -11,30 +11,74 @@
         <div class="bg"></div>
 
         <main class="wrap">
-        <section class="card">
-            <div class="badge" id="badge">Time limit reached</div>
+            <section class="card">
+                <div class="badge" id="badge">Block active</div>
 
-            <h1>Site blocked</h1>
+                <h1>Site blocked</h1>
 
-            <p class="lead">
-            You've reached your limit for
-            <span id="domain" class="domain">this site</span>
-            </p>
+                <p class="lead">
+                You've reached your limit for
+                <span id="domain" class="domain">this site</span>
+                </p>
 
-            <p class="blocked-until" id="blockedUntil"></p>
+                <p class="blocked-until" id="blockedUntil"></p>
 
-            <div class="actions" id="limitActions">
-                <button id="goBackBtn" class="btn ghost" type="button">Reset limit</button>
-                <button id="closeTabBtn" class="btn" type="button">Close tab</button>
-            </div>
+                <div class="actions" id="primaryActions"></div>
 
-            <div class="actions" id="scheduledActions">
-                <button id="snoozeBtn" class="btn snooze" type="button">Snooze 5 min</button>
-                <button id="endSessionBtn" class="btn ghost" type="button">End session</button>
-            </div>
-        </section>
+                <div class="challenge" id="strictChallenge" hidden>
+                    <div class="challenge-title">Strict challenge required</div>
+
+
+
+                    <!-- Math problem -->
+                    <div id="mathGameContainer" hidden>
+                        <p class="challenge-copy">Solve: <strong id="mathProblem"></strong></p>
+                        <input id="mathAnswer" class="math-input" type="number" inputmode="numeric" aria-label="Math answer" />
+                        <div style="height:8px"></div>
+                        <button id="mathSubmitBtn" class="btn" type="button">Submit</button>
+                        <div id="mathFeedback" class="challenge-copy" aria-live="polite"></div>
+                    </div>
+
+                    <!-- Grid memory -->
+                    <div id="gridMemoryContainer" hidden>
+                        <p class="challenge-copy">Watch the highlighted squares, then reselect them after the grid clears.</p>
+                        <div id="gridDisplay" class="grid-buttons" aria-hidden="true"></div>
+                        <div style="height:8px"></div>
+                        <button id="gridStartBtn" class="btn" type="button">Start</button>
+                        <div id="gridFeedback" class="challenge-copy" aria-live="polite"></div>
+                    </div>
+
+                    <!-- Memory sequence -->
+                    <div id="memoryGameContainer" hidden>
+                        <p class="challenge-copy">Watch the sequence, then repeat it.</p>
+                        <div id="sequenceDisplay" class="sequence-buttons" aria-hidden="true"></div>
+                        <div style="height:8px"></div>
+                        <button id="memoryStartBtn" class="btn" type="button">Start</button>
+                        <div id="memoryFeedback" class="challenge-copy" aria-live="polite"></div>
+                    </div>
+
+                    <!-- Typing challenge -->
+                    <div id="typingGameContainer" hidden>
+                        <p class="challenge-copy">Type the word exactly to pass.</p>
+                        <div style="margin:6px 0"><strong id="typingWord"></strong></div>
+                        <input id="typingInput" class="math-input" type="text" aria-label="Type the shown word" />
+                        <div style="height:8px"></div>
+                        <button id="typingSubmitBtn" class="btn" type="button">Submit</button>
+                        <div id="typingFeedback" class="challenge-copy" aria-live="polite"></div>
+                    </div>
+                </div>
+
+                <p class="fine" id="immutableNotice" hidden>
+                    Immutable mode is active. Use the override in settings if you need emergency access.
+                </p>
+
+                <div class="actions" id="secondaryActions">
+                    <button id="closeTabBtn" class="btn ghost" type="button">Close tab</button>
+                </div>
+            </section>
         </main>
 
+        <script src="shared-extension-utils.js"></script>
         <script src="blocked.js"></script>
   </body>
 </html>

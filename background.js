@@ -2,6 +2,15 @@
 // statsToday: { [domain]: { timeSec: number, visits: number } }
 // activeBlocks: [{ domain: string, endsAt: number|null, remainingSec?: number }]
 
+importScripts("shared-extension-utils.js");
+importScripts("gdpr-utils.js");
+const {
+    formatTimeSec,
+    getDayKey,
+    parseDayKey,
+    getOrCreateAnalyticsClientId
+} = globalThis.StmSharedUtils || {};
+
 const KEYS = {
     blockedDomains: "blockedDomains", // { [domain]: { limitMinutes } }
     statsToday: "statsToday",         // { [domain]: { timeSec, visits, lastSeenDay } }
@@ -17,7 +26,8 @@ const KEYS = {
     statsHistory: "statsHistory",       // { [dayKey]: { [domain]: { timeMs, visits } } }
     onboarding: "onboardingState",      // { step: 0|1|2, completed: boolean, completedAt: number|null }
     onboardingMetrics: "onboardingMetrics", // { installed, setupStarted, setupCompleted, setupSkipped, firstBlockEvent, firstBlockedPageView, day1Return, day7Return }
-    postInstallRedirectMeta: "postInstallRedirectMeta" // { reason: "install"|"update", version: string, shownAt: number }
+    postInstallRedirectMeta: "postInstallRedirectMeta", // { reason: "install"|"update", version: string, shownAt: number }
+    lastKnownTimezoneOffset: "lastKnownTimezoneOffset" // number: minutes offset from UTC
 };
 
 const PREMIUM_KEY = "premiumState";
@@ -29,7 +39,6 @@ const WHOP_LINK_STATE_URL = "https://screen-time-manager.jackster0627.workers.de
 const WHOP_LINK_STATE_MAX_AGE_MS = 60 * 60 * 1000;
 const ALLOWED_EXTERNAL_CALLBACK_ORIGIN = "https://screen-time-manager.jackster0627.workers.dev/";
 const ANALYTICS_EVENT_URL = "https://screen-time-manager.jackster0627.workers.dev/analytics/event";
-const ANALYTICS_CLIENT_ID_KEY = "analyticsClientId";
 const ANALYTICS_INSTALL_TS_KEY = "analyticsInstallTimestampMs";
 const ANALYTICS_LAST_ACTIVE_DAY_KEY = "analyticsLastActiveDay";
 const ANALYTICS_LAST_ACTIVE_WEEK_KEY = "analyticsLastActiveWeek";
@@ -41,13 +50,231 @@ const FREE_PLAN_LIMITS = Object.freeze({
     maxTrackedDomains: 3,
     maxScheduledBlocks: 2
 });
-const ALL_SCHEDULE_DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
-
-const DEFAULT_ONBOARDING_STATE = Object.freeze({
-    step: 0,
-    completed: false,
-    completedAt: null
+const DOMAIN_CONFIG_VALIDATION = Object.freeze({
+    MIN_LIMIT_SECONDS: 60,        // 1 minute minimum
+    MAX_LIMIT_SECONDS: 86400,     // 24 hours maximum
+    ALLOWED_TIERS: ['lenient', 'standard', 'strict', 'immutable']
 });
+const ALL_SCHEDULE_DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
+const ENFORCEMENT_TIERS = Object.freeze({
+    LENIENT: "lenient",
+    STANDARD: "standard",
+    STRICT: "strict",
+    IMMUTABLE: "immutable"
+});
+const DEFAULT_ENFORCEMENT_TIER = ENFORCEMENT_TIERS.LENIENT;
+const DEFAULT_NEW_RULE_TIER = ENFORCEMENT_TIERS.STANDARD;
+const ADMIN_OVERRIDE_KEY = "immutableAdminOverrideEnabled";
+const ADMIN_OVERRIDE_LAST_USED_KEY = "immutableAdminOverrideLastUsedDay";
+const TIER_POLICIES = Object.freeze({
+    [ENFORCEMENT_TIERS.LENIENT]: Object.freeze({
+        allowImmediateUndo: true,
+        allowedSnoozeMinutes: [5, 15, 30],
+        requiresChallenge: false,
+        blockedPageImmutable: false
+    }),
+    [ENFORCEMENT_TIERS.STANDARD]: Object.freeze({
+        allowImmediateUndo: false,
+        allowedSnoozeMinutes: [5, 15, 30],
+        requiresChallenge: false,
+        blockedPageImmutable: false
+    }),
+    [ENFORCEMENT_TIERS.STRICT]: Object.freeze({
+        allowImmediateUndo: false,
+        allowedSnoozeMinutes: [5, 10],
+        requiresChallenge: true,
+        blockedPageImmutable: false
+    }),
+    [ENFORCEMENT_TIERS.IMMUTABLE]: Object.freeze({
+        allowImmediateUndo: false,
+        allowedSnoozeMinutes: [],
+        requiresChallenge: false,
+        blockedPageImmutable: true
+    })
+});
+
+const strictChallengeTokens = new Map();
+
+// Reset token management: Secure reset operations by requiring short-lived tokens
+const resetLimitTokens = new Map(); // { token: { domain, expiresAt } }
+const RESET_TOKEN_TTL_MS = 5000; // 5 second expiry
+const TOKEN_STORAGE_KEYS = Object.freeze({
+    strictChallenge: "strictChallengeTokens",
+    resetLimit: "resetLimitTokens"
+});
+
+function getSessionStorageArea() {
+    return chrome.storage?.session || null;
+}
+
+async function hydrateTokenCache(storageKey, cache) {
+    const storage = getSessionStorageArea();
+    if (!storage?.get || cache.size > 0) {
+        return;
+    }
+
+    const data = await storage.get([storageKey]);
+    const stored = data?.[storageKey];
+    if (!stored || typeof stored !== "object") {
+        return;
+    }
+
+    const now = Date.now();
+    for (const [token, record] of Object.entries(stored)) {
+        if (record?.expiresAt > now) {
+            cache.set(token, record);
+        }
+    }
+}
+
+function pruneExpiredTokens(cache, now = Date.now()) {
+    let changed = false;
+    for (const [token, record] of cache) {
+        if (!record || Number(record.expiresAt) <= now) {
+            cache.delete(token);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+async function persistTokenCache(storageKey, cache) {
+    try {
+        const storage = getSessionStorageArea();
+        if (!storage || typeof storage.set !== 'function') {
+            // Session storage unavailable in this context (worker suspended or older runtime) - no-op
+            return;
+        }
+
+        const obj = {};
+        for (const [token, record] of cache) {
+            if (record && Number(record.expiresAt) > Date.now()) {
+                obj[token] = record;
+            }
+        }
+
+        await storage.set({ [storageKey]: obj });
+    } catch (err) {
+        // Don't throw - token persistence is best-effort. Log for diagnostics.
+        ExtensionLogger.debug('persistTokenCache', 'Failed to persist token cache', { storageKey, error: String(err) });
+    }
+}
+
+async function createResetToken(domain) {
+    if (!domain || typeof domain !== "string") return null;
+    await hydrateTokenCache(TOKEN_STORAGE_KEYS.resetLimit, resetLimitTokens);
+    const token = typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `reset_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    resetLimitTokens.set(token, {
+        domain: domain.toLowerCase(),
+        expiresAt: Date.now() + RESET_TOKEN_TTL_MS
+    });
+
+    pruneExpiredTokens(resetLimitTokens);
+    await persistTokenCache(TOKEN_STORAGE_KEYS.resetLimit, resetLimitTokens);
+
+    return token;
+}
+
+async function verifyResetToken(token, domain) {
+    if (!token || typeof token !== "string") return false;
+    const normalizedDomain = String(domain || "").trim().toLowerCase();
+    if (!normalizedDomain) return false;
+
+    await hydrateTokenCache(TOKEN_STORAGE_KEYS.resetLimit, resetLimitTokens);
+    pruneExpiredTokens(resetLimitTokens);
+
+    const record = resetLimitTokens.get(token);
+    if (!record) return false;
+
+    resetLimitTokens.delete(token); // One-time use only
+    await persistTokenCache(TOKEN_STORAGE_KEYS.resetLimit, resetLimitTokens);
+
+    if (record.domain !== normalizedDomain) return false;
+    if (record.expiresAt < Date.now()) return false; // Expired
+
+    return true;
+}
+
+async function createStrictChallengeToken(domain, gameType) {
+    if (!domain || typeof domain !== "string") return null;
+
+    await hydrateTokenCache(TOKEN_STORAGE_KEYS.strictChallenge, strictChallengeTokens);
+    const token = typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    strictChallengeTokens.set(token, {
+        domain: domain.toLowerCase(),
+        gameType: gameType || null,
+        expiresAt: Date.now() + (2 * 60 * 1000)
+    });
+
+    pruneExpiredTokens(strictChallengeTokens);
+    await persistTokenCache(TOKEN_STORAGE_KEYS.strictChallenge, strictChallengeTokens);
+
+    // Diagnostic log: token created (masked)
+    try {
+        const masked = `${String(token).slice(0, 6)}...${String(token).slice(-4)}`;
+        ExtensionLogger.info('createStrictChallengeToken', `created token ${masked}`, { domain, gameType });
+    } catch (e) {
+        /* ignore logging failures */
+    }
+
+    return token;
+}
+
+async function validateStrictChallengeToken(token, domain) {
+    const tokenValue = String(token || "").trim();
+    const normalizedDomain = String(domain || "").trim().toLowerCase();
+    if (!tokenValue || !normalizedDomain) return false;
+
+    await hydrateTokenCache(TOKEN_STORAGE_KEYS.strictChallenge, strictChallengeTokens);
+    pruneExpiredTokens(strictChallengeTokens);
+
+    const record = strictChallengeTokens.get(tokenValue);
+    if (!record) return false;
+
+    strictChallengeTokens.delete(tokenValue);
+    await persistTokenCache(TOKEN_STORAGE_KEYS.strictChallenge, strictChallengeTokens);
+
+    const domainMatch = record.domain === normalizedDomain;
+    const notExpired = record.expiresAt > Date.now();
+
+    // Diagnostic log: validation attempt (masked token)
+    try {
+        const masked = `${String(tokenValue).slice(0, 6)}...${String(tokenValue).slice(-4)}`;
+        ExtensionLogger.info('validateStrictChallengeToken', `validate ${masked}`, { domain: normalizedDomain, domainMatch, notExpired });
+    } catch (e) {
+        /* ignore logging failures */
+    }
+
+    if (!domainMatch) return false;
+    return notExpired;
+}
+// Standardized logging utility
+const ExtensionLogger = {
+    error(operation, error, details = {}) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[STM][${operation}] Error:`, message, details);
+    },
+    
+    warn(operation, message, details = {}) {
+        console.warn(`[STM][${operation}] Warning:`, message, details);
+    },
+    
+    info(operation, message, details = {}) {
+        console.info(`[STM][${operation}]`, message, details);
+    },
+    
+    debug(operation, message, details = {}) {
+        if (process?.env?.NODE_ENV === 'development') {
+            console.debug(`[STM][${operation}]`, message, details);
+        }
+    }
+};
 
 const DEFAULT_ONBOARDING_METRICS = Object.freeze({
     installed: null,
@@ -73,13 +300,6 @@ const ENFORCE_GAP_FLOOR_MS = 90 * 1000;
 const ENFORCE_GAP_MULTIPLIER = 30;
 let lastEnforceAlarmAtMs = 0;
 
-function getDayKey(d = new Date()) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-}
-
 function getIsoWeekKey(d = new Date()) {
     const date = new Date(d);
     date.setHours(0, 0, 0, 0);
@@ -91,22 +311,6 @@ function getIsoWeekKey(d = new Date()) {
     const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
 
     return `${date.getFullYear()}-W${String(weekNo).padStart(2, "0")}`;
-}
-
-function parseDayKey(dayKey) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dayKey || ""))) {
-        return null;
-    }
-
-    const [year, month, day] = String(dayKey).split("-").map(Number);
-    const parsed = new Date(year, month - 1, day);
-
-    if (Number.isNaN(parsed.getTime())) {
-        return null;
-    }
-
-    parsed.setHours(0, 0, 0, 0);
-    return parsed;
 }
 
 function calculateInactiveGapDays(previousDayKey, currentDayKey) {
@@ -170,17 +374,15 @@ function sanitizeAnalyticsParams(params) {
 
 function formatBadgeDuration(sec) {
     const totalSec = Math.max(0, Math.floor(sec || 0));
-    if (totalSec < 60) {
-        return `${totalSec}s`;
-    }
-
     const totalMin = Math.floor(totalSec / 60);
-    if (totalMin < 60) {
-        return `${totalMin}m`;
+
+    if (totalMin >= 60) {
+        const hours = Math.floor(totalMin / 60);
+        const minutes = totalMin % 60;
+        return `${hours}h ${minutes}m`;
     }
 
-    const totalHours = Math.floor(totalMin / 60);
-    return `${Math.min(totalHours, 99)}h`;
+    return `${totalMin}m`;
 }
 
 async function setActionBadgeStyle() {
@@ -207,10 +409,20 @@ async function syncActionBadge() {
         return;
     }
 
-    const { [KEYS.blockedDomains]: blockedDomains = {}, [KEYS.statsToday]: statsToday = {} } =
-        await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday]);
+    const {
+        [KEYS.blockedDomains]: blockedDomains = {},
+        [KEYS.statsToday]: statsToday = {},
+        [KEYS.snoozedDomains]: snoozedDomains = {}
+    } = await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday, KEYS.snoozedDomains]);
 
     const domain = activeDomain;
+    const snoozeExpiresAt = getSnoozeExpiresAt(snoozedDomains?.[domain]);
+    if (snoozeExpiresAt > Date.now()) {
+        const remainingSec = Math.max(1, Math.ceil((snoozeExpiresAt - Date.now()) / 1000));
+        await chrome.action.setBadgeText({ text: formatBadgeDuration(remainingSec) }).catch(() => {});
+        return;
+    }
+
     const storedTimeMs = statsToday?.[domain]?.timeMs || 0;
     const liveTimeMs = activeStartMs ? Math.max(0, Date.now() - activeStartMs) : 0;
     const usedTimeMs = storedTimeMs + liveTimeMs;
@@ -225,23 +437,14 @@ async function syncActionBadge() {
     await chrome.action.setBadgeText({ text: formatBadgeDuration(Math.round(usedTimeMs / 1000)) }).catch(() => {});
 }
 
-async function getOrCreateAnalyticsClientId() {
-    const { [ANALYTICS_CLIENT_ID_KEY]: storedClientId = "" } =
-        await chrome.storage.local.get([ANALYTICS_CLIENT_ID_KEY]);
+const ANALYTICS_RETRY_CONFIG = Object.freeze({
+    maxRetries: 3,
+    initialDelayMs: 500,
+    maxDelayMs: 5000,
+    backoffMultiplier: 2
+});
 
-    if (storedClientId) {
-        return storedClientId;
-    }
-
-    const clientId = typeof crypto?.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now()}.${Math.random().toString(36).slice(2, 12)}`;
-
-    await chrome.storage.local.set({ [ANALYTICS_CLIENT_ID_KEY]: clientId });
-    return clientId;
-}
-
-async function sendAnalyticsEvent(eventName, params = {}) {
+async function sendAnalyticsEventWithRetry(eventName, params = {}, retryCount = 0) {
     const normalizedEventName = sanitizeAnalyticsEventName(eventName);
     if (!normalizedEventName) {
         return;
@@ -250,23 +453,59 @@ async function sendAnalyticsEvent(eventName, params = {}) {
     const clientId = await getOrCreateAnalyticsClientId();
     const extensionVersion = sanitizeAnalyticsText(chrome.runtime.getManifest().version, "unknown", 32);
 
-    await fetch(ANALYTICS_EVENT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            clientId,
-            eventName: normalizedEventName,
-            extensionVersion,
-            params: sanitizeAnalyticsParams(params)
-        })
-    });
+    try {
+        const response = await fetch(ANALYTICS_EVENT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                clientId,
+                eventName: normalizedEventName,
+                extensionVersion,
+                params: sanitizeAnalyticsParams(params)
+            }),
+            signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined
+        });
+
+        if (!response.ok) {
+            throw new Error(`Analytics request failed with status ${response.status}`);
+        }
+    } catch (error) {
+        if (retryCount < ANALYTICS_RETRY_CONFIG.maxRetries) {
+            const delayMs = Math.min(
+                ANALYTICS_RETRY_CONFIG.initialDelayMs * Math.pow(ANALYTICS_RETRY_CONFIG.backoffMultiplier, retryCount),
+                ANALYTICS_RETRY_CONFIG.maxDelayMs
+            );
+            
+            ExtensionLogger.info('analytics_retry', `Retrying after ${delayMs}ms`, {
+                eventName,
+                attempt: retryCount + 1,
+                maxRetries: ANALYTICS_RETRY_CONFIG.maxRetries
+            });
+
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            return sendAnalyticsEventWithRetry(eventName, params, retryCount + 1);
+        } else {
+            ExtensionLogger.warn('analytics_failed', `Analytics event discarded after ${ANALYTICS_RETRY_CONFIG.maxRetries} retries`, {
+                eventName,
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+    }
+}
+
+async function sendAnalyticsEvent(eventName, params = {}) {
+    await sendAnalyticsEventWithRetry(eventName, params, 0);
 }
 
 async function sendAnalyticsEventSafe(eventName, params = {}) {
     try {
         await sendAnalyticsEvent(eventName, params);
-    } catch {
-        // Never block extension behavior on analytics failures.
+    } catch (error) {
+        // Never block extension behavior on analytics failures
+        ExtensionLogger.debug('analytics_safe', 'Analytics operation was silently handled', {
+            eventName,
+            error: error instanceof Error ? error.message : String(error)
+        });
     }
 }
 
@@ -390,9 +629,164 @@ function normalizeScheduleDays(days) {
     return normalized.length > 0 ? normalized : [...ALL_SCHEDULE_DAYS];
 }
 
+function normalizeTier(rawTier, fallbackTier = DEFAULT_ENFORCEMENT_TIER) {
+    const value = String(rawTier || "").trim().toLowerCase();
+    if (Object.values(ENFORCEMENT_TIERS).includes(value)) {
+        return value;
+    }
+    return fallbackTier;
+}
+
+function normalizeBlockedDomainConfig(rawConfig) {
+    if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
+        return {
+            enabled: true,
+            limitSeconds: 0,
+            tier: DEFAULT_ENFORCEMENT_TIER
+        };
+    }
+
+    // Validate and constrain limitSeconds
+    let limitSeconds = Number(rawConfig.limitSeconds || 0);
+    if (!Number.isFinite(limitSeconds)) {
+        ExtensionLogger.warn('normalizeBlockedDomainConfig', 'Invalid limitSeconds value', { value: rawConfig.limitSeconds });
+        limitSeconds = 0;
+    } else if (limitSeconds > 0) {
+        // Enforce valid range
+        limitSeconds = Math.max(
+            DOMAIN_CONFIG_VALIDATION.MIN_LIMIT_SECONDS,
+            Math.min(DOMAIN_CONFIG_VALIDATION.MAX_LIMIT_SECONDS, limitSeconds)
+        );
+    }
+
+    // Validate tier
+    const tier = normalizeTier(rawConfig.tier, DEFAULT_ENFORCEMENT_TIER);
+    if (!DOMAIN_CONFIG_VALIDATION.ALLOWED_TIERS.includes(tier)) {
+        ExtensionLogger.warn('normalizeBlockedDomainConfig', 'Invalid tier value', { tier });
+        return {
+            enabled: rawConfig.enabled !== false,
+            limitSeconds,
+            tier: DEFAULT_ENFORCEMENT_TIER
+        };
+    }
+
+    return {
+        enabled: rawConfig.enabled !== false,
+        limitSeconds,
+        tier
+    };
+}
+
+function getTierPolicyForTier(tier) {
+    return TIER_POLICIES[normalizeTier(tier)] || TIER_POLICIES[DEFAULT_ENFORCEMENT_TIER];
+}
+
+function getEffectiveTierForDomain(domain, blockedDomains = {}, activeBlocks = []) {
+    const activeMatch = (Array.isArray(activeBlocks) ? activeBlocks : [])
+        .find((block) => block?.domain === domain);
+    if (activeMatch?.tier) {
+        return normalizeTier(activeMatch.tier, DEFAULT_ENFORCEMENT_TIER);
+    }
+
+    const normalizedConfig = normalizeBlockedDomainConfig(blockedDomains?.[domain]);
+    return normalizeTier(normalizedConfig?.tier, DEFAULT_ENFORCEMENT_TIER);
+}
+
+function getSnoozeExpiresAt(snoozeEntry) {
+    if (Number.isFinite(snoozeEntry)) {
+        return Number(snoozeEntry);
+    }
+
+    if (snoozeEntry && typeof snoozeEntry === "object" && Number.isFinite(snoozeEntry.expiresAt)) {
+        return Number(snoozeEntry.expiresAt);
+    }
+
+    return 0;
+}
+
+function isDomainSnoozed(domain, snoozedDomains = {}, now = Date.now()) {
+    const expiresAt = getSnoozeExpiresAt(snoozedDomains?.[domain]);
+    return expiresAt > now;
+}
+
+async function clearDomainSnooze(domain, { emitAnalytics = false, resumeReason = "manual_clear" } = {}) {
+    const normalizedDomain = String(domain || "").trim().toLowerCase();
+    if (!normalizedDomain) {
+        return false;
+    }
+
+    const { [KEYS.snoozedDomains]: snoozedDomains = {} } =
+        await chrome.storage.local.get([KEYS.snoozedDomains]);
+    if (!Object.prototype.hasOwnProperty.call(snoozedDomains, normalizedDomain)) {
+        return false;
+    }
+
+    delete snoozedDomains[normalizedDomain];
+    await chrome.storage.local.set({ [KEYS.snoozedDomains]: snoozedDomains });
+    await chrome.alarms.clear(`snoozeEnd_${normalizedDomain}`);
+    await syncActionBadge();
+    await updateBlockRules();
+
+    if (emitAnalytics) {
+        await sendAnalyticsEventSafe("snooze_ended", {
+            domain_host: sanitizeAnalyticsText(normalizedDomain, "unknown", 100),
+            resume_reason: sanitizeAnalyticsText(resumeReason, "manual_clear", 40)
+        });
+    }
+
+    return true;
+}
+
+async function resetDomainUsage(domain) {
+    const normalizedDomain = String(domain || "").trim().toLowerCase();
+    if (!normalizedDomain) {
+        return false;
+    }
+
+    const {
+        [KEYS.statsToday]: statsToday = {},
+        [KEYS.allStatsToday]: allStatsToday = {},
+        [KEYS.alertsSent]: alertsSent = {}
+    } = await chrome.storage.local.get([KEYS.statsToday, KEYS.allStatsToday, KEYS.alertsSent]);
+
+    const hadStats = Object.prototype.hasOwnProperty.call(statsToday, normalizedDomain);
+    const hadAllStats = Object.prototype.hasOwnProperty.call(allStatsToday, normalizedDomain);
+    const hadAlerts = Object.prototype.hasOwnProperty.call(alertsSent, normalizedDomain);
+
+    if (!hadStats && !hadAllStats && !hadAlerts) {
+        return false;
+    }
+
+    if (hadStats) {
+        delete statsToday[normalizedDomain];
+    }
+    if (hadAllStats) {
+        delete allStatsToday[normalizedDomain];
+    }
+    if (hadAlerts) {
+        delete alertsSent[normalizedDomain];
+    }
+
+    await chrome.storage.local.set({
+        [KEYS.statsToday]: statsToday,
+        [KEYS.allStatsToday]: allStatsToday,
+        [KEYS.alertsSent]: alertsSent
+    });
+
+    await clearDomainSnooze(normalizedDomain, {
+        emitAnalytics: true,
+        resumeReason: "limit_reset"
+    });
+    await syncActionBadge();
+
+    return true;
+}
+
 function normalizeScheduledBlock(block) {
+    const normalizedTier = normalizeTier(block?.tier, DEFAULT_NEW_RULE_TIER);
     return {
         ...block,
+        tier: normalizedTier,
         enabled: block?.enabled !== false,
         daysOfWeek: normalizeScheduleDays(block?.daysOfWeek)
     };
@@ -495,7 +889,7 @@ async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false, s
     if (deltaMs <= 0 && !countVisit) return;
     await ensureDayReset();
 
-    const storageKeys = [KEYS.blockedDomains, KEYS.statsToday, KEYS.allStatsToday];
+    const storageKeys = [KEYS.blockedDomains, KEYS.statsToday, KEYS.allStatsToday, KEYS.snoozedDomains];
     if (deltaMs > 0) {
         storageKeys.push(KEYS.hourlyUsageHistory);
     }
@@ -504,7 +898,8 @@ async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false, s
         blockedDomains = {},
         [KEYS.statsToday]: stats = {},
         [KEYS.allStatsToday]: allStats = {},
-        [KEYS.hourlyUsageHistory]: hourlyUsageHistory = {}
+        [KEYS.hourlyUsageHistory]: hourlyUsageHistory = {},
+        [KEYS.snoozedDomains]: snoozedDomains = {}
     } = await chrome.storage.local.get(storageKeys);
 
     const cur = stats[domain] || { timeMs: 0, visits: 0 };
@@ -542,22 +937,26 @@ async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false, s
         // Check for alerts after updating time
         await checkAndSendAlerts(domain, blockedDomains, stats);
 
-        // ENFORCE LIMIT (only if domain is currently blocked)
-        if (isBlockedDomain(domain, blockedDomains)) {
+        // ENFORCE LIMIT (only if domain is currently blocked and not snoozed)
+        if (isBlockedDomain(domain, blockedDomains) && !isDomainSnoozed(domain, snoozedDomains)) {
             const limitMs = limitMsFor(domain, blockedDomains);
-            if (limitMs != null && cur.timeMs >= limitMs && activeTabId != null) {
-                const t = await chrome.tabs.get(activeTabId).catch(() => null);
-                const tabDomain = t?.url ? domainFromUrl(t.url) : null;
+            if (limitMs != null && cur.timeMs >= limitMs) {
+                const tabs = await chrome.tabs.query({});
+                const targetTab =
+                    tabs.find((tab) => tab.active && (tab.url ? domainFromUrl(tab.url) : null) === domain) ||
+                    tabs.find((tab) => (tab.url ? domainFromUrl(tab.url) : null) === domain);
+                const tier = getEffectiveTierForDomain(domain, blockedDomains);
 
-                // only redirect if the active tracked tab is STILL on this domain
-                if (t?.id != null && tabDomain === domain) {
+                // Enforce on any currently open tab for this domain, preferring active tabs.
+                if (targetTab?.id != null) {
                     await sendAnalyticsEventSafe("limit_block_enforced", {
                         domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
                         used_ms: cur.timeMs,
                         limit_ms: limitMs,
+                        tier,
                         block_source: "limit"
                     });
-                    await chrome.tabs.update(t.id, { url: blockedUrl(domain) }).catch(() => {});
+                    await chrome.tabs.update(targetTab.id, { url: blockedUrl(domain, "limit", tier, targetTab.url) }).catch(() => {});
                 }
             }
         }
@@ -565,12 +964,12 @@ async function updateDomainActivity(domain, { deltaMs = 0, countVisit = false, s
 }
 
 function isBlockedDomain(domain, blockedDomains) {
-    const config = blockedDomains?.[domain];
+    const config = normalizeBlockedDomainConfig(blockedDomains?.[domain]);
     return Boolean(config) && config.enabled !== false;
 }
 
 function limitMsFor(domain, blockedDomains) {
-    const config = blockedDomains?.[domain];
+    const config = normalizeBlockedDomainConfig(blockedDomains?.[domain]);
     if (!config || config.enabled === false) return null;
     const sec = config.limitSeconds;
     if (!Number.isFinite(sec) || sec <= 0) return null;
@@ -584,18 +983,31 @@ function createBlockedEventId() {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function blockedUrl(domain, source = "limit") {
+function blockedUrl(domain, source = "limit", tier = DEFAULT_ENFORCEMENT_TIER, originalUrl = null) {
     const params = new URLSearchParams({
         d: domain,
         source,
+        tier: normalizeTier(tier, DEFAULT_ENFORCEMENT_TIER),
         eid: createBlockedEventId()
     });
+    try {
+        if (originalUrl) {
+            // Only include when provided; background callers should ensure this is safe/validated.
+            params.set('o', String(originalUrl));
+        }
+    } catch (e) {}
     return chrome.runtime.getURL(`blocked.html?${params.toString()}`);
 }
 
-async function redirectOpenTabsForDomains(domains) {
-    const domainSet = new Set(domains.filter(Boolean));
+async function redirectOpenTabsForDomains(blocks) {
+    const blockEntries = Array.isArray(blocks) ? blocks : [];
+    const domainSet = new Set(blockEntries.map((block) => block?.domain).filter(Boolean));
     if (domainSet.size === 0) return;
+
+    const tierByDomain = new Map(blockEntries.map((block) => [
+        block.domain,
+        normalizeTier(block.tier, DEFAULT_NEW_RULE_TIER)
+    ]));
 
     const tabs = await chrome.tabs.query({});
     await Promise.all(tabs.map(async (tab) => {
@@ -605,7 +1017,9 @@ async function redirectOpenTabsForDomains(domains) {
         const domain = domainFromUrl(tab.url);
         if (!domainSet.has(domain)) return;
 
-        await chrome.tabs.update(tab.id, { url: blockedUrl(domain, "scheduled") }).catch(() => {});
+        await chrome.tabs.update(tab.id, {
+            url: blockedUrl(domain, "scheduled", tierByDomain.get(domain) || DEFAULT_NEW_RULE_TIER, tab.url)
+        }).catch(() => {});
     }));
 }
 
@@ -614,7 +1028,32 @@ function parseHourMinute(timeStr) {
     return { h, m };
 }
 
+// Timezone awareness: Scheduled blocks use local browser time.
+// If device timezone changes, blocks may activate/deactivate at unexpected times.
+// TODO: Store timezone offset and handle DST transitions properly in future version
+async function detectTimezoneChange() {
+    const { [KEYS.lastKnownTimezoneOffset]: lastOffset = null } = 
+        await chrome.storage.local.get([KEYS.lastKnownTimezoneOffset]);
+    
+    const currentOffset = new Date().getTimezoneOffset();
+    if (lastOffset !== null && Math.abs(currentOffset - lastOffset) > 30) {
+        // Timezone offset changed by more than 30 minutes (likely actual change, not DST)
+        ExtensionLogger.warn('timezone_change_detected', 'Device timezone may have changed', {
+            previousOffset: lastOffset,
+            currentOffset: currentOffset,
+            differenceMinutes: Math.abs(currentOffset - lastOffset)
+        });
+        return true;
+    }
+    
+    // Store current offset
+    await chrome.storage.local.set({ [KEYS.lastKnownTimezoneOffset]: currentOffset });
+    
+    return false;
+}
+
 function getTodayTime(timeStr, baseDate = new Date()) {
+    // NOTE: All times are in local browser timezone
     const { h: hours, m: minutes } = parseHourMinute(timeStr);
     const target = new Date(baseDate);
     target.setHours(hours, minutes, 0, 0);
@@ -764,32 +1203,48 @@ async function enforceIfNeeded(tabId) {
     const domain = domainFromUrl(tab.url);
     if (!domain) return;
 
-    const { [KEYS.blockedDomains]: blockedDomains = {}, [KEYS.statsToday]: statsToday = {} } =
-        await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday]);
+    const {
+        [KEYS.blockedDomains]: blockedDomains = {},
+        [KEYS.statsToday]: statsToday = {},
+        [KEYS.snoozedDomains]: snoozedDomains = {}
+    } = await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday, KEYS.snoozedDomains]);
 
     const limitMs = limitMsFor(domain, blockedDomains);
     if (limitMs == null) return;
+    if (isDomainSnoozed(domain, snoozedDomains)) return;
 
     const usedMs = statsToday?.[domain]?.timeMs || 0;
     if (usedMs >= limitMs) {
+        const tier = getEffectiveTierForDomain(domain, blockedDomains);
         await sendAnalyticsEventSafe("limit_block_enforced", {
             domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
             used_ms: usedMs,
             limit_ms: limitMs,
+            tier,
             block_source: "limit"
         });
-        await chrome.tabs.update(tabId, { url: blockedUrl(domain) }).catch(() => {});
+        await chrome.tabs.update(tabId, { url: blockedUrl(domain, "limit", tier, tab?.url) }).catch(() => {});
     }
 }
 
-function formatTimeSec(sec) {
-    sec = Math.max(0, Math.floor(sec || 0));
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
+async function isDomainLimitCurrentlyBlocking(domain) {
+    const normalizedDomain = String(domain || "").trim().toLowerCase();
+    if (!normalizedDomain) return false;
+
+    const {
+        [KEYS.blockedDomains]: blockedDomains = {},
+        [KEYS.statsToday]: statsToday = {},
+        [KEYS.snoozedDomains]: snoozedDomains = {}
+    } = await chrome.storage.local.get([KEYS.blockedDomains, KEYS.statsToday, KEYS.snoozedDomains]);
+
+    if (!isBlockedDomain(normalizedDomain, blockedDomains)) return false;
+    if (isDomainSnoozed(normalizedDomain, snoozedDomains)) return false;
+
+    const limitMs = limitMsFor(normalizedDomain, blockedDomains);
+    if (limitMs == null) return false;
+
+    const usedMs = statsToday?.[normalizedDomain]?.timeMs || 0;
+    return usedMs >= limitMs;
 }
 
 function normalizePremium(raw) {
@@ -1103,29 +1558,44 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 function buildRulesFromActiveBlocks(activeBlocks) {
     const uniqueDomains = [...new Set(activeBlocks.map((block) => block.domain).filter(Boolean))];
-    return uniqueDomains.map((domain) => ({
+    return uniqueDomains.map((domain) => {
+        const matchedBlock = activeBlocks.find((block) => block.domain === domain) || {};
+        const tier = normalizeTier(matchedBlock.tier, DEFAULT_NEW_RULE_TIER);
+        return {
         id: stableRuleIdForDomain(domain),
         priority: 1,
         action: {
             type: "redirect",
             redirect: {
-                extensionPath: `/blocked.html?d=${encodeURIComponent(domain)}&source=scheduled`
+                extensionPath: `/blocked.html?d=${encodeURIComponent(domain)}&source=scheduled&tier=${encodeURIComponent(tier)}`
             }
         },
         condition: {
             urlFilter: `||${domain}^`,
             resourceTypes: ["main_frame"]
         }
-    }));
+    };
+    });
 }
 
 async function syncBlockRulesNow() {
-    const { activeBlocks = [], [KEYS.snoozedDomains]: snoozedDomains = {} } =
-        await chrome.storage.local.get([KEYS.activeBlocks, KEYS.snoozedDomains]);
+    const {
+        activeBlocks = [],
+        [KEYS.snoozedDomains]: snoozedDomains = {},
+        [KEYS.blockedDomains]: blockedDomains = {}
+    } = await chrome.storage.local.get([KEYS.activeBlocks, KEYS.snoozedDomains, KEYS.blockedDomains]);
     const now = Date.now();
     const unsnoozedBlocks = activeBlocks.filter((b) => {
-        const expiry = snoozedDomains[b.domain];
-        return !expiry || expiry <= now;
+        const snoozeEntry = snoozedDomains?.[b.domain];
+        const snoozeExpiresAt = getSnoozeExpiresAt(snoozeEntry);
+        const tier = getEffectiveTierForDomain(b.domain, blockedDomains, activeBlocks);
+        if (tier === ENFORCEMENT_TIERS.IMMUTABLE) {
+            if (Boolean(snoozeEntry?.adminOverride) && snoozeExpiresAt > now) {
+                return false;
+            }
+            return true;
+        }
+        return !isDomainSnoozed(b.domain, snoozedDomains, now);
     });
     const rules = buildRulesFromActiveBlocks(unsnoozedBlocks);
     const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
@@ -1286,12 +1756,13 @@ async function reconcileActiveScheduledBlocks() {
             id: block.id,
             domain: block.domain,
             startTime: activeWindow.start,
-            endTime: activeWindow.end
+            endTime: activeWindow.end,
+            tier: normalizeTier(block.tier, DEFAULT_NEW_RULE_TIER)
         }));
 
     await chrome.storage.local.set({ [KEYS.activeBlocks]: nextActiveBlocks });
     await updateBlockRules();
-    await redirectOpenTabsForDomains(nextActiveBlocks.map((block) => block.domain));
+    await redirectOpenTabsForDomains(nextActiveBlocks);
 }
 
 async function initializeOnboarding() {
@@ -1444,14 +1915,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await deactivateScheduledBlock(id, "alarm_end");
     } else if (alarm.name.startsWith('snoozeEnd_')) {
         const domain = alarm.name.slice('snoozeEnd_'.length);
-        const { [KEYS.snoozedDomains]: snoozedDomains = {} } =
-            await chrome.storage.local.get([KEYS.snoozedDomains]);
-        delete snoozedDomains[domain];
-        await chrome.storage.local.set({ [KEYS.snoozedDomains]: snoozedDomains });
-        await updateBlockRules();
-        await sendAnalyticsEventSafe("snooze_ended", {
-            domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
-            resume_reason: "alarm_expired"
+        await clearDomainSnooze(domain, {
+            emitAnalytics: true,
+            resumeReason: "alarm_expired"
         });
     }
 });
@@ -1470,7 +1936,8 @@ function buildBackgroundMessageActionHandlers(deps) {
         logOnboardingMetric,
         refreshStoredPremiumStatus,
         syncActionBadge,
-        verifyAndPersistWhopToken
+        verifyAndPersistWhopToken,
+        getEffectiveTierForDomain
     } = deps;
 
     return {
@@ -1493,10 +1960,25 @@ function buildBackgroundMessageActionHandlers(deps) {
 
         endScheduledBlock(request, sendResponse) {
             const domain = String(request?.domain || "").trim();
+            const fromBlockedPage = Boolean(request?.fromBlockedPage);
 
             (async () => {
-                const { [keys.activeBlocks]: activeBlocks = [] } =
-                    await storage.get([keys.activeBlocks]);
+                const {
+                    [keys.activeBlocks]: activeBlocks = [],
+                    [keys.blockedDomains]: blockedDomains = {},
+                    [keys.immutableAdminOverride]: immutableAdminOverrideEnabled = false
+                } = await storage.get([keys.activeBlocks, keys.blockedDomains, keys.immutableAdminOverride]);
+
+                const tier = getEffectiveTierForDomain(domain, blockedDomains, activeBlocks);
+                const immutableBypassAllowed = tier === ENFORCEMENT_TIERS.IMMUTABLE && Boolean(immutableAdminOverrideEnabled);
+                if (fromBlockedPage && tier === ENFORCEMENT_TIERS.IMMUTABLE && !immutableBypassAllowed) {
+                    sendResponse({
+                        success: false,
+                        error: "Immutable blocks can only be ended from popup advanced override."
+                    });
+                    return;
+                }
+
                 const next = activeBlocks.filter((block) => block.domain !== domain);
                 await storage.set({ [keys.activeBlocks]: next });
                 await updateBlockRules();
@@ -1572,6 +2054,25 @@ function buildBackgroundMessageActionHandlers(deps) {
             })();
         },
 
+        setImmutableAdminOverride(request, sendResponse) {
+            (async () => {
+                const enabled = Boolean(request?.enabled);
+                const { [ADMIN_OVERRIDE_LAST_USED_KEY]: lastUsedDay = "" } = await storage.get([ADMIN_OVERRIDE_LAST_USED_KEY]);
+                if (enabled && String(lastUsedDay || "") === getDayKey()) {
+                    sendResponse({ success: false, error: "Immutable override has already been used today." });
+                    return;
+                }
+
+                await storage.set({ [keys.immutableAdminOverride]: enabled });
+                sendResponse({ success: true, enabled });
+            })().catch((error) => {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Failed to update immutable override"
+                });
+            });
+        },
+
         trackAnalyticsEvent(request, sendResponse) {
             (async () => {
                 await sendAnalyticsEventSafe(request.eventName, request.params || {});
@@ -1593,7 +2094,9 @@ const MESSAGE_ACTION_HANDLERS = buildBackgroundMessageActionHandlers({
     enforceIfNeeded,
     storage: chrome.storage.local,
     keys: {
-        activeBlocks: KEYS.activeBlocks
+        activeBlocks: KEYS.activeBlocks,
+        blockedDomains: KEYS.blockedDomains,
+        immutableAdminOverride: ADMIN_OVERRIDE_KEY
     },
     updateBlockRules,
     sendAnalyticsEventSafe,
@@ -1601,7 +2104,8 @@ const MESSAGE_ACTION_HANDLERS = buildBackgroundMessageActionHandlers({
     logOnboardingMetric,
     refreshStoredPremiumStatus,
     syncActionBadge,
-    verifyAndPersistWhopToken
+    verifyAndPersistWhopToken,
+    getEffectiveTierForDomain
 });
 
 // Handle messages from popup
@@ -1615,7 +2119,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'addScheduledBlock') {
-        const { domain, startTime, endTime, daysOfWeek } = request;
+        const { domain, startTime, endTime, daysOfWeek, tier } = request;
         chrome.storage.local.get([KEYS.scheduledBlocks, PREMIUM_KEY], async (data) => {
             const scheduled = data[KEYS.scheduledBlocks] || [];
             const premiumState = data[PREMIUM_KEY] || {};
@@ -1625,7 +2129,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 return;
             }
             const id = Date.now();
-            const nextBlock = normalizeScheduledBlock({ id, domain, startTime, endTime, daysOfWeek, enabled: true });
+            const nextBlock = normalizeScheduledBlock({
+                id,
+                domain,
+                startTime,
+                endTime,
+                daysOfWeek,
+                tier: normalizeTier(tier, DEFAULT_NEW_RULE_TIER),
+                enabled: true
+            });
             scheduled.push(nextBlock);
             await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
             // Set alarms for next occurrences
@@ -1657,7 +2169,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === "updateScheduledBlock") {
         const id = Number(request.id);
-        const { domain, startTime, endTime, daysOfWeek } = request;
+        const { domain, startTime, endTime, daysOfWeek, tier } = request;
 
         if (!Number.isInteger(id) || id <= 0) {
             sendResponse({ success: false, error: "Scheduled block not found." });
@@ -1680,7 +2192,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 domain,
                 startTime,
                 endTime,
-                daysOfWeek
+                daysOfWeek,
+                tier: normalizeTier(tier, previousBlock.tier || DEFAULT_NEW_RULE_TIER)
             });
 
             await chrome.storage.local.set({ [KEYS.scheduledBlocks]: scheduled });
@@ -1749,7 +2262,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const enabled = Boolean(request.enabled);
 
         if (!domain) {
-            sendResponse({ success: false, error: "Domain not found." });
+            sendResponse({ success: false, error: "Domain is required." });
             return true;
         }
 
@@ -1775,6 +2288,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
             await chrome.storage.local.set({ [KEYS.blockedDomains]: blockedDomains });
 
+            if (!enabled) {
+                await clearDomainSnooze(domain, {
+                    emitAnalytics: true,
+                    resumeReason: "limit_disabled"
+                });
+            }
+
             if (enabled) {
                 const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
                 if (activeTab?.id != null) {
@@ -1794,32 +2314,438 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    if (request.action === "snoozeBlock") {
-        const { domain, minutes = 5 } = request;
+    if (request.action === "clearDomainSnooze") {
+        const domain = String(request.domain || "").trim().toLowerCase();
+        if (!domain) {
+            sendResponse({ success: false, error: "Domain is required." });
+            return true;
+        }
+
         (async () => {
-            const expiresAt = Date.now() + minutes * 60 * 1000;
+            await clearDomainSnooze(domain, {
+                emitAnalytics: true,
+                resumeReason: String(request.reason || "manual_clear")
+            });
+            sendResponse({ success: true });
+        })().catch((error) => {
+            sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : "Failed to clear pause"
+            });
+        });
+        return true;
+    }
+
+    if (request.action === "adminOverrideBypassImmutable") {
+        const requestedDomain = String(request.domain || "").trim().toLowerCase();
+        const source = String(request.source || "limit").trim().toLowerCase();
+
+        if (!requestedDomain) {
+            sendResponse({ success: false, error: "Missing domain." });
+            return true;
+        }
+
+        (async () => {
+            const {
+                [KEYS.blockedDomains]: blockedDomains = {},
+                [KEYS.activeBlocks]: activeBlocks = [],
+                [KEYS.snoozedDomains]: snoozedDomains = {},
+                [ADMIN_OVERRIDE_KEY]: immutableAdminOverrideEnabled = false
+            } = await chrome.storage.local.get([
+                KEYS.blockedDomains,
+                KEYS.activeBlocks,
+                KEYS.snoozedDomains,
+                ADMIN_OVERRIDE_KEY
+            ]);
+
+            if (!immutableAdminOverrideEnabled) {
+                sendResponse({ success: false, error: "Admin override is disabled." });
+                return;
+            }
+
+            const tier = getEffectiveTierForDomain(requestedDomain, blockedDomains, activeBlocks);
+            if (tier !== ENFORCEMENT_TIERS.IMMUTABLE) {
+                sendResponse({ success: false, error: "Admin override is only available for immutable blocks." });
+                return;
+            }
+
+            if (source === "scheduled") {
+                const nextActiveBlocks = (Array.isArray(activeBlocks) ? activeBlocks : [])
+                    .filter((block) => block.domain !== requestedDomain);
+                await chrome.storage.local.set({ [KEYS.activeBlocks]: nextActiveBlocks });
+                await chrome.storage.local.set({
+                    [ADMIN_OVERRIDE_KEY]: false,
+                    [ADMIN_OVERRIDE_LAST_USED_KEY]: getDayKey()
+                });
+                await updateBlockRules();
+                await sendAnalyticsEventSafe("immutable_admin_override_used", {
+                    domain_host: sanitizeAnalyticsText(requestedDomain, "unknown", 100),
+                    block_source: "scheduled"
+                });
+                sendResponse({ success: true, action: "end_scheduled" });
+                return;
+            }
+
+            const expiresAt = Date.now() + 5 * 60 * 1000;
+            const todayKey = getDayKey();
+            const nextSnoozed = {
+                ...snoozedDomains,
+                [requestedDomain]: {
+                    expiresAt,
+                    source: "limit",
+                    tier,
+                    adminOverride: true
+                }
+            };
+
+            await chrome.storage.local.set({ [KEYS.snoozedDomains]: nextSnoozed });
+            await chrome.storage.local.set({
+                [ADMIN_OVERRIDE_KEY]: false,
+                [ADMIN_OVERRIDE_LAST_USED_KEY]: todayKey
+            });
+            chrome.alarms.create(`snoozeEnd_${requestedDomain}`, { when: expiresAt });
+            await updateBlockRules();
+            await syncActionBadge();
+            await sendAnalyticsEventSafe("immutable_admin_override_used", {
+                domain_host: sanitizeAnalyticsText(requestedDomain, "unknown", 100),
+                block_source: "limit"
+            });
+            sendResponse({ success: true, action: "snooze_limit", expiresAt });
+        })().catch((error) => {
+            sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : "Failed immutable admin override"
+            });
+        });
+        return true;
+    }
+
+    if (request.action === "snoozeBlock") {
+        const { domain, minutes = 5, source = "scheduled", challengeToken = "" } = request;
+        (async () => {
+            const requestedDomain = String(domain || "").trim().toLowerCase();
+            if (!requestedDomain) {
+                sendResponse({ success: false, error: "Missing domain." });
+                return;
+            }
+
             const {
                 [KEYS.snoozedDomains]: snoozedDomains = {},
-                [KEYS.snoozeHistory]: snoozeHistory = {}
-            } = await chrome.storage.local.get([KEYS.snoozedDomains, KEYS.snoozeHistory]);
+                [KEYS.snoozeHistory]: snoozeHistory = {},
+                [KEYS.blockedDomains]: blockedDomains = {},
+                [KEYS.activeBlocks]: activeBlocks = [],
+                [ADMIN_OVERRIDE_KEY]: immutableAdminOverrideEnabled = false
+            } = await chrome.storage.local.get([
+                KEYS.snoozedDomains,
+                KEYS.snoozeHistory,
+                KEYS.blockedDomains,
+                KEYS.activeBlocks,
+                ADMIN_OVERRIDE_KEY
+            ]);
+
+            const tier = getEffectiveTierForDomain(requestedDomain, blockedDomains, activeBlocks);
+            const tierPolicy = getTierPolicyForTier(tier);
+            const requestedMinutes = Number(minutes);
+
+            const immutableBypassAllowed = tier === ENFORCEMENT_TIERS.IMMUTABLE && Boolean(immutableAdminOverrideEnabled);
+            if (tierPolicy.blockedPageImmutable && !immutableBypassAllowed) {
+                sendResponse({ success: false, error: "This block cannot be snoozed.", reason: "immutable_locked" });
+                return;
+            }
+
+            if (!tierPolicy.allowedSnoozeMinutes.includes(requestedMinutes)) {
+                sendResponse({ success: false, error: "Invalid snooze duration for this tier.", reason: "invalid_snooze_duration" });
+                return;
+            }
+
+            if (tierPolicy.requiresChallenge && !await validateStrictChallengeToken(challengeToken, requestedDomain)) {
+                sendResponse({ success: false, error: "Challenge required before snoozing.", reason: "challenge_required" });
+                return;
+            }
+
+            const expiresAt = Date.now() + requestedMinutes * 60 * 1000;
 
             const todayKey = getDayKey();
             const nextSnoozeHistory = { ...snoozeHistory };
             nextSnoozeHistory[todayKey] = Number(nextSnoozeHistory[todayKey] || 0) + 1;
 
-            snoozedDomains[domain] = expiresAt;
+            // Optionally persist the original full URL that initiated the snooze
+            // so the blocked page can redirect back to the exact location (path/query/token).
+            let savedOriginal = null;
+            try {
+                const rawOriginal = String(request.original || "").trim();
+                if (rawOriginal) {
+                    const parsed = new URL(rawOriginal);
+                    const host = parsed.hostname.replace(/^www\./, "");
+                    if (host === requestedDomain) {
+                        savedOriginal = parsed.toString();
+                    }
+                }
+            } catch (e) {
+                // ignore invalid original URLs
+            }
+
+            snoozedDomains[requestedDomain] = {
+                expiresAt,
+                source,
+                tier,
+                original: savedOriginal
+            };
             await chrome.storage.local.set({
                 [KEYS.snoozedDomains]: snoozedDomains,
                 [KEYS.snoozeHistory]: nextSnoozeHistory
             });
             await updateBlockRules();
-            chrome.alarms.create(`snoozeEnd_${domain}`, { when: expiresAt });
+            chrome.alarms.create(`snoozeEnd_${requestedDomain}`, { when: expiresAt });
             await sendAnalyticsEventSafe("snooze_started", {
-                domain_host: sanitizeAnalyticsText(domain, "unknown", 100),
-                snooze_minutes: minutes,
-                block_source: "scheduled"
+                domain_host: sanitizeAnalyticsText(requestedDomain, "unknown", 100),
+                snooze_minutes: requestedMinutes,
+                block_source: source,
+                tier
             });
-            sendResponse({ success: true, expiresAt });
+            const redirectUrl = savedOriginal || (`https://${requestedDomain}`);
+            sendResponse({ success: true, expiresAt, redirectUrl });
+        })();
+        return true;
+    }
+
+    if (request.action === "requestStrictChallengeToken") {
+        const requestedDomain = String(request.domain || "").trim().toLowerCase();
+        if (!requestedDomain) {
+            sendResponse({ success: false, error: "Missing domain." });
+            return true;
+        }
+
+        (async () => {
+            const challengeToken = await createStrictChallengeToken(requestedDomain, request.gameType || null);
+            if (!challengeToken) {
+                sendResponse({ success: false, error: "Failed to create challenge token." });
+                return;
+            }
+
+            // Log issuance for debugging (masked)
+            try {
+                const masked = `${String(challengeToken).slice(0,6)}...${String(challengeToken).slice(-4)}`;
+                ExtensionLogger.info('requestStrictChallengeToken', `issued ${masked}`, { requestedDomain, gameType: request.gameType || null });
+            } catch (e) {}
+
+            sendResponse({ success: true, challengeToken, expiresAt: Date.now() + (2 * 60 * 1000), gameType: request.gameType || null });
+        })().catch((error) => {
+            sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : "Failed to create challenge token."
+            });
+        });
+        return true;
+    }
+
+    if (request.action === "requestResetToken") {
+        const domain = String(request.domain || "").trim().toLowerCase();
+        if (!domain) {
+            sendResponse({ success: false, error: "Domain is required." });
+            return true;
+        }
+
+        (async () => {
+            const isLimitBlocking = await isDomainLimitCurrentlyBlocking(domain);
+            if (isLimitBlocking) {
+                sendResponse({
+                    success: false,
+                    error: "Cannot reset usage while this site is actively blocked by its limit."
+                });
+                return;
+            }
+
+            const token = await createResetToken(domain);
+            if (!token) {
+                sendResponse({ success: false, error: "Failed to create reset token." });
+                return;
+            }
+
+            sendResponse({ success: true, token, expiresIn: RESET_TOKEN_TTL_MS });
+        })().catch((error) => {
+            sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : "Failed to evaluate reset request."
+            });
+        });
+        return true;
+    }
+
+    if (request.action === "verifyResetToken") {
+        (async () => {
+            const domain = String(request.domain || "").trim().toLowerCase();
+            const token = String(request.token || "").trim();
+
+            if (!domain || !token) {
+                sendResponse({ success: false, authorized: false, error: "Missing domain or token." });
+                return;
+            }
+
+            const authorized = await verifyResetToken(token, domain);
+            if (!authorized) {
+                sendResponse({ success: false, authorized: false, error: "Invalid or expired reset token." });
+                return;
+            }
+
+            const isLimitBlocking = await isDomainLimitCurrentlyBlocking(domain);
+            if (isLimitBlocking) {
+                sendResponse({
+                    success: false,
+                    authorized: false,
+                    error: "Cannot reset usage while this site is actively blocked by its limit."
+                });
+                return;
+            }
+
+            await sendAnalyticsEventSafe("domain_limit_reset_authorized", {
+                domain_host: sanitizeAnalyticsText(domain, "unknown", 100)
+            });
+
+            sendResponse({ success: true, authorized: true });
+        })().catch((error) => {
+            sendResponse({
+                success: false,
+                authorized: false,
+                error: error instanceof Error ? error.message : "Failed to verify reset token."
+            });
+        });
+        return true;
+    }
+
+    if (request.action === "resetDomainLimit") {
+        const domain = String(request.domain || "").trim().toLowerCase();
+        if (!domain) {
+            sendResponse({ success: false, error: "Domain is required." });
+            return true;
+        }
+
+        (async () => {
+            const reset = await resetDomainUsage(domain);
+            if (!reset) {
+                sendResponse({ success: false, error: "No resettable usage found for this domain." });
+                return;
+            }
+
+            await sendAnalyticsEventSafe("domain_limit_reset", {
+                domain_host: sanitizeAnalyticsText(domain, "unknown", 100)
+            });
+
+            sendResponse({ success: true });
+        })().catch((error) => {
+            sendResponse({
+                success: false,
+                error: error instanceof Error ? error.message : "Failed to reset domain limit."
+            });
+        });
+        return true;
+    }
+
+    if (request.action === "exportUserData") {
+        const format = String(request.format || "json").toLowerCase();
+        (async () => {
+            try {
+                // Import GDPR utils if available
+                let exportData;
+                if (format === "csv") {
+                    exportData = await GdprUtils?.exportDataAsCSV() || "CSV export not available";
+                } else {
+                    exportData = await GdprUtils?.exportDataAsJSON() || "{}";
+                }
+                
+                sendResponse({
+                    success: true,
+                    data: exportData,
+                    format: format,
+                    exportedAt: new Date().toISOString()
+                });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Export failed"
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (request.action === "deleteUsageHistory") {
+        const confirmed = Boolean(request.confirmed);
+        if (!confirmed) {
+            sendResponse({ success: false, error: "Deletion requires confirmation" });
+            return true;
+        }
+
+        (async () => {
+            try {
+                await GdprUtils?.deleteUsageHistory?.();
+                await sendAnalyticsEventSafe("user_action", {
+                    action: "delete_usage_history"
+                });
+                sendResponse({ success: true, message: "Usage history deleted" });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Deletion failed"
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (request.action === "deleteAnalyticsData") {
+        const confirmed = Boolean(request.confirmed);
+        if (!confirmed) {
+            sendResponse({ success: false, error: "Deletion requires confirmation" });
+            return true;
+        }
+
+        (async () => {
+            try {
+                await GdprUtils?.deleteAnalyticsData?.();
+                sendResponse({ success: true, message: "Analytics data deleted" });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Deletion failed"
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (request.action === "deleteAllData") {
+        const confirmed = Boolean(request.confirmed);
+        if (!confirmed) {
+            sendResponse({ success: false, error: "Deletion requires explicit confirmation" });
+            return true;
+        }
+
+        (async () => {
+            try {
+                await GdprUtils?.deleteAllUserData?.(true);
+                sendResponse({ success: true, message: "All user data deleted" });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Deletion failed"
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (request.action === "getDataSummary") {
+        (async () => {
+            try {
+                const summary = await GdprUtils?.getDataSummary?.();
+                sendResponse({ success: true, summary });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : "Failed to get data summary"
+                });
+            }
         })();
         return true;
     }
