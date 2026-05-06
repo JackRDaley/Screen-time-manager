@@ -2165,7 +2165,6 @@ nav label:focus-visible {
     align-items: center;
     justify-content: center;
     padding: 24px 16px;
-    animation: slideInUp .35s cubic-bezier(0.23, 1, 0.320, 1);
     position: relative;
     z-index: 1;
 }
@@ -2277,10 +2276,13 @@ nav label:focus-visible {
 
 .preview-box {
     padding: 14px;
-    border-radius: 14px;
-    border: 1px solid rgba(255,255,255,.18);
-    background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.10));
-    box-shadow: 0 12px 30px rgba(0,0,0,.35);
+    border-radius: var(--r-card);
+    border: 0;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02)),
+        linear-gradient(165deg, rgba(139,111,255,.09), transparent 54%),
+        var(--surface0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.035), 0 10px 24px rgba(0,0,0,.30);
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -2293,16 +2295,16 @@ nav label:focus-visible {
     width: fit-content;
     font-size: 11px;
     padding: 5px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,.16);
+    border-radius: var(--r-pill);
+    border: 1px solid var(--border);
     background: rgba(255,255,255,.08);
-    color: rgba(234,240,255,.96);
+    color: rgba(237,242,255,.96);
     font-weight: 700;
 }
 
 .preview-heading {
     font-size: 20px;
-    letter-spacing: .2px;
+    letter-spacing: 0;
     line-height: 1.2;
     color: #ffffff;
     font-weight: 800;
@@ -2311,7 +2313,7 @@ nav label:focus-visible {
 .preview-text {
     font-size: 13px;
     line-height: 1.6;
-    color: rgba(234,240,255,.94);
+    color: rgba(237,242,255,.94);
     font-weight: 500;
 }
 
@@ -2319,10 +2321,10 @@ nav label:focus-visible {
     display: inline-block;
     margin-left: 4px;
     padding: 2px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(24,210,255,.36);
-    background: rgba(24,210,255,.14);
-    color: rgba(234,240,255,.98);
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(34,217,255,.28);
+    background: rgba(34,217,255,.10);
+    color: rgba(237,242,255,.98);
     font-weight: 800;
 }
 
@@ -2387,7 +2389,201 @@ nav label:focus-visible {
     transition: all .2s ease;
 }
 
+.onboarding-btn:not(.btn-ghost) {
+    border-color: rgba(168,128,255,.48);
+    background: linear-gradient(135deg, rgba(124,92,255,.62), rgba(34,217,255,.40));
+    box-shadow: 0 8px 18px rgba(0,0,0,.22);
+}
+
+.onboarding-btn:not(.btn-ghost):hover {
+    border-color: rgba(193,163,255,.62);
+    background: linear-gradient(135deg, rgba(130,98,255,.70), rgba(34,217,255,.48));
+}
+
 .onboarding-skip {
     opacity: .88;
+    border-style: dashed;
+}
+
+/* Guided onboarding tour */
+.onboarding-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: block;
+    align-items: initial;
+    justify-content: initial;
+    overflow: hidden;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    pointer-events: auto;
+}
+
+.onboarding-overlay::before {
+    display: none;
+}
+
+.onboarding-spotlight {
+    position: absolute;
+    left: 12px;
+    top: 110px;
+    width: 180px;
+    height: 72px;
+    z-index: 1;
+    border-radius: var(--r-card);
+    box-shadow:
+        0 0 0 999px rgba(3,5,12,.68),
+        0 0 0 1px rgba(34,217,255,.40),
+        0 0 28px rgba(34,217,255,.22);
+    pointer-events: none;
+    transition: left .22s ease, top .22s ease, width .22s ease, height .22s ease, border-radius .22s ease;
+}
+
+.onboarding-tooltip {
+    position: absolute;
+    left: 16px;
+    top: 220px;
+    z-index: 2;
+    width: min(330px, calc(100% - 28px));
+    padding: 12px;
+    border-radius: var(--r-card);
+    border: 0;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.035)),
+        linear-gradient(165deg, rgba(139,111,255,.12), transparent 54%),
+        rgba(12,16,29,.96);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.08), inset 0 0 0 1px rgba(255,255,255,.06), 0 18px 36px rgba(0,0,0,.42);
+    color: var(--text);
+    pointer-events: auto;
+    transition: left .22s ease, top .22s ease;
+}
+
+.onboarding-step-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 9px;
+}
+
+.onboarding-step-count {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(34,217,255,.28);
+    background: rgba(34,217,255,.10);
+    color: rgba(237,242,255,.94);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.onboarding-step-markers {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.onboarding-step-marker {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.06);
+    color: rgba(237,242,255,.74);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 900;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+}
+
+.onboarding-step-marker:hover,
+.onboarding-step-marker.is-active {
+    border-color: rgba(193,163,255,.62);
+    background: linear-gradient(135deg, rgba(124,92,255,.70), rgba(34,217,255,.42));
+    color: #fff;
+}
+
+.onboarding-title {
+    margin: 0 0 6px;
+    color: #fff;
+    font-size: 18px;
+    font-weight: 900;
+    line-height: 1.18;
+    letter-spacing: 0;
+    text-shadow: none;
+}
+
+.onboarding-copy {
+    margin: 0;
+    color: rgba(237,242,255,.78);
+    font-size: 12px;
+    line-height: 1.48;
+}
+
+.onboarding-redirect-preview {
+    margin-top: 10px;
+    padding: 12px;
+    border-radius: var(--r-card);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02)),
+        linear-gradient(165deg, rgba(139,111,255,.09), transparent 54%),
+        var(--surface0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.035);
+}
+
+.onboarding-redirect-preview .preview-badge {
+    font-size: 10px;
+}
+
+.onboarding-redirect-preview .preview-heading {
+    margin-top: 9px;
+    font-size: 18px;
+}
+
+.onboarding-redirect-preview .preview-text {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.onboarding-redirect-preview .preview-buttons {
+    margin-top: 10px;
+}
+
+.onboarding-footer {
+    margin-top: 12px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.onboarding-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.onboarding-btn {
+    flex: 0 0 auto;
+    min-width: 72px;
+    max-width: none;
+    padding: 8px 12px;
+    border-radius: var(--r-input);
+}
+
+.onboarding-btn:disabled {
+    opacity: .38;
+    cursor: not-allowed;
+}
+
+.onboarding-skip {
+    padding: 7px 10px;
     border-style: dashed;
 }

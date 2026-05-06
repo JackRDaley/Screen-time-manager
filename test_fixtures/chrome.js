@@ -8,7 +8,10 @@ const chromeMock = {
         sendMessage: jest.fn(async (message) => ({ success: true })),
         onMessage: {
             addListener: jest.fn()
-        }
+        },
+        onStartup: { addListener: jest.fn() },
+        onInstalled: { addListener: jest.fn() },
+        onMessageExternal: { addListener: jest.fn() }
     },
     storage: {
         local: {
@@ -23,22 +26,34 @@ const chromeMock = {
             }),
             set: jest.fn(async (items) => {
                 return items;
-            })
+            }),
+            remove: jest.fn(async () => true)
         }
+        ,
+        onChanged: { addListener: jest.fn() }
     },
     tabs: {
         query: jest.fn(async () => []),
         get: jest.fn(async () => null),
         update: jest.fn(async () => ({}))
+        ,
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
     },
     alarms: {
         create: jest.fn(),
-        clear: jest.fn()
+        clear: jest.fn(),
+        onAlarm: { addListener: jest.fn() }
     },
     action: {
-        setBadgeText: jest.fn(),
-        setBadgeBackgroundColor: jest.fn(),
-        setBadgeTextColor: jest.fn()
+        setBadgeText: jest.fn(async () => {}),
+        setBadgeBackgroundColor: jest.fn(async () => {}),
+        setBadgeTextColor: jest.fn(async () => {})
+    },
+    windows: {
+        onFocusChanged: { addListener: jest.fn() },
+        WINDOW_ID_NONE: -1
     },
     notifications: {
         create: jest.fn()

@@ -130,10 +130,10 @@ async function sendSnooze(minutes, challengeToken = null) {
     if (challengeToken) {
         payload.challengeToken = challengeToken;
     }
-    // Prefer an explicit original passed via the `o` query param (set by
+    // Prefer an explicit original passed via the `u` query param (set by
     // background when it controls the redirect). Fall back to document.referrer.
     try {
-        const explicit = String(params.get('o') || "").trim();
+        const explicit = String(params.get("u") || "").trim();
         const ref = explicit || String(document.referrer || "").trim();
         if (ref) payload.original = ref;
     } catch (e) {}
@@ -157,11 +157,12 @@ async function resetDomainLimitAndLeave() {
     const response = await chrome.runtime.sendMessage({
         action: "resetDomainLimit",
         domain: d,
-        fromBlockedPage: true
+        fromBlockedPage: true,
+        original: String(params.get("u") || "").trim()
     }).catch(() => ({ success: false }));
     
     if (response?.success) {
-        window.location.href = `https://${d}`;
+        window.location.href = String(response.redirectUrl || "").trim() || `https://${d}`;
     } else {
         console.error("Reset limit failed:", response?.error || "Unknown error");
     }
@@ -532,9 +533,14 @@ async function renderTierActions() {
                     return;
                 }
                 trackBlockedPageAction("end_session_lenient");
-                const response = await chrome.runtime.sendMessage({ action: "endScheduledBlock", domain: d, fromBlockedPage: true });
+                const response = await chrome.runtime.sendMessage({
+                    action: "endScheduledBlock",
+                    domain: d,
+                    fromBlockedPage: true,
+                    original: String(params.get("u") || "").trim()
+                });
                 if (response?.success) {
-                    window.location.href = `https://${d}`;
+                    window.location.href = String(response.redirectUrl || "").trim() || `https://${d}`;
                 }
             } else {
                 if (isCurrentlyBlocking) {
@@ -594,7 +600,8 @@ async function renderTierActions() {
             const response = await chrome.runtime.sendMessage({
                 action: "adminOverrideBypassImmutable",
                 domain: d,
-                source
+                source,
+                original: String(params.get("u") || "").trim()
             }).catch(() => ({ success: false }));
 
             if (!response?.success) {
@@ -602,7 +609,7 @@ async function renderTierActions() {
                 return;
             }
 
-            window.location.href = `https://${d}`;
+            window.location.href = String(response.redirectUrl || "").trim() || `https://${d}`;
         });
         primary.appendChild(overrideButton);
     });

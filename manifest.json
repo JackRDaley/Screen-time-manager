@@ -4,10 +4,10 @@
     "version": "2.1.5",
     "description": "Block distracting websites, set daily time limits, and track your screen time and visit history — all without leaving your browser.",
     "icons": {
-        "16": "extension_icon.png",
-        "32": "extension_icon.png",
-        "48": "extension_icon.png",
-        "128": "extension_icon.png"
+        "16": "assets/icons/extension_icon.png",
+        "32": "assets/icons/extension_icon.png",
+        "48": "assets/icons/extension_icon.png",
+        "128": "assets/icons/extension_icon.png"
     },
     "action": {
         "default_title": "Screen Time Manager",
@@ -23,7 +23,7 @@
     "host_permissions": ["<all_urls>"],
     "web_accessible_resources": [
         {
-            "resources": ["blocked.html", "blocked.js", "blocked.css", "icon.png"],
+            "resources": ["blocked.html", "blocked.js", "blocked.css", "assets/icons/icon.png"],
             "matches": ["<all_urls>"]
         },
         {
