@@ -1,19 +1,21 @@
 :root {
-    --bg0: #060810;
+    --bg: #060810;
     --bg1: #0a1020;
-    --surface0: rgba(255, 255, 255, 0.07);
-    --surface1: rgba(255, 255, 255, 0.045);
-    --border: rgba(255, 255, 255, 0.12);
-    --text: #edf2ff;
-    --muted: rgba(237, 242, 255, 0.62);
-    --purple: #8b6fff;
-    --cyan: #22d9ff;
-    --green: #2effa8;
-    --danger: #ff4d6d;
+    --surface0: rgba(255,255,255,.055);
+    --surface1: rgba(255,255,255,.035);
+    --border: rgba(255,255,255,.10);
+    --border-hi: rgba(255,255,255,.18);
+    --text: #EDF2FF;
+    --muted: rgba(237,242,255,.62);
+    --purple: #8B6FFF;
+    --cyan: #22D9FF;
+    --green: #2EFFA8;
+    --danger: #FF4D6D;
     --blur: blur(18px);
-    --radius-card: 18px;
-    --radius-pill: 999px;
-    --shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
+    --r-card: 14px;
+    --r-pill: 999px;
+    --r-input: 10px;
+    --shadow: 0 16px 36px rgba(0,0,0,.35);
 }
 
 * {
@@ -30,10 +32,10 @@ body {
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
     color: var(--text);
     background:
-        radial-gradient(ellipse 1100px 700px at 10% -8%, rgba(139, 111, 255, 0.28), transparent 60%),
-        radial-gradient(ellipse 1000px 700px at 95% 18%, rgba(34, 217, 255, 0.2), transparent 62%),
-        radial-gradient(ellipse 900px 650px at 48% 110%, rgba(255, 77, 109, 0.12), transparent 60%),
-        linear-gradient(180deg, var(--bg0), var(--bg1));
+        radial-gradient(ellipse 1100px 700px at 10% -8%, rgba(139,111,255,.24), transparent 60%),
+        radial-gradient(ellipse 1000px 700px at 95% 18%, rgba(34,217,255,.18), transparent 62%),
+        radial-gradient(ellipse 900px 650px at 48% 110%, rgba(255,77,109,.10), transparent 60%),
+        linear-gradient(180deg, var(--bg), var(--bg1));
 }
 
 .grain {
@@ -41,15 +43,15 @@ body {
     inset: 0;
     z-index: 0;
     pointer-events: none;
-    opacity: 0.24;
-    background-image: radial-gradient(rgba(255, 255, 255, 0.12) 0.4px, transparent 0.4px);
+    opacity: 0.18;
+    background-image: radial-gradient(rgba(255,255,255,.12) 0.4px, transparent 0.4px);
     background-size: 2.4px 2.4px;
 }
 
 .layout {
     position: relative;
     z-index: 1;
-    max-width: 1080px;
+    max-width: 1040px;
     margin: 0 auto;
     min-height: 100vh;
     padding: 28px 18px;
@@ -61,10 +63,13 @@ body {
 
 .hero,
 .checklist {
-    border-radius: var(--radius-card);
-    border: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--surface0), var(--surface1));
-    box-shadow: var(--shadow);
+    border-radius: var(--r-card);
+    border: 0;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02)),
+        linear-gradient(165deg, rgba(139,111,255,.09), transparent 54%),
+        var(--surface0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.035), var(--shadow);
     backdrop-filter: var(--blur);
     -webkit-backdrop-filter: var(--blur);
 }
@@ -79,14 +84,14 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.08em;
     font-size: 11px;
-    color: rgba(237, 242, 255, 0.55);
+    color: rgba(237,242,255,.55);
 }
 
 h1 {
     margin: 12px 0 10px;
-    font-size: clamp(30px, 5vw, 54px);
+    font-size: clamp(30px, 4.5vw, 48px);
     line-height: 1.05;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
     background: linear-gradient(90deg, #ffffff 35%, var(--cyan));
     background-clip: text;
     -webkit-background-clip: text;
@@ -113,18 +118,18 @@ h1 {
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    border-radius: var(--radius-pill);
-    border: 1px solid rgba(46, 255, 168, 0.3);
-    background: rgba(46, 255, 168, 0.09);
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(46,255,168,.24);
+    background: rgba(46,255,168,.10);
     font-size: 12px;
     font-weight: 800;
-    color: rgba(46, 255, 168, 0.96);
+    color: rgba(46,255,168,.96);
 }
 
 .pill:nth-child(2) {
-    border-color: rgba(34, 217, 255, 0.3);
-    background: rgba(34, 217, 255, 0.12);
-    color: rgba(237, 242, 255, 0.92);
+    border-color: rgba(34,217,255,.28);
+    background: rgba(34,217,255,.10);
+    color: rgba(237,242,255,.92);
 }
 
 .actions {
@@ -135,14 +140,15 @@ h1 {
 }
 
 .btn {
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: var(--r-input);
     padding: 10px 14px;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 800;
     cursor: pointer;
     color: var(--text);
-    transition: transform 0.16s ease, filter 0.16s ease;
+    font-family: inherit;
+    transition: border-color .15s, background .15s, filter .15s, transform .15s;
 }
 
 .btn:hover {
@@ -151,15 +157,18 @@ h1 {
 }
 
 .btn.primary {
-    background: linear-gradient(135deg, rgba(255, 77, 109, 0.5), rgba(139, 111, 255, 0.45));
+    border-color: rgba(168,128,255,.48);
+    background: linear-gradient(135deg, rgba(124,92,255,.62), rgba(34,217,255,.40));
+    box-shadow: 0 8px 18px rgba(0,0,0,.22);
 }
 
 .btn.secondary {
-    background: linear-gradient(135deg, rgba(139, 111, 255, 0.62), rgba(34, 217, 255, 0.35));
+    background: rgba(255,255,255,.08);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
 }
 
 .btn.ghost {
-    background: rgba(255, 255, 255, 0.07);
+    background: rgba(255,255,255,.06);
 }
 
 .checklist {
@@ -170,7 +179,7 @@ h1 {
 h2 {
     margin: 0 0 12px;
     font-size: 22px;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
 }
 
 ol {
@@ -184,11 +193,11 @@ ol {
 .note {
     margin: 0;
     padding: 10px 12px;
-    border: 1px solid rgba(34, 217, 255, 0.22);
+    border: 1px solid rgba(34,217,255,.22);
     border-left: 3px solid var(--cyan);
-    border-radius: 10px;
-    background: rgba(34, 217, 255, 0.08);
-    color: rgba(237, 242, 255, 0.82);
+    border-radius: var(--r-input);
+    background: rgba(34,217,255,.08);
+    color: rgba(237,242,255,.82);
     font-size: 13px;
 }
 

@@ -8,74 +8,34 @@
 </head>
 <body>
 <div class="scene">
-    <!-- Onboarding Modal (shown on first install) -->
-    <div id="onboardingOverlay" class="onboarding-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle0" tabindex="-1">
-        <div id="onboardingStep0" class="onboarding-screen" style="display:none">
-            <div class="onboarding-content">
-                <div class="onboarding-header">
-                    <div id="onboardingTitle0" class="onboarding-title">Let's get set up in 60 seconds</div>
-                    <div class="onboarding-subtitle">Pick the sites you want to focus on</div>
-                </div>
-                <div class="onboarding-body">
-                    <div id="suggestedSitesContainer" class="suggested-sites">
-                        <!-- Dynamically populated with suggested sites -->
-                    </div>
-                </div>
-                <div class="onboarding-footer">
-                    <button id="onboardingSkipBtn0" class="btn btn-ghost onboarding-btn onboarding-skip" type="button">Skip setup</button>
-                    <button id="onboardingNextBtn0" class="btn onboarding-btn" type="button">Next &rarr;</button>
+    <!-- Guided onboarding tour (shown on first install/update) -->
+    <div id="onboardingOverlay" class="onboarding-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle" tabindex="-1">
+        <div id="onboardingSpotlight" class="onboarding-spotlight" aria-hidden="true"></div>
+        <section id="onboardingTooltip" class="onboarding-tooltip" role="document">
+            <div class="onboarding-step-row">
+                <div id="onboardingStepCount" class="onboarding-step-count">1 of 4</div>
+                <div id="onboardingStepMarkers" class="onboarding-step-markers" aria-label="Tour steps"></div>
+            </div>
+            <h2 id="onboardingTitle" class="onboarding-title">Dashboard overview</h2>
+            <p id="onboardingCopy" class="onboarding-copy">Your daily activity appears here first.</p>
+            <div id="onboardingRedirectPreview" class="onboarding-redirect-preview" hidden>
+                <div class="preview-badge">Limit reached</div>
+                <div class="preview-heading">Site blocked</div>
+                <div class="preview-text">When a limit runs out, the tab redirects to this page so you can close it, snooze, or undo the block.</div>
+                <div class="preview-buttons">
+                    <button class="btn btn-sm btn-ghost" type="button" disabled>Snooze</button>
+                    <button class="btn btn-sm" type="button" disabled>Close tab</button>
                 </div>
             </div>
-        </div>
-
-        <div id="onboardingStep1" class="onboarding-screen" style="display:none">
-            <div class="onboarding-content">
-                <div class="onboarding-header">
-                    <div class="onboarding-title">Here's what happens when you hit your limit</div>
-                    <div class="onboarding-subtitle">A friendly reminder will appear</div>
-                </div>
-                <div class="onboarding-body">
-                    <div class="onboarding-preview">
-                        <div class="preview-label">Blocked page example:</div>
-                        <div class="preview-box" aria-label="Blocked page preview">
-                            <div class="preview-badge">Time limit reached</div>
-                            <div class="preview-heading">Site blocked</div>
-                            <div class="preview-text">You've reached your limit for <span class="preview-domain">youtube.com</span></div>
-                            <div class="preview-buttons">
-                                <button class="btn btn-sm btn-ghost" type="button" disabled>Reset limit</button>
-                                <button class="btn btn-sm" type="button" disabled>Close tab</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="onboarding-footer">
-                    <button id="onboardingSkipBtn1" class="btn btn-ghost onboarding-btn onboarding-skip" type="button">Skip setup</button>
-                    <button id="onboardingPrevBtn1" class="btn btn-ghost onboarding-btn" type="button">&larr; Back</button>
-                    <button id="onboardingNextBtn1" class="btn onboarding-btn" type="button">Next &rarr;</button>
+            <div class="onboarding-footer">
+                <button id="onboardingSkipBtn" class="btn-ghost onboarding-skip" type="button">Skip tour</button>
+                <div class="onboarding-footer-actions">
+                    <button id="onboardingPrevBtn" class="btn-ghost onboarding-btn" type="button">Back</button>
+                    <button id="onboardingNextBtn" class="btn onboarding-btn" type="button">Next</button>
+                    <button id="onboardingDoneBtn" class="btn onboarding-btn" type="button" hidden>Done</button>
                 </div>
             </div>
-        </div>
-
-        <div id="onboardingStep2" class="onboarding-screen" style="display:none">
-            <div class="onboarding-content">
-                <div class="onboarding-header">
-                    <div class="onboarding-title">Reclaim your focus</div>
-                    <div class="onboarding-subtitle">10K+ users beating distraction daily. You're in good company.</div>
-                </div>
-                <div class="onboarding-body">
-                    <div class="onboarding-benefits">
-                        <div class="benefit-item">Track time spent without judgment</div>
-                        <div class="benefit-item">Set limits that actually stick</div>
-                        <div class="benefit-item">See your progress and build streaks</div>
-                    </div>
-                </div>
-                <div class="onboarding-footer">
-                    <button id="onboardingSkipBtn2" class="btn btn-ghost onboarding-btn onboarding-skip" type="button">Skip setup</button>
-                    <button id="onboardingPrevBtn2" class="btn btn-ghost onboarding-btn" type="button">&larr; Back</button>
-                    <button id="onboardingCompleteBtn" class="btn onboarding-btn" type="button">Get Started &rarr;</button>
-                </div>
-            </div>
-        </div>
+        </section>
     </div>
 
     <input type="radio" name="tabs" id="tab1" checked />
@@ -91,7 +51,7 @@
             </div>
         </div>
         <div class="streak-header" id="streakHeader" aria-live="polite">
-            <img class="streak-icon" src="streak_icon.png" alt="" aria-hidden="true" />
+            <img class="streak-icon" src="assets/icons/streak_icon.png" alt="" aria-hidden="true" />
             <span class="streak-header-value" id="streakHeaderValue">0</span>
         </div>
         <div class="status-pill">
@@ -115,7 +75,7 @@
                 <div class="stat-box">
                     <div class="stat-main">
                         <div class="stat-icon-circle" aria-hidden="true">
-                            <img class="stat-icon" src="clock-regular-full.svg" alt="" />
+                            <img class="stat-icon" src="assets/icons/clock-regular-full.svg" alt="" />
                         </div>
                         <div class="stat-content">
                             <div class="stat-lbl">Screen time</div>
@@ -129,7 +89,7 @@
                 <div class="stat-box">
                     <div class="stat-main">
                         <div class="stat-icon-circle" aria-hidden="true">
-                            <img class="stat-icon" src="arrow-pointer-solid-full.svg" alt="" />
+                            <img class="stat-icon" src="assets/icons/arrow-pointer-solid-full.svg" alt="" />
                         </div>
                         <div class="stat-content">
                             <div class="stat-lbl">Visits</div>
@@ -143,7 +103,7 @@
                 <div class="stat-box">
                     <div class="stat-main">
                         <div class="stat-icon-circle" aria-hidden="true">
-                            <img class="stat-icon" src="circle-pause-regular-full.svg" alt="" />
+                            <img class="stat-icon" src="assets/icons/circle-pause-regular-full.svg" alt="" />
                         </div>
                         <div class="stat-content">
                             <div class="stat-lbl">Snoozes</div>

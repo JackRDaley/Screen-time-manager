@@ -23,4 +23,6 @@ module.exports = {
     setupFiles: ['<rootDir>/tests/setup.js'],
     transform: {},
     testTimeout: 10000
+    ,
+    testPathIgnorePatterns: ['/e2e/']
 };
