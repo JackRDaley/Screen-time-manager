@@ -160,6 +160,25 @@ test('popup live refresh keeps flushing and repainting visible stats', async ({ 
     await expect(page.locator('#statScreenTime')).toContainText('30m');
 });
 
+test('selected hourly bar survives live refresh repaint', async ({ page }) => {
+    await installPopupChromeMock(page, { flushMutatesStats: true });
+
+    await page.goto(popupUrl());
+    await expect(page.locator('#ranking')).toContainText('alpha.com');
+    await expect(page.locator('.hourly-slot.is-selected')).toHaveAttribute('data-hour', '10');
+
+    await page.locator('.hourly-slot[data-hour="9"]').click();
+    await expect(page.locator('.hourly-slot.is-selected')).toHaveAttribute('data-hour', '9');
+    await expect(page.locator('#usageInsight')).toContainText('alpha.com');
+
+    const flushCountAfterSelection = await page.evaluate(() => window.__popupFlushCount);
+    await expect.poll(() => page.evaluate(() => window.__popupFlushCount), { timeout: 2500 })
+        .toBeGreaterThan(flushCountAfterSelection);
+
+    await expect(page.locator('.hourly-slot.is-selected')).toHaveAttribute('data-hour', '9');
+    await expect(page.locator('#usageInsight')).toContainText('alpha.com');
+});
+
 test('popup dashboard actions add limits, end pauses, and switch hourly bars', async ({ page }) => {
     await installPopupChromeMock(page);
     await page.goto(popupUrl());

@@ -77,6 +77,7 @@ const state = {
     premium: { ...DEFAULT_PREMIUM },
     onboarding: { step: 0, completed: false, completedAt: null, version: ONBOARDING_VERSION },
     selectedDays: [0, 1, 2, 3, 4, 5, 6],
+    selectedHourlyHour: null,
     editingScheduleId: null
 };
 
@@ -712,22 +713,29 @@ function renderHourlyStyled() {
     const slots = list.querySelectorAll(".hourly-slot");
 
     slots.forEach((slot) => {
-        slot.addEventListener("click", () => selectHourlySlot(slot));
+        slot.addEventListener("click", () => selectHourlySlot(slot, { persist: true }));
         slot.addEventListener("keydown", (event) => {
             if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                selectHourlySlot(slot);
+                selectHourlySlot(slot, { persist: true });
             }
         });
     });
 
-    const defaultSlot = Array.from(slots).find((slot) => Number(slot.dataset.hour) === peakHour.hour) || slots[0];
-    if (defaultSlot) selectHourlySlot(defaultSlot);
+    const selectedSlot = Number.isInteger(state.selectedHourlyHour)
+        ? Array.from(slots).find((slot) => Number(slot.dataset.hour) === state.selectedHourlyHour)
+        : null;
+    const defaultSlot = selectedSlot || Array.from(slots).find((slot) => Number(slot.dataset.hour) === peakHour.hour) || slots[0];
+    if (defaultSlot) selectHourlySlot(defaultSlot, { persist: false });
 }
 
-function selectHourlySlot(slot) {
+function selectHourlySlot(slot, options = {}) {
     const list = slot?.closest("#hourlyDistribution");
     const slots = list?.querySelectorAll(".hourly-slot") || [];
+    const hour = Number(slot?.dataset.hour);
+    if (options.persist !== false && Number.isInteger(hour)) {
+        state.selectedHourlyHour = hour;
+    }
     slots.forEach((item) => {
         item.classList.remove("is-selected");
         item.setAttribute("aria-pressed", "false");
