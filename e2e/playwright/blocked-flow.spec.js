@@ -72,6 +72,8 @@ test('blocked page reset flow redirects back to the original URL', async ({ brow
     const originalUrl = 'https://example.com/articles/focus?from=limit#section';
     await page.goto(`${blockedUrl}?d=example.com&source=limit&tier=lenient&u=${encodeURIComponent(originalUrl)}`);
 
+    await expect(page.locator('#domain')).toHaveText('example.com');
+
     const undoButton = page.getByRole('button', { name: /undo block/i });
     await expect(undoButton).toBeVisible();
     await undoButton.click();

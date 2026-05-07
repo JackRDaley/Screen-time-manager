@@ -14,10 +14,12 @@ const ONBOARDING_KEY = "onboardingState";
 const ONBOARDING_VERSION = 2;
 const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
+const LIVE_REFRESH_INTERVAL_MS = 1000;
 
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 30,
-    use24HourTime: false
+    use24HourTime: false,
+    limitNotificationsEnabled: true
 });
 
 const DEFAULT_PREMIUM = Object.freeze({
@@ -77,6 +79,8 @@ const state = {
     selectedDays: [0, 1, 2, 3, 4, 5, 6],
     editingScheduleId: null
 };
+
+let liveRefreshPromise = null;
 
 function normalizeDomain(input) {
     const raw = String(input || "").trim().toLowerCase();
@@ -204,10 +208,40 @@ function getTopDomainsForHour(bucket = {}, limit = 3) {
         .slice(0, limit);
 }
 
+function domainKeysFor(records = {}, domain) {
+    const normalized = normalizeDomain(domain);
+    if (!normalized) return [];
+    return Object.keys(records).filter((key) => normalizeDomain(key) === normalized);
+}
+
+function entryForDomain(records = {}, domain) {
+    const normalized = normalizeDomain(domain);
+    if (!normalized) return undefined;
+    if (Object.prototype.hasOwnProperty.call(records, normalized)) {
+        return records[normalized];
+    }
+    const matchingKey = domainKeysFor(records, normalized)[0];
+    return matchingKey ? records[matchingKey] : undefined;
+}
+
+function deleteEntriesForDomain(records = {}, domain) {
+    domainKeysFor(records, domain).forEach((key) => {
+        delete records[key];
+    });
+}
+
+function deleteSnoozeEntriesForDomain(snoozedDomains = {}, domain) {
+    deleteEntriesForDomain(snoozedDomains, domain);
+}
+
+function snoozeEntryForDomain(snoozedDomains = {}, domain) {
+    return entryForDomain(snoozedDomains, domain);
+}
+
 function isLimitCurrentlyBlocking(domain, cfg, statsToday = {}, snoozedDomains = {}) {
     const limit = limitConfig(cfg);
     if (!limit.enabled || !limit.limitSeconds) return false;
-    const snooze = snoozedDomains?.[domain];
+    const snooze = snoozeEntryForDomain(snoozedDomains, domain);
     const snoozeExpiresAt = Number(snooze?.expiresAt || snooze || 0);
     if (snoozeExpiresAt > Date.now()) return false;
     return timeMs(statsToday?.[domain]) >= limit.limitSeconds * 1000;
@@ -289,6 +323,60 @@ function renderList(id, html, emptyText) {
     el.innerHTML = html || escapeHtml(emptyText);
 }
 
+function bindActionButtons(container, selector, handler) {
+    container?.querySelectorAll(selector).forEach((button) => {
+        button.addEventListener("click", async (event) => {
+            if (event.stmHandled) return;
+            event.stmHandled = true;
+            event.preventDefault();
+            event.stopPropagation();
+            await handler(event.currentTarget);
+        });
+    });
+}
+
+function bindLimitListActions(list) {
+    list?.querySelectorAll('.switch-input[data-action="toggle-domain"]').forEach((input) => {
+        input.addEventListener("change", async (event) => {
+            if (event.stmHandled) return;
+            event.stmHandled = true;
+            event.stopPropagation();
+            await toggleDomain(event.currentTarget.dataset.domain, event.currentTarget.checked);
+        });
+    });
+    bindActionButtons(list, '[data-action="remove-domain"]', (button) => removeDomain(button.dataset.domain));
+}
+
+function bindLiveListActions() {
+    $("activeList")?.addEventListener("click", async (event) => {
+        const button = event.target.closest('[data-action="clear-snooze"], [data-action="stop-active"]');
+        if (!button || event.stmHandled) return;
+        event.stmHandled = true;
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (button.dataset.action === "clear-snooze") await clearSnooze(button.dataset.domain);
+        if (button.dataset.action === "stop-active") await stopActiveBlock(button.dataset.domain);
+    }, true);
+
+    $("limitList")?.addEventListener("click", async (event) => {
+        const button = event.target.closest('[data-action="remove-domain"]');
+        if (!button || event.stmHandled) return;
+        event.stmHandled = true;
+        event.preventDefault();
+        event.stopPropagation();
+        await removeDomain(button.dataset.domain);
+    }, true);
+
+    $("limitList")?.addEventListener("change", async (event) => {
+        const input = event.target.closest('.switch-input[data-action="toggle-domain"]');
+        if (!input || event.stmHandled) return;
+        event.stmHandled = true;
+        event.stopPropagation();
+        await toggleDomain(input.dataset.domain, input.checked);
+    }, true);
+}
+
 function renderStats() {
     const range = $("statRange")?.value || "Today";
     const current = statsForRange(range);
@@ -307,16 +395,21 @@ function renderActive() {
     const activeBlocks = state.data.activeBlocks || [];
     const blockedDomains = state.data.blockedDomains || {};
     const statsToday = state.data.statsToday || {};
-    const snoozed = Object.entries(state.data.snoozedDomains || {})
-        .filter(([, entry]) => Number(entry?.expiresAt || entry || 0) > Date.now())
-        .map(([domain, entry]) => ({
-            domain,
-            until: Number(entry?.expiresAt || entry)
-        }));
+    const snoozeRowsByDomain = new Map();
+    Object.entries(state.data.snoozedDomains || {}).forEach(([domain, entry]) => {
+        const normalized = normalizeDomain(domain);
+        const until = Number(entry?.expiresAt || entry || 0);
+        if (!normalized || until <= Date.now()) return;
+        const existing = snoozeRowsByDomain.get(normalized);
+        if (!existing || until > existing.until) {
+            snoozeRowsByDomain.set(normalized, { domain: normalized, until });
+        }
+    });
+    const snoozed = Array.from(snoozeRowsByDomain.values());
 
-    const activeDomains = new Set(activeBlocks.map((block) => block.domain));
+    const activeDomains = new Set(activeBlocks.map((block) => normalizeDomain(block.domain)));
     const limitRows = Object.entries(blockedDomains)
-        .filter(([domain, cfg]) => !activeDomains.has(domain) && isLimitCurrentlyBlocking(domain, cfg, statsToday, state.data.snoozedDomains))
+        .filter(([domain, cfg]) => !activeDomains.has(normalizeDomain(domain)) && isLimitCurrentlyBlocking(domain, cfg, statsToday, state.data.snoozedDomains))
         .map(([domain, cfg]) => ({ domain, cfg }));
 
     const activeRows = activeBlocks.map((block) => {
@@ -341,7 +434,7 @@ function renderActive() {
 
     const pausedRows = snoozed.map(({ domain, until }) => {
         const remainingSec = Math.max(0, Math.floor((until - Date.now()) / 1000));
-        const tierLabel = formatTierLabel(blockedDomains?.[domain]?.tier);
+        const tierLabel = formatTierLabel(entryForDomain(blockedDomains, domain)?.tier);
         return `
             <div class="row row-accent-purple is-paused" data-domain="${escapeHtml(domain)}">
                 <div class="row-main">
@@ -374,6 +467,10 @@ function renderActive() {
     setText("activeCount", String(activeRows.length + pausedRows.length + reachedRows.length));
     $("activeCard")?.style.setProperty("display", html ? "" : "none");
     renderList("activeList", html, "No active blocks.");
+
+    const list = $("activeList");
+    bindActionButtons(list, '[data-action="clear-snooze"]', (button) => clearSnooze(button.dataset.domain));
+    bindActionButtons(list, '[data-action="stop-active"]', (button) => stopActiveBlock(button.dataset.domain));
 }
 
 function rankClass(index) {
@@ -613,28 +710,31 @@ function renderHourlyStyled() {
     `;
 
     const slots = list.querySelectorAll(".hourly-slot");
-    const showSlot = (slot) => {
-        slots.forEach((item) => {
-            item.classList.remove("is-selected");
-            item.setAttribute("aria-pressed", "false");
-        });
-        slot.classList.add("is-selected");
-        slot.setAttribute("aria-pressed", "true");
-        renderHourInsightStyled(slot);
-    };
 
     slots.forEach((slot) => {
-        slot.addEventListener("click", () => showSlot(slot));
+        slot.addEventListener("click", () => selectHourlySlot(slot));
         slot.addEventListener("keydown", (event) => {
             if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                showSlot(slot);
+                selectHourlySlot(slot);
             }
         });
     });
 
     const defaultSlot = Array.from(slots).find((slot) => Number(slot.dataset.hour) === peakHour.hour) || slots[0];
-    if (defaultSlot) showSlot(defaultSlot);
+    if (defaultSlot) selectHourlySlot(defaultSlot);
+}
+
+function selectHourlySlot(slot) {
+    const list = slot?.closest("#hourlyDistribution");
+    const slots = list?.querySelectorAll(".hourly-slot") || [];
+    slots.forEach((item) => {
+        item.classList.remove("is-selected");
+        item.setAttribute("aria-pressed", "false");
+    });
+    slot.classList.add("is-selected");
+    slot.setAttribute("aria-pressed", "true");
+    renderHourInsightStyled(slot);
 }
 
 function renderHourInsightStyled(slot) {
@@ -712,14 +812,13 @@ function renderLimits() {
         .join("");
 
     renderList("limitList", rows, "No limits set yet.");
+    bindLimitListActions($("limitList"));
     renderPaywalls();
 }
 
 function renderLimitsStyled() {
     const blockedDomains = state.data.blockedDomains || {};
     const stats = state.data.statsToday || {};
-    const activeBlocks = state.data.activeBlocks || [];
-    const snoozedDomains = state.data.snoozedDomains || {};
     const rows = Object.entries(blockedDomains)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([domain, raw]) => {
@@ -727,8 +826,6 @@ function renderLimitsStyled() {
             const usedSec = Math.round(timeMs(stats[domain]) / 1000);
             const displaySec = config.limitSeconds ? Math.min(usedSec, config.limitSeconds) : usedSec;
             const pct = config.limitSeconds ? Math.min(100, Math.round((displaySec / config.limitSeconds) * 100)) : 0;
-            const isBlocking = activeBlocks.some((block) => block.domain === domain)
-                || isLimitCurrentlyBlocking(domain, raw, stats, snoozedDomains);
             const accent = !config.enabled
                 ? "row-accent-muted"
                 : (pct >= 100 ? "row-accent-red" : (pct >= 85 ? "row-accent-purple" : "row-accent-cyan"));
@@ -746,12 +843,12 @@ function renderLimitsStyled() {
                             </div>
                         </div>
                         <div class="row-right">
-                            <label class="switch" title="${isBlocking ? "Stop the active session before changing this limit" : "Enable or pause this limit"}">
-                                <input class="switch-input" type="checkbox" data-action="toggle-domain" data-domain="${escapeHtml(domain)}" data-enabled="${config.enabled ? "false" : "true"}" ${config.enabled ? "checked" : ""} ${isBlocking ? "disabled" : ""} aria-label="Toggle ${escapeHtml(domain)} limit" />
+                            <label class="switch" title="Enable or disable this limit">
+                                <input class="switch-input" type="checkbox" data-action="toggle-domain" data-domain="${escapeHtml(domain)}" ${config.enabled ? "checked" : ""} aria-label="Toggle ${escapeHtml(domain)} limit" />
                                 <span class="switch-slider" aria-hidden="true"></span>
                             </label>
                             <div class="row-action-menu-wrap">
-                                ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}" ${isBlocking ? "disabled" : ""}`)}
+                                ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}"`)}
                             </div>
                         </div>
                     </div>
@@ -762,6 +859,7 @@ function renderLimitsStyled() {
         .join("");
 
     renderList("limitList", rows, "No limits set yet.");
+    bindLimitListActions($("limitList"));
     renderPaywalls();
 }
 
@@ -882,8 +980,10 @@ function renderStreak() {
 function renderSettings() {
     const defaultLimit = $("defaultLimitMinutes");
     const use24Hour = $("use24HourTime");
+    const limitNotifications = $("limitNotificationsEnabled");
     if (defaultLimit) defaultLimit.value = state.settings.defaultLimitMinutes;
     if (use24Hour) use24Hour.checked = Boolean(state.settings.use24HourTime);
+    if (limitNotifications) limitNotifications.checked = state.settings.limitNotificationsEnabled !== false;
 
     setText("premiumStatusMsg", state.premium.active
         ? `${state.premium.planName || "Premium"} active`
@@ -902,8 +1002,9 @@ function renderAll() {
     renderSettings();
 }
 
-async function loadAll() {
-    await send("flushActiveTimeNow");
+async function loadAll(options = {}) {
+    const shouldFlush = options.flush === true;
+    if (shouldFlush) await send("flushActiveTimeNow");
     state.data = await storageGet([
         "blockedDomains",
         "statsToday",
@@ -926,28 +1027,25 @@ async function loadAll() {
     renderAll();
 }
 
+function refreshLive() {
+    if (liveRefreshPromise) return liveRefreshPromise;
+    liveRefreshPromise = loadAll({ flush: true }).finally(() => {
+        liveRefreshPromise = null;
+    });
+    return liveRefreshPromise;
+}
+
 async function addDomain(event) {
     event.preventDefault();
     const domain = normalizeDomain($("domainInput")?.value);
     const minutes = Number($("limitInput")?.value || state.settings.defaultLimitMinutes);
     const tier = $("limitTier")?.value || "standard";
 
-    if (!isValidDomain(domain) || !Number.isFinite(minutes) || minutes <= 0) {
-        setFeedback("addFormMsg", "Enter a valid domain and limit.", false);
+    const result = await saveLimitForDomain(domain, minutes, tier);
+    if (!result.success) {
+        setFeedback("addFormMsg", result.error, false);
         return;
     }
-
-    const data = await storageGet(["blockedDomains", "alertsSent"]);
-    const blockedDomains = data.blockedDomains || {};
-    blockedDomains[domain] = {
-        enabled: true,
-        limitSeconds: Math.round(minutes * 60),
-        tier
-    };
-
-    const alertsSent = data.alertsSent || {};
-    delete alertsSent[domain];
-    await storageSet({ blockedDomains, alertsSent });
     $("addForm")?.reset();
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
     setFeedback("addFormMsg", "Limit saved.");
@@ -955,25 +1053,85 @@ async function addDomain(event) {
     await loadAll();
 }
 
+async function saveLimitForDomain(domain, minutes, tier = "standard") {
+    const normalized = normalizeDomain(domain);
+    const numericMinutes = Number(minutes);
+    if (!isValidDomain(normalized) || !Number.isFinite(numericMinutes) || numericMinutes <= 0) {
+        return { success: false, error: "Enter a valid domain and limit." };
+    }
+
+    const data = await storageGet(["blockedDomains", "alertsSent"]);
+    const blockedDomains = data.blockedDomains || {};
+    deleteEntriesForDomain(blockedDomains, normalized);
+    blockedDomains[normalized] = {
+        enabled: true,
+        limitSeconds: Math.round(numericMinutes * 60),
+        tier
+    };
+
+    const alertsSent = data.alertsSent || {};
+    deleteEntriesForDomain(alertsSent, normalized);
+    await storageSet({ blockedDomains, alertsSent });
+    return { success: true, domain: normalized };
+}
+
 async function removeDomain(domain) {
     const data = await storageGet(["blockedDomains", "alertsSent", "snoozedDomains"]);
     const blockedDomains = data.blockedDomains || {};
     const alertsSent = data.alertsSent || {};
     const snoozedDomains = data.snoozedDomains || {};
-    delete blockedDomains[domain];
-    delete alertsSent[domain];
-    delete snoozedDomains[domain];
+    const normalized = normalizeDomain(domain);
+    deleteEntriesForDomain(blockedDomains, normalized);
+    deleteEntriesForDomain(alertsSent, normalized);
+    deleteSnoozeEntriesForDomain(snoozedDomains, normalized);
     await storageSet({ blockedDomains, alertsSent, snoozedDomains });
+    await send("refreshActionBadge");
     await loadAll();
 }
 
 async function toggleDomain(domain, enabled) {
-    await send("toggleDomainLimitEnabled", { domain, enabled });
+    const response = await send("toggleDomainLimitEnabled", { domain, enabled });
+    if (!response?.success) {
+        console.error("Toggle limit failed:", response?.error || "Unknown error");
+        return;
+    }
     await loadAll();
 }
 
 async function clearSnooze(domain) {
-    await send("clearDomainSnooze", { domain });
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return;
+
+    const response = await send("clearDomainSnooze", {
+        domain: normalized,
+        reason: "popup_end_pause",
+        enforceDelayMs: 1500
+    });
+    if (!response?.success) {
+        console.error("End pause enforcement failed:", response?.error || "Unknown error");
+        const data = await storageGet(["snoozedDomains"]);
+        const snoozedDomains = data.snoozedDomains || {};
+        deleteSnoozeEntriesForDomain(snoozedDomains, normalized);
+        await storageSet({ snoozedDomains });
+    }
+    await loadAll();
+}
+
+async function quickAddLimit(domain) {
+    const minutes = Number(state.settings.defaultLimitMinutes || DEFAULT_SETTINGS.defaultLimitMinutes);
+    const tier = $("limitTier")?.value || "standard";
+    const result = await saveLimitForDomain(domain, minutes, tier);
+
+    if (!result.success) {
+        setFeedback("addFormMsg", result.error, false);
+        $("domainInput")?.focus();
+        return;
+    }
+
+    $("addForm")?.reset();
+    if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
+    setFeedback("addFormMsg", `Limit added for ${result.domain}.`);
+    await send("refreshActionBadge");
     await loadAll();
 }
 
@@ -1056,14 +1214,26 @@ async function toggleSchedule(id, enabled) {
     await loadAll();
 }
 
-async function saveSettings(event) {
-    event.preventDefault();
-    state.settings = {
+function settingsFromForm() {
+    const limitNotifications = $("limitNotificationsEnabled");
+    return {
         defaultLimitMinutes: Math.max(1, Number($("defaultLimitMinutes")?.value || DEFAULT_SETTINGS.defaultLimitMinutes)),
-        use24HourTime: Boolean($("use24HourTime")?.checked)
+        use24HourTime: Boolean($("use24HourTime")?.checked),
+        limitNotificationsEnabled: limitNotifications
+            ? Boolean(limitNotifications.checked)
+            : state.settings.limitNotificationsEnabled !== false
     };
+}
+
+async function persistSettings() {
+    state.settings = settingsFromForm();
     await storageSet({ [SETTINGS_KEY]: state.settings });
     setFeedback("settingsSavedMsg", "Settings saved");
+}
+
+async function saveSettings(event) {
+    event.preventDefault();
+    await persistSettings();
 }
 
 async function toggleImmutableOverride() {
@@ -1233,29 +1403,36 @@ async function skipOnboarding() {
 }
 
 function bindDelegatedActions() {
+    document.addEventListener("change", async (event) => {
+        const target = event.target.closest(".switch-input[data-action]");
+        if (!target) return;
+
+        const action = target.dataset.action;
+        if (action === "toggle-domain") await toggleDomain(target.dataset.domain, target.checked);
+        if (action === "toggle-schedule") await toggleSchedule(target.dataset.id, target.checked);
+    });
+
     document.addEventListener("click", async (event) => {
+        const slot = event.target.closest(".hourly-slot[data-hour]");
+        if (slot) {
+            selectHourlySlot(slot);
+            return;
+        }
+
         const target = event.target.closest("[data-action]");
         if (!target) return;
+        if (target.classList.contains("switch-input")) return;
 
         const action = target.dataset.action;
         const domain = target.dataset.domain;
         const id = target.dataset.id;
 
         if (action === "remove-domain") await removeDomain(domain);
-        if (action === "toggle-domain") await toggleDomain(domain, target.dataset.enabled === "true");
         if (action === "clear-snooze") await clearSnooze(domain);
         if (action === "stop-active") await stopActiveBlock(domain);
         if (action === "edit-schedule") editSchedule(id);
         if (action === "remove-schedule") await removeSchedule(id);
-        if (action === "toggle-schedule") await toggleSchedule(id, target.dataset.enabled === "true");
-        if (action === "quick-limit" || action === "hour-limit") {
-            if (domain) {
-                $("domainInput").value = domain;
-                $("limitInput").value = state.settings.defaultLimitMinutes;
-                document.getElementById("tab2").checked = true;
-                $("domainInput").focus();
-            }
-        }
+        if (action === "quick-limit" || action === "hour-limit") await quickAddLimit(domain);
         if (action === "hour-schedule") {
             const hour = Number(target.dataset.hour || 0);
             if (domain) {
@@ -1275,6 +1452,8 @@ function bindEvents() {
     $("scheduledForm")?.addEventListener("submit", saveSchedule);
     $("cancelScheduledEditBtn")?.addEventListener("click", resetScheduleForm);
     $("settingsForm")?.addEventListener("submit", saveSettings);
+    $("use24HourTime")?.addEventListener("change", persistSettings);
+    $("limitNotificationsEnabled")?.addEventListener("change", persistSettings);
     $("immutableAdminOverrideBtn")?.addEventListener("click", toggleImmutableOverride);
     $("verifyWhopBtn")?.addEventListener("click", syncPremium);
     $("manageWhopBtn")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_MANAGE_URL }));
@@ -1293,6 +1472,7 @@ function bindEvents() {
         const marker = event.target.closest("[data-step]");
         if (marker) showOnboardingStep(Number(marker.dataset.step));
     });
+    bindLiveListActions();
 
     chrome.storage.onChanged?.addListener((changes, area) => {
         if (area !== "local") return;
@@ -1308,7 +1488,7 @@ function bindEvents() {
             SETTINGS_KEY,
             PREMIUM_KEY
         ];
-        if (watched.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) loadAll();
+        if (watched.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) loadAll({ flush: false });
     });
 
     bindDelegatedActions();
@@ -1317,10 +1497,10 @@ function bindEvents() {
 document.addEventListener("DOMContentLoaded", async () => {
     bindEvents();
     renderScheduleDays();
-    await loadAll();
+    await refreshLive();
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
     showOnboardingIfNeeded();
-    setInterval(loadAll, 30000);
+    setInterval(refreshLive, LIVE_REFRESH_INTERVAL_MS);
 });
 
 window.addEventListener("unload", () => {

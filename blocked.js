@@ -80,6 +80,11 @@ function setBadgeText() {
     }
 }
 
+function setDomainText() {
+    const domain = document.getElementById("domain");
+    if (domain) domain.textContent = d;
+}
+
 function trackBlockedPageAction(action) {
     chrome.runtime.sendMessage({
         action: "trackAnalyticsEvent",
@@ -636,6 +641,7 @@ document.getElementById("closeTabBtn").addEventListener("click", async () => {
     if (tab?.id != null) chrome.tabs.remove(tab.id);
 });
 
+setDomainText();
 setBadgeText();
 renderTierActions();
 

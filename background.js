@@ -39,6 +39,8 @@ const KEYS = Object.freeze({
     snoozeHistory: "snoozeHistory",
     statsHistory: "statsHistory",
     recentlyReset: "recentlyReset",
+    activeSession: "activeSession",
+    uiSettings: "uiSettings",
     onboarding: "onboardingState",
     onboardingMetrics: "onboardingMetrics",
     postInstallRedirectMeta: "postInstallRedirectMeta",
@@ -64,10 +66,13 @@ const tokenCaches = {
     reset: new Map(),
     strict: new Map()
 };
+const alertClaims = new Set();
+const snoozeEnforcementTimers = new Map();
 
 let activeTabId = null;
 let activeDomain = "";
 let activeStartedAt = 0;
+let activeContextHydration = null;
 
 function local() {
     return chrome.storage.local;
@@ -318,18 +323,57 @@ async function updateDomainActivity(domain, options = {}) {
     await checkAndSendAlerts(normalized, fresh[KEYS.blockedDomains] || {}, fresh[KEYS.statsToday] || {});
 }
 
+function activeSessionRecord() {
+    return activeDomain && activeStartedAt
+        ? { tabId: activeTabId, domain: activeDomain, startedAt: activeStartedAt }
+        : null;
+}
+
+async function persistActiveSession() {
+    await set({ [KEYS.activeSession]: activeSessionRecord() });
+}
+
+async function restoreActiveSession() {
+    if (activeDomain && activeStartedAt) return true;
+
+    const data = await get([KEYS.activeSession]);
+    const session = data[KEYS.activeSession] || {};
+    const domain = normalizeDomain(session.domain);
+    const startedAt = Number(session.startedAt || 0);
+    if (!isValidDomain(domain) || !Number.isFinite(startedAt) || startedAt <= 0) return false;
+
+    const tabId = Number(session.tabId);
+    activeTabId = Number.isFinite(tabId) ? tabId : null;
+    activeDomain = domain;
+    activeStartedAt = startedAt;
+    return true;
+}
+
+async function clearActiveSession() {
+    activeTabId = null;
+    activeDomain = "";
+    activeStartedAt = 0;
+    await persistActiveSession();
+}
+
 async function flushTime({ ignoreCurrentGap = false } = {}) {
+    if (!activeDomain || !activeStartedAt) {
+        await restoreActiveSession();
+    }
     if (!activeDomain || !activeStartedAt) return;
 
     const now = Date.now();
     const deltaMs = now - activeStartedAt;
     activeStartedAt = now;
+    await persistActiveSession();
 
     if (ignoreCurrentGap || deltaMs < 0 || deltaMs > 5 * 60 * 1000) return;
     await updateDomainActivity(activeDomain, { deltaMs, startMs: now - deltaMs, endMs: now });
 }
 
-async function setActiveDomain(tabId, countVisit = false) {
+async function setActiveDomain(tabId, countVisit = false, options = {}) {
+    const shouldEnforce = options.enforce !== false;
+    const shouldBadge = options.badge !== false;
     await flushTime();
     activeTabId = tabId;
 
@@ -337,28 +381,104 @@ async function setActiveDomain(tabId, countVisit = false) {
     const domain = domainFromUrl(tab?.url || "");
     activeDomain = domain;
     activeStartedAt = domain ? Date.now() : 0;
+    await persistActiveSession();
 
     if (domain && countVisit) {
         await updateDomainActivity(domain, { deltaMs: 0, countVisit: true });
     }
-    await enforceIfNeeded(tabId);
-    await syncActionBadge();
+    if (shouldEnforce) await enforceIfNeeded(tabId);
+    if (shouldBadge) await syncActionBadge({ hydrate: false });
 }
 
-async function initActive() {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
-    await setActiveDomain(tab?.id ?? null, true);
+async function currentActiveTab() {
+    const queries = [
+        { active: true, lastFocusedWindow: true },
+        { active: true, currentWindow: true },
+        { active: true }
+    ];
+
+    for (const query of queries) {
+        const [tab] = await chrome.tabs.query(query).catch(() => []);
+        if (tab) return tab;
+    }
+    return null;
+}
+
+async function isCurrentActiveTabId(tabId) {
+    const tab = await currentActiveTab();
+    return tab?.id === tabId;
+}
+
+async function hydrateActiveContext({ countVisit = false, badge = false, force = false } = {}) {
+    if (!activeContextHydration) {
+        activeContextHydration = (async () => {
+            const tab = await currentActiveTab();
+            if (!tab) {
+                if (!activeDomain || !activeStartedAt) await restoreActiveSession();
+                return null;
+            }
+
+            const domain = domainFromUrl(tab.url || "");
+            if (force || tab.id !== activeTabId || domain !== activeDomain) {
+                await setActiveDomain(tab.id ?? null, countVisit, { enforce: false, badge });
+            }
+            return tab;
+        })().finally(() => {
+            activeContextHydration = null;
+        });
+    }
+    return activeContextHydration;
+}
+
+async function initActive(countVisit = false, options = {}) {
+    await hydrateActiveContext({ countVisit, badge: false });
+    if (options.enforce !== false) await enforceIfNeeded();
+    await syncActionBadge({ hydrate: false });
+}
+
+function domainKeysFor(records = {}, domain) {
+    const normalized = normalizeDomain(domain);
+    if (!normalized) return [];
+    return Object.keys(records).filter((key) => normalizeDomain(key) === normalized);
+}
+
+function entryForDomain(records = {}, domain) {
+    const normalized = normalizeDomain(domain);
+    if (!normalized) return undefined;
+    if (Object.prototype.hasOwnProperty.call(records, normalized)) {
+        return records[normalized];
+    }
+    const matchingKey = domainKeysFor(records, normalized)[0];
+    return matchingKey ? records[matchingKey] : undefined;
 }
 
 function limitMsFor(domain, blockedDomains = {}) {
-    const config = normalizeLimitConfig(blockedDomains[domain]);
+    const config = normalizeLimitConfig(entryForDomain(blockedDomains, domain));
     return config.enabled ? config.limitSeconds * 1000 : 0;
 }
 
+function limitMsFromConfig(raw) {
+    const config = normalizeLimitConfig(raw);
+    return config.enabled ? config.limitSeconds * 1000 : 0;
+}
+
+function limitNotificationsEnabled(settings = {}) {
+    return settings.limitNotificationsEnabled !== false;
+}
+
 function isSnoozed(domain, snoozedDomains = {}, now = Date.now()) {
-    const entry = snoozedDomains[domain];
+    const entry = entryForDomain(snoozedDomains, domain);
     const expiresAt = typeof entry === "object" ? Number(entry.expiresAt || 0) : Number(entry || 0);
     return Number.isFinite(expiresAt) && expiresAt > now;
+}
+
+function deleteSnoozeEntriesForDomain(snoozedDomains = {}, domain) {
+    const removed = [];
+    domainKeysFor(snoozedDomains, domain).forEach((key) => {
+        delete snoozedDomains[key];
+        removed.push(key);
+    });
+    return removed;
 }
 
 function wasRecentlyReset(domain, recentlyReset = {}, now = Date.now()) {
@@ -403,7 +523,7 @@ async function enforceIfNeeded(tabId = activeTabId) {
     }
 
     if (await isDomainLimitCurrentlyBlocking(domain)) {
-        const tier = normalizeLimitConfig(data[KEYS.blockedDomains]?.[domain]).tier;
+        const tier = normalizeLimitConfig(entryForDomain(data[KEYS.blockedDomains] || {}, domain)).tier;
         await chrome.tabs.update(tabId, { url: blockedUrl(domain, "limit", tier, tab.url) }).catch(() => {});
         return true;
     }
@@ -420,39 +540,123 @@ async function redirectOpenTabsForDomain(domain, source, tier) {
     }));
 }
 
+async function enforceDomainAfterSnoozeCleared(domain) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return false;
+
+    const data = await get([
+        KEYS.activeBlocks,
+        KEYS.blockedDomains,
+        KEYS.statsToday,
+        KEYS.snoozedDomains,
+        KEYS.recentlyReset
+    ]);
+
+    if (isSnoozed(normalized, data[KEYS.snoozedDomains] || {})) {
+        await enforceIfNeeded();
+        return false;
+    }
+
+    const scheduled = activeScheduledBlockFor(normalized, data[KEYS.activeBlocks] || []);
+    if (scheduled) {
+        await redirectOpenTabsForDomain(normalized, "scheduled", normalizeTier(scheduled.tier, "standard"));
+        await enforceIfNeeded();
+        return true;
+    }
+
+    const config = normalizeLimitConfig(entryForDomain(data[KEYS.blockedDomains] || {}, normalized));
+    const limitMs = config.enabled ? config.limitSeconds * 1000 : 0;
+    const usedMs = entryTimeMs(data[KEYS.statsToday]?.[normalized] || {});
+    if (limitMs > 0 && usedMs >= limitMs && !wasRecentlyReset(normalized, data[KEYS.recentlyReset] || {})) {
+        await redirectOpenTabsForDomain(normalized, "limit", config.tier);
+        await enforceIfNeeded();
+        return true;
+    }
+
+    await enforceIfNeeded();
+    return false;
+}
+
+function scheduleSnoozeEnforcement(domain, delayMs = 0) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return false;
+
+    const existing = snoozeEnforcementTimers.get(normalized);
+    if (existing) clearTimeout(existing);
+
+    const run = () => {
+        snoozeEnforcementTimers.delete(normalized);
+        enforceDomainAfterSnoozeCleared(normalized).catch(() => {});
+    };
+
+    const delay = Math.max(0, Math.min(5000, Number(delayMs) || 0));
+    if (!delay) {
+        run();
+        return true;
+    }
+
+    snoozeEnforcementTimers.set(normalized, setTimeout(run, delay));
+    return true;
+}
+
 async function checkAndSendAlerts(domain, blockedDomains, statsToday) {
-    const limitMs = limitMsFor(domain, blockedDomains);
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return;
+
+    const limitMs = limitMsFromConfig(entryForDomain(blockedDomains, normalized) ?? blockedDomains?.[domain]);
     if (!limitMs) return;
 
-    const usedMs = entryTimeMs(statsToday?.[domain] || {});
+    const usedMs = entryTimeMs(statsToday?.[normalized] || statsToday?.[domain] || {});
     const percent = Math.floor((usedMs / limitMs) * 100);
     const threshold = percent >= 90 ? 90 : percent >= 75 ? 75 : 0;
     if (!threshold) return;
 
-    const data = await get([KEYS.alertsSent]);
-    const alertsSent = data[KEYS.alertsSent] || {};
-    alertsSent[domain] ||= {};
-    if (alertsSent[domain][threshold]) return;
+    const alertKey = `${normalized}:${threshold}`;
+    if (alertClaims.has(alertKey)) return;
+    alertClaims.add(alertKey);
 
-    alertsSent[domain][threshold] = true;
-    await set({ [KEYS.alertsSent]: alertsSent });
+    try {
+        const data = await get([KEYS.alertsSent, KEYS.uiSettings]);
+        if (!limitNotificationsEnabled(data[KEYS.uiSettings] || {})) return;
 
-    chrome.notifications?.create?.(`stmalert:${domain}:${threshold}`, {
-        type: "basic",
-        iconUrl: "assets/icons/extension_icon.png",
-        title: `${threshold}% of ${domain} limit used`,
-        message: `${formatTimeSec(Math.round(usedMs / 1000))} used today.`
-    });
+        const alertsSent = data[KEYS.alertsSent] || {};
+        alertsSent[normalized] ||= {};
+        if (alertsSent[normalized][threshold]) return;
+
+        alertsSent[normalized][threshold] = true;
+        await set({ [KEYS.alertsSent]: alertsSent });
+
+        await chrome.notifications?.create?.(`stmalert:${normalized}:${threshold}`, {
+            type: "basic",
+            iconUrl: "assets/icons/extension_icon.png",
+            title: `${threshold}% of ${normalized} limit used`,
+            message: `${formatTimeSec(Math.round(usedMs / 1000))} used today.`
+        });
+    } finally {
+        alertClaims.delete(alertKey);
+    }
 }
 
-async function syncActionBadge() {
+async function syncActionBadge(options = {}) {
     if (!chrome.action?.setBadgeText) return;
+    if (options.hydrate !== false && (!activeDomain || options.recheckActiveTab)) {
+        await hydrateActiveContext({
+            countVisit: false,
+            badge: false
+        });
+    }
     if (!activeDomain) {
         await chrome.action.setBadgeText({ text: "" }).catch(() => {});
         return;
     }
 
-    const data = await get([KEYS.blockedDomains, KEYS.statsToday]);
+    const data = await get([KEYS.blockedDomains, KEYS.statsToday, KEYS.snoozedDomains]);
+    if (isSnoozed(activeDomain, data[KEYS.snoozedDomains] || {})) {
+        await chrome.action.setBadgeBackgroundColor?.({ color: "#6b7280" }).catch(() => {});
+        await chrome.action.setBadgeText({ text: "II" }).catch(() => {});
+        return;
+    }
+
     const limitMs = limitMsFor(activeDomain, data[KEYS.blockedDomains] || {});
     const usedMs = entryTimeMs(data[KEYS.statsToday]?.[activeDomain] || {});
     const text = limitMs ? `${Math.min(99, Math.round((usedMs / limitMs) * 100))}%` : "";
@@ -625,14 +829,25 @@ async function snoozeDomain(domain, minutes, challengeToken = null) {
     return { expiresAt, redirectUrl: `https://${normalized}/` };
 }
 
-async function clearDomainSnooze(domain) {
+async function clearDomainSnooze(domain, options = {}) {
     const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return false;
+
     const data = await get([KEYS.snoozedDomains]);
     const snoozedDomains = data[KEYS.snoozedDomains] || {};
-    delete snoozedDomains[normalized];
+    const removed = deleteSnoozeEntriesForDomain(snoozedDomains, normalized);
+    const enforceDelayMs = Math.max(0, Math.min(5000, Number(options.enforceDelayMs) || 0));
+    if (removed.length && enforceDelayMs) {
+        scheduleSnoozeEnforcement(normalized, enforceDelayMs);
+    }
     await set({ [KEYS.snoozedDomains]: snoozedDomains });
-    await chrome.alarms.clear(`snoozeEnd_${normalized}`).catch(() => {});
-    return true;
+    const alarmDomains = Array.from(new Set([normalized, ...removed, ...removed.map(normalizeDomain)]));
+    await Promise.all(alarmDomains.map((alarmDomain) => (
+        chrome.alarms.clear(`snoozeEnd_${alarmDomain}`).catch(() => {})
+    )));
+    if (!removed.length) return false;
+    if (enforceDelayMs) return true;
+    return enforceDomainAfterSnoozeCleared(normalized);
 }
 
 async function sendAnalyticsEvent(eventName, params = {}) {
@@ -683,7 +898,9 @@ async function refreshStoredPremiumStatus(source = "manual") {
     }
 }
 
-async function initializeExtension() {
+async function initializeExtension(options = {}) {
+    const enforceActive = Boolean(options.enforceActive);
+    const countVisit = Boolean(options.countVisit);
     await ensureDayReset();
     const data = await get([KEYS.onboarding, KEYS.blockedDomains, KEYS.scheduledBlocks]);
     await set({
@@ -692,7 +909,7 @@ async function initializeExtension() {
         [KEYS.scheduledBlocks]: data[KEYS.scheduledBlocks] || []
     });
     await reconcileSchedules();
-    await initActive();
+    await initActive(countVisit, { enforce: enforceActive });
     chrome.alarms.create("flush", { periodInMinutes: 1 });
     chrome.alarms.create("enforce", { periodInMinutes: 1 });
 }
@@ -747,13 +964,17 @@ function respond(sendResponse, promise) {
     return true;
 }
 
+async function flushActiveTimeNow() {
+    await hydrateActiveContext({ countVisit: false, badge: false });
+    await flushTime();
+    await syncActionBadge({ hydrate: false });
+    return { success: true, activeDomain };
+}
+
 const handlers = {
-    flushActiveTimeNow: async () => {
-        await flushTime();
-        return { success: true };
-    },
+    flushActiveTimeNow,
     refreshActionBadge: async () => {
-        await syncActionBadge();
+        await syncActionBadge({ recheckActiveTab: true });
         return { success: true };
     },
     trackAnalyticsEvent: async (request) => {
@@ -810,14 +1031,21 @@ const handlers = {
         const domain = normalizeDomain(request.domain);
         const data = await get([KEYS.blockedDomains]);
         const blockedDomains = data[KEYS.blockedDomains] || {};
-        if (!blockedDomains[domain]) return { success: false, error: "Domain not found." };
-        blockedDomains[domain] = { ...normalizeLimitConfig(blockedDomains[domain]), enabled: request.enabled !== false };
+        const keys = domainKeysFor(blockedDomains, domain);
+        if (!keys.length) return { success: false, error: "Domain not found." };
+        keys.forEach((key) => {
+            blockedDomains[key] = { ...normalizeLimitConfig(blockedDomains[key]), enabled: request.enabled !== false };
+        });
         await set({ [KEYS.blockedDomains]: blockedDomains });
         return { success: true };
     },
     clearDomainSnooze: async (request) => {
-        await clearDomainSnooze(request.domain);
-        return { success: true };
+        return {
+            success: true,
+            enforced: await clearDomainSnooze(request.domain, {
+                enforceDelayMs: request.enforceDelayMs
+            })
+        };
     },
     setImmutableAdminOverride: async (request) => {
         await set({
@@ -904,14 +1132,17 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
 
 chrome.tabs.onActivated?.addListener(({ tabId }) => setActiveDomain(tabId, true));
 chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
-    if (changeInfo.status === "complete" || changeInfo.url) setActiveDomain(tabId, Boolean(changeInfo.url));
+    if (changeInfo.status !== "complete" && !changeInfo.url) return;
+    isCurrentActiveTabId(tabId)
+        .then((isActive) => {
+            if (isActive) return setActiveDomain(tabId, Boolean(changeInfo.url));
+            return null;
+        })
+        .catch(() => {});
 });
 chrome.tabs.onRemoved?.addListener((tabId) => {
     if (tabId === activeTabId) {
-        flushTime();
-        activeTabId = null;
-        activeDomain = "";
-        activeStartedAt = 0;
+        flushTime().then(clearActiveSession).catch(() => {});
     }
 });
 chrome.windows?.onFocusChanged?.addListener((windowId) => {
@@ -920,36 +1151,65 @@ chrome.windows?.onFocusChanged?.addListener((windowId) => {
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-    if (alarm.name === "flush") await flushTime();
+    if (alarm.name === "flush") {
+        await hydrateActiveContext({ countVisit: false, badge: false });
+        await flushTime();
+        await syncActionBadge({ hydrate: false });
+    }
     if (alarm.name === "enforce") {
+        await hydrateActiveContext({ countVisit: false, badge: false });
         await flushTime();
         await enforceIfNeeded();
+        await syncActionBadge({ hydrate: false });
     }
     if (alarm.name.startsWith("startBlock_")) await activateScheduledBlock(alarm.name.replace("startBlock_", ""));
     if (alarm.name.startsWith("endBlock_")) await deactivateScheduledBlock(alarm.name.replace("endBlock_", ""));
     if (alarm.name.startsWith("snoozeEnd_")) await clearDomainSnooze(alarm.name.replace("snoozeEnd_", ""));
 });
 
-chrome.runtime.onStartup?.addListener(initializeExtension);
+chrome.runtime.onStartup?.addListener(() => initializeExtension({ enforceActive: true, countVisit: true }));
 chrome.runtime.onInstalled?.addListener(async (details) => {
-    await initializeExtension();
+    await initializeExtension({ enforceActive: false, countVisit: false });
     await openPostInstallRedirect(details);
 });
 
 chrome.storage.onChanged?.addListener((changes, area) => {
-    if (area === "local" && (changes.blockedDomains || changes.activeBlocks || changes.statsToday)) {
+    if (area === "local" && (changes.blockedDomains || changes.activeBlocks || changes.statsToday || changes.snoozedDomains)) {
         syncActionBadge();
+    }
+    if (area === "local" && changes.snoozedDomains) {
+        const oldSnoozes = changes.snoozedDomains.oldValue || {};
+        const newSnoozes = changes.snoozedDomains.newValue || {};
+        const now = Date.now();
+        const clearedDomains = Array.from(new Set(
+            Object.keys(oldSnoozes)
+                .map(normalizeDomain)
+                .filter((domain) => (
+                    isValidDomain(domain)
+                    && isSnoozed(domain, oldSnoozes, now)
+                    && !isSnoozed(domain, newSnoozes, now)
+                ))
+        ));
+        clearedDomains.forEach((domain) => {
+            if (snoozeEnforcementTimers.has(domain)) return;
+            enforceDomainAfterSnoozeCleared(domain).catch(() => {});
+        });
     }
 });
 
-initializeExtension().catch(() => {});
+initializeExtension({ enforceActive: false, countVisit: false }).catch(() => {});
 
 if (typeof module !== "undefined" && module.exports) {
     global.createResetToken = createResetToken;
     global.verifyResetToken = verifyResetToken;
     global.resetDomainUsage = resetDomainUsage;
     global.checkAndSendAlerts = checkAndSendAlerts;
+    global.clearDomainSnooze = clearDomainSnooze;
     global.enforceIfNeeded = enforceIfNeeded;
+    global.flushActiveTimeNow = flushActiveTimeNow;
+    global.flushTime = flushTime;
+    global.setActiveDomain = setActiveDomain;
+    global.syncActionBadge = syncActionBadge;
     global.redirectUrlForDomain = redirectUrlForDomain;
     global.isScheduleActive = isScheduleActive;
     global.nextScheduleTime = nextScheduleTime;
