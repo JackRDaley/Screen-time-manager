@@ -623,6 +623,56 @@ nav label:focus-visible {
     border-bottom: 0;
 }
 
+#ranking .row-ranking .ranking-row-right,
+#rankingByVisits .row-ranking .ranking-row-right {
+    --ranking-limit-space: 58px;
+    --ranking-limit-gap: 5px;
+    position: relative;
+    justify-content: flex-end;
+    padding-left: calc(var(--ranking-limit-space) + var(--ranking-limit-gap));
+}
+
+#ranking .row-ranking .ranking-stat-chip,
+#rankingByVisits .row-ranking .ranking-stat-chip {
+    transform: translateX(0);
+    transition: transform .15s ease;
+}
+
+#ranking .row-ranking .ranking-limit-chip,
+#rankingByVisits .row-ranking .ranking-limit-chip {
+    position: absolute;
+    right: 0;
+    width: var(--ranking-limit-space);
+    min-width: var(--ranking-limit-space);
+    opacity: 0;
+    transform: translateX(4px);
+    pointer-events: none;
+    transition: border-color .15s, background .15s, color .15s, opacity .15s, transform .15s;
+}
+
+#ranking .row-ranking:hover .ranking-stat-chip,
+#ranking .row-ranking:focus-within .ranking-stat-chip,
+#rankingByVisits .row-ranking:hover .ranking-stat-chip,
+#rankingByVisits .row-ranking:focus-within .ranking-stat-chip {
+    transform: translateX(calc((var(--ranking-limit-space) + var(--ranking-limit-gap)) * -1));
+}
+
+#ranking .row-ranking:hover .ranking-limit-chip,
+#ranking .row-ranking:focus-within .ranking-limit-chip,
+#rankingByVisits .row-ranking:hover .ranking-limit-chip,
+#rankingByVisits .row-ranking:focus-within .ranking-limit-chip {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+}
+
+body.is-live-refresh-render #ranking .row-ranking .ranking-stat-chip,
+body.is-live-refresh-render #ranking .row-ranking .ranking-limit-chip,
+body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-stat-chip,
+body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
+    transition: none;
+}
+
 #activeList .row-main {
     display: flex;
     flex-direction: column;
@@ -681,13 +731,14 @@ nav label:focus-visible {
 }
 
 .metric-chip-glass {
-    background: linear-gradient(180deg, rgba(255,255,255,.11), rgba(255,255,255,.06));
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.08), inset 0 0 0 1px rgba(255,255,255,.04), 0 4px 10px rgba(0,0,0,.14);
-    color: rgba(237,242,255,.95);
+    border: 1px solid rgba(237,242,255,.08);
+    background: rgba(237,242,255,.065);
+    box-shadow: none;
+    color: rgba(237,242,255,.82);
 }
 
 .metric-chip-muted {
-    color: rgba(237,242,255,.82);
+    color: rgba(237,242,255,.64);
 }
 
 .limit-chip {
@@ -716,7 +767,7 @@ nav label:focus-visible {
     cursor: pointer;
     text-decoration: none;
     user-select: none;
-    transition: border-color .15s, background .15s, color .15s;
+    transition: border-color .15s, background .15s, color .15s, opacity .15s, transform .15s;
 }
 
 .action-chip-muted {
@@ -1132,12 +1183,7 @@ nav label:focus-visible {
 }
 
 .hourly-slot.is-selected {
-    transform: scaleX(1.16);
     z-index: 2;
-}
-
-.hourly-slot.is-selected .hourly-slot-fill {
-    box-shadow: 0 0 0 1px rgba(255,255,255,.36), 0 10px 22px rgba(99,169,255,.24);
 }
 
 .hourly-slot.is-dimmed {
@@ -1154,7 +1200,8 @@ nav label:focus-visible {
     align-items: flex-end;
     background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
     box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
-    overflow: hidden;
+    transition: background 0.2s ease-out, box-shadow 0.2s ease-out;
+    overflow: visible;
 }
 
 .hourly-slot-fill {
@@ -1164,6 +1211,12 @@ nav label:focus-visible {
     background: linear-gradient(180deg, rgba(34,217,255,.95), rgba(139,111,255,.82));
     box-shadow: 0 6px 12px rgba(255,255,255,.08);
     transition: height .25s ease-out, background 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.hourly-slot.is-empty .hourly-slot-fill {
+    min-height: 0;
+    background: transparent;
+    box-shadow: none;
 }
 
 .hourly-slot.is-peak .hourly-slot-fill {
@@ -1176,6 +1229,18 @@ nav label:focus-visible {
 
 .hourly-slot.is-peak.is-hovered .hourly-slot-fill {
     box-shadow: 0 10px 24px rgba(255,255,255,.2);
+}
+
+.hourly-slot.is-selected .hourly-slot-fill,
+.hourly-slot.is-peak.is-selected .hourly-slot-fill,
+.hourly-slot.is-hovered.is-selected .hourly-slot-fill {
+    filter: saturate(1.2) brightness(1.12);
+    box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,.96),
+        inset 0 0 0 3px rgba(99,169,255,.34),
+        0 0 0 1px rgba(255,255,255,.88),
+        0 0 0 4px rgba(99,169,255,.34),
+        0 10px 24px rgba(99,169,255,.44);
 }
 
 #usageCardInfo .card-body {
@@ -1211,6 +1276,11 @@ nav label:focus-visible {
 
 .hourly-slot.is-peak .hourly-slot-label {
     color: rgba(255,166,77,.9);
+}
+
+.hourly-slot.is-selected .hourly-slot-label {
+    color: rgba(255,255,255,.96);
+    text-shadow: 0 0 10px rgba(99,169,255,.5);
 }
 
 .hourly-peak-badge {

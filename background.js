@@ -55,12 +55,21 @@ const WHOP_VERIFY_URL = "https://screen-time-manager.jackster0627.workers.dev/wh
 const WHOP_TOKEN_KEY = "whopAccessToken";
 const WHOP_PENDING_TOKEN_KEY = "whopPendingToken";
 const WHOP_LINK_STATE_KEY = "whopLinkState";
+const WHOP_ACTIVATION_NOTICE_KEY = "whopActivationNotice";
+const BROWSER_FOCUS_KEY = "browserFocusState";
 const ALLOWED_EXTERNAL_ORIGIN = "https://screen-time-manager.jackster0627.workers.dev/";
 const RESET_TOKEN_TTL_MS = 5000;
 const STRICT_TOKEN_TTL_MS = 2 * 60 * 1000;
 const RECENT_RESET_GRACE_MS = 5000;
 const ENFORCEMENT_TIERS = Object.freeze(["lenient", "standard", "strict", "immutable"]);
 const ALL_DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
+const DNR_RULE_ID_BASE = 1000000;
+const DNR_RULE_ID_MAX = 1999999;
+const DNR_DEFAULT_MAX_RULES = 1000;
+const ACTIVE_LIMIT_ALARM_PREFIX = "activeLimitThreshold:";
+const ACTIVE_LIMIT_BADGE_ALARM = "activeLimitBadgeTick";
+const ACTIVE_LIMIT_WAKE_THRESHOLDS = Object.freeze([75, 90, 100]);
+const ACTIVE_HEARTBEAT_MAX_DELTA_MS = 2 * 1000;
 
 const tokenCaches = {
     reset: new Map(),
@@ -71,8 +80,14 @@ const snoozeEnforcementTimers = new Map();
 
 let activeTabId = null;
 let activeDomain = "";
-let activeStartedAt = 0;
+let activeLastHeartbeatAt = 0;
 let activeContextHydration = null;
+let browserFocused = true;
+let browserFocusStateLoaded = false;
+let dnrRulesStateKey = "";
+let dnrRulesSyncPromise = null;
+let dnrRulesSyncQueued = false;
+let dnrRulesSyncForceQueued = false;
 
 function local() {
     return chrome.storage.local;
@@ -194,6 +209,16 @@ function domainFromUrl(url) {
     }
 }
 
+function isOwnExtensionUrl(url) {
+    try {
+        const parsed = new URL(String(url || ""));
+        const extensionRoot = new URL(chrome.runtime.getURL(""));
+        return parsed.origin === extensionRoot.origin;
+    } catch {
+        return false;
+    }
+}
+
 function originalUrlFromBlockedUrl(url) {
     try {
         const parsed = new URL(url);
@@ -238,6 +263,414 @@ function blockedUrl(domain, source = "limit", tier = "lenient", originalUrl = ""
     });
     if (originalUrl) params.set("u", originalUrl);
     return chrome.runtime.getURL(`blocked.html?${params.toString()}`);
+}
+
+function blockedPageInfoFromUrl(url) {
+    try {
+        const parsed = new URL(String(url || ""));
+        const blockedPage = new URL(chrome.runtime.getURL("blocked.html"));
+        if (parsed.origin !== blockedPage.origin || parsed.pathname !== blockedPage.pathname) return null;
+
+        const domain = normalizeDomain(parsed.searchParams.get("d"));
+        const source = parsed.searchParams.get("source") === "scheduled" ? "scheduled" : "limit";
+        const tier = normalizeTier(parsed.searchParams.get("tier"), "lenient");
+        if (!isValidDomain(domain) || tier !== "immutable") return null;
+
+        return {
+            domain,
+            source,
+            tier,
+            original: safeOriginalUrlForDomain(domain, parsed.searchParams.get("u"))
+        };
+    } catch {
+        return null;
+    }
+}
+
+function immutableScheduledBlockForDomain(domain, data = {}, now = Date.now()) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized) || isSnoozed(normalized, data[KEYS.snoozedDomains] || {}, now)) return null;
+
+    const block = activeScheduledBlockFor(normalized, data[KEYS.activeBlocks] || []);
+    if (!block || normalizeTier(block.tier, "standard") !== "immutable") return null;
+    return { ...block, domain: normalized, source: "scheduled", tier: "immutable" };
+}
+
+function immutableLimitBlockForDomain(domain, data = {}, now = Date.now()) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return null;
+    if (
+        isSnoozed(normalized, data[KEYS.snoozedDomains] || {}, now)
+        || wasRecentlyReset(normalized, data[KEYS.recentlyReset] || {}, now)
+    ) {
+        return null;
+    }
+
+    const config = normalizeLimitConfig(entryForDomain(data[KEYS.blockedDomains] || {}, normalized));
+    const limitMs = config.enabled ? config.limitSeconds * 1000 : 0;
+    if (!limitMs || config.tier !== "immutable") return null;
+
+    const usedMs = activeLimitUsedMs(normalized, data[KEYS.statsToday] || {});
+    if (usedMs < limitMs) return null;
+    return { domain: normalized, source: "limit", tier: "immutable", limitSeconds: config.limitSeconds, usedMs };
+}
+
+function immutableBlockForDomain(domain, source, data = {}, now = Date.now()) {
+    if (source === "scheduled") return immutableScheduledBlockForDomain(domain, data, now);
+    if (source === "limit") return immutableLimitBlockForDomain(domain, data, now);
+    return immutableScheduledBlockForDomain(domain, data, now) || immutableLimitBlockForDomain(domain, data, now);
+}
+
+function immutableOverrideUsedToday(lastUsedDay) {
+    return String(lastUsedDay || "") === getDayKey();
+}
+
+function dnrApi() {
+    return chrome.declarativeNetRequest;
+}
+
+function dnrSupported() {
+    const api = dnrApi();
+    return Boolean(api?.getDynamicRules && api?.updateDynamicRules);
+}
+
+function escapeDnrRegex(value) {
+    return String(value || "").replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function isManagedDnrRule(rule) {
+    const id = Number(rule?.id);
+    return Number.isInteger(id) && id >= DNR_RULE_ID_BASE && id <= DNR_RULE_ID_MAX;
+}
+
+function dnrBlockedPagePath(domain, source, tier) {
+    const params = new URLSearchParams({
+        d: domain,
+        source,
+        tier,
+        dnr: "1"
+    });
+    return `/blocked.html?${params.toString()}`;
+}
+
+function buildDnrRedirectRule(entry, id) {
+    const domain = normalizeDomain(entry?.domain);
+    const source = entry?.source === "scheduled" ? "scheduled" : "limit";
+    const tier = normalizeTier(entry?.tier, source === "scheduled" ? "standard" : "lenient");
+
+    return {
+        id,
+        priority: source === "scheduled" ? 20 : 10,
+        action: {
+            type: "redirect",
+            redirect: {
+                extensionPath: dnrBlockedPagePath(domain, source, tier)
+            }
+        },
+        condition: {
+            regexFilter: `^https?://(www\\.)?${escapeDnrRegex(domain)}([/:?#]|$)`,
+            resourceTypes: ["main_frame"],
+            requestMethods: ["get"]
+        }
+    };
+}
+
+function buildDnrBlockEntries(data = {}, now = Date.now()) {
+    const blockedDomains = data[KEYS.blockedDomains] || {};
+    const statsToday = data[KEYS.statsToday] || {};
+    const snoozedDomains = data[KEYS.snoozedDomains] || {};
+    const recentlyReset = data[KEYS.recentlyReset] || {};
+    const entriesByDomain = new Map();
+
+    for (const rawBlock of data[KEYS.activeBlocks] || []) {
+        const block = normalizeBlock(rawBlock);
+        const domain = normalizeDomain(block.domain);
+        if (!isValidDomain(domain) || isSnoozed(domain, snoozedDomains, now)) continue;
+        entriesByDomain.set(domain, {
+            domain,
+            source: "scheduled",
+            tier: normalizeTier(block.tier, "standard")
+        });
+    }
+
+    for (const [rawDomain, rawConfig] of Object.entries(blockedDomains)) {
+        const domain = normalizeDomain(rawDomain);
+        if (!isValidDomain(domain) || entriesByDomain.has(domain)) continue;
+
+        const config = normalizeLimitConfig(rawConfig);
+        const limitMs = config.enabled ? config.limitSeconds * 1000 : 0;
+        const usedMs = entryTimeMs(entryForDomain(statsToday, domain) || {});
+        if (
+            limitMs > 0
+            && usedMs >= limitMs
+            && !isSnoozed(domain, snoozedDomains, now)
+            && !wasRecentlyReset(domain, recentlyReset, now)
+        ) {
+            entriesByDomain.set(domain, {
+                domain,
+                source: "limit",
+                tier: config.tier
+            });
+        }
+    }
+
+    return Array.from(entriesByDomain.values())
+        .sort((a, b) => a.domain.localeCompare(b.domain) || a.source.localeCompare(b.source));
+}
+
+function dnrEntriesStateKey(entries) {
+    return entries.map((entry) => `${entry.source}:${entry.domain}:${entry.tier}`).join("|");
+}
+
+async function readDnrRelevantState() {
+    return get([
+        KEYS.activeBlocks,
+        KEYS.blockedDomains,
+        KEYS.statsToday,
+        KEYS.snoozedDomains,
+        KEYS.recentlyReset
+    ]);
+}
+
+async function syncDnrRules(options = {}) {
+    if (!dnrSupported()) return false;
+
+    const api = dnrApi();
+    const entries = buildDnrBlockEntries(await readDnrRelevantState());
+    const stateKey = dnrEntriesStateKey(entries);
+    if (!options.force && stateKey === dnrRulesStateKey) return true;
+
+    const maxRules = Math.max(
+        0,
+        Math.min(
+            DNR_RULE_ID_MAX - DNR_RULE_ID_BASE + 1,
+            Number(api.MAX_NUMBER_OF_REGEX_RULES || api.MAX_NUMBER_OF_DYNAMIC_RULES || DNR_DEFAULT_MAX_RULES)
+        )
+    );
+    const nextRules = entries
+        .slice(0, maxRules)
+        .map((entry, index) => buildDnrRedirectRule(entry, DNR_RULE_ID_BASE + index));
+    const currentRules = await api.getDynamicRules().catch(() => []);
+    const removeRuleIds = (Array.isArray(currentRules) ? currentRules : [])
+        .filter(isManagedDnrRule)
+        .map((rule) => rule.id);
+
+    if (!removeRuleIds.length && !nextRules.length) {
+        dnrRulesStateKey = stateKey;
+        return true;
+    }
+
+    await api.updateDynamicRules({
+        removeRuleIds,
+        addRules: nextRules
+    });
+    dnrRulesStateKey = stateKey;
+    return true;
+}
+
+function queueDnrRulesSync(options = {}) {
+    if (!dnrSupported()) return Promise.resolve(false);
+
+    if (dnrRulesSyncPromise) {
+        dnrRulesSyncQueued = true;
+        dnrRulesSyncForceQueued = dnrRulesSyncForceQueued || Boolean(options.force);
+        return dnrRulesSyncPromise;
+    }
+
+    dnrRulesSyncForceQueued = Boolean(options.force);
+    dnrRulesSyncPromise = (async () => {
+        do {
+            const force = dnrRulesSyncForceQueued;
+            dnrRulesSyncQueued = false;
+            dnrRulesSyncForceQueued = false;
+            await syncDnrRules({ force });
+        } while (dnrRulesSyncQueued);
+        return true;
+    })().catch((error) => {
+        console.warn("DNR rule sync failed", error);
+        return false;
+    }).finally(() => {
+        dnrRulesSyncPromise = null;
+    });
+
+    return dnrRulesSyncPromise;
+}
+
+function dnrRelevantStorageChanged(changes = {}) {
+    if (changes.activeBlocks || changes.blockedDomains || changes.statsToday || changes.recentlyReset) {
+        return true;
+    }
+
+    if (!changes.snoozedDomains) return false;
+
+    const oldSnoozes = changes.snoozedDomains.oldValue || {};
+    const newSnoozes = changes.snoozedDomains.newValue || {};
+    const domains = Array.from(new Set(
+        [...Object.keys(oldSnoozes), ...Object.keys(newSnoozes)]
+            .map(normalizeDomain)
+            .filter(isValidDomain)
+    ));
+
+    if (!domains.length) return true;
+    return domains.some((domain) => !snoozeEnforcementTimers.has(domain));
+}
+
+function activeLimitAlarmName(domain, threshold) {
+    return `${ACTIVE_LIMIT_ALARM_PREFIX}${threshold}:${encodeURIComponent(normalizeDomain(domain))}`;
+}
+
+function parseActiveLimitAlarmName(name) {
+    const raw = String(name || "");
+    if (!raw.startsWith(ACTIVE_LIMIT_ALARM_PREFIX)) return null;
+
+    const rest = raw.slice(ACTIVE_LIMIT_ALARM_PREFIX.length);
+    const separator = rest.indexOf(":");
+    if (separator < 0) return null;
+
+    const threshold = Number(rest.slice(0, separator));
+    const domain = normalizeDomain(decodeURIComponent(rest.slice(separator + 1)));
+    if (!ACTIVE_LIMIT_WAKE_THRESHOLDS.includes(threshold) || !isValidDomain(domain)) return null;
+    return { domain, threshold };
+}
+
+async function clearActiveLimitAlarms(domain = "") {
+    const api = chrome.alarms;
+    if (!api?.clear) return;
+
+    const normalized = normalizeDomain(domain);
+    if (isValidDomain(normalized)) {
+        await Promise.all(ACTIVE_LIMIT_WAKE_THRESHOLDS.map((threshold) => (
+            api.clear(activeLimitAlarmName(normalized, threshold)).catch(() => false)
+        )));
+        return;
+    }
+
+    await api.clear(ACTIVE_LIMIT_BADGE_ALARM).catch(() => false);
+    if (!api.getAll) return;
+
+    const alarms = await api.getAll().catch(() => []);
+    await Promise.all((alarms || [])
+        .filter((alarm) => String(alarm?.name || "").startsWith(ACTIVE_LIMIT_ALARM_PREFIX))
+        .map((alarm) => api.clear(alarm.name).catch(() => false)));
+}
+
+function activeLimitUsedMs(domain, statsToday = {}) {
+    return entryTimeMs(entryForDomain(statsToday, domain) || {});
+}
+
+async function scheduleActiveLimitWakeups(domain = activeDomain) {
+    const api = chrome.alarms;
+    if (!api?.create || !api?.clear) return false;
+
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) {
+        await clearActiveLimitAlarms();
+        return false;
+    }
+
+    await clearActiveLimitAlarms(normalized);
+
+    const data = await get([
+        KEYS.activeBlocks,
+        KEYS.blockedDomains,
+        KEYS.statsToday,
+        KEYS.snoozedDomains,
+        KEYS.recentlyReset
+    ]);
+    const now = Date.now();
+    const config = normalizeLimitConfig(entryForDomain(data[KEYS.blockedDomains] || {}, normalized));
+    const limitMs = config.enabled ? config.limitSeconds * 1000 : 0;
+
+    if (
+        !limitMs
+        || activeScheduledBlockFor(normalized, data[KEYS.activeBlocks] || [])
+        || isSnoozed(normalized, data[KEYS.snoozedDomains] || {}, now)
+        || wasRecentlyReset(normalized, data[KEYS.recentlyReset] || {}, now)
+    ) {
+        if (normalized === activeDomain) {
+            await api.clear(ACTIVE_LIMIT_BADGE_ALARM).catch(() => false);
+        }
+        return false;
+    }
+
+    const usedMs = activeLimitUsedMs(normalized, data[KEYS.statsToday] || {});
+    for (const threshold of ACTIVE_LIMIT_WAKE_THRESHOLDS) {
+        const targetMs = limitMs * (threshold / 100);
+        const delayMs = Math.ceil(targetMs - usedMs);
+        if (delayMs > 0) {
+            api.create(activeLimitAlarmName(normalized, threshold), { when: now + delayMs });
+        }
+    }
+
+    if (normalized === activeDomain) {
+        await api.clear(ACTIVE_LIMIT_BADGE_ALARM).catch(() => false);
+    }
+
+    return true;
+}
+
+async function handleActiveLimitWakeup(alarmName = "") {
+    const alarmInfo = parseActiveLimitAlarmName(alarmName);
+    await hydrateActiveContext({ countVisit: false, badge: false });
+    await queueDnrRulesSync();
+    await enforceIfNeeded();
+    await syncActionBadge({ hydrate: false });
+
+    if (alarmInfo?.domain && alarmInfo.domain !== activeDomain) {
+        await clearActiveLimitAlarms(alarmInfo.domain);
+    }
+    await scheduleActiveLimitWakeups(activeDomain);
+}
+
+async function handleActivePageHeartbeat(sender = {}, request = {}) {
+    const tabId = sender?.tab?.id;
+    if (tabId == null) return { success: true, ignored: true };
+
+    const tabUrl = String(sender?.tab?.url || "");
+    const domain = domainFromUrl(tabUrl);
+    if (!domain) return { success: true, ignored: true };
+
+    const focusedHint = request?.pageFocused === true && request?.visibilityState === "visible";
+    if (!focusedHint) {
+        await pauseActiveTracking();
+        return { success: true, ignored: true, reason: "browser-unfocused" };
+    }
+
+    const isActive = await isActiveHeartbeatTab(sender.tab);
+    if (!isActive) return { success: true, ignored: true };
+
+    if (!browserFocusStateLoaded || !browserFocused) {
+        await setBrowserFocused(true);
+    }
+
+    const now = Date.now();
+    const previousDomain = activeDomain;
+    const previousHeartbeatAt = activeLastHeartbeatAt;
+    const contextChanged = tabId !== activeTabId || domain !== activeDomain;
+    const baselineOnly = contextChanged || !previousHeartbeatAt || request?.reason !== "interval";
+
+    setActiveContext(tabId, domain, now);
+    await persistActiveSession();
+
+    if (previousDomain && previousDomain !== domain) {
+        await clearActiveLimitAlarms(previousDomain);
+    }
+
+    let countedMs = 0;
+    if (!baselineOnly) {
+        countedMs = Math.min(ACTIVE_HEARTBEAT_MAX_DELTA_MS, Math.max(0, now - previousHeartbeatAt));
+        if (countedMs > 0) {
+            await updateDomainActivity(domain, { deltaMs: countedMs, startMs: now - countedMs, endMs: now });
+        }
+    }
+
+    await enforceIfNeeded(tabId);
+    if (!countedMs) {
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(domain);
+    }
+    await syncActionBadge({ hydrate: false });
+    return { success: true, domain, countedMs };
 }
 
 function entryTimeMs(entry = {}) {
@@ -300,6 +733,7 @@ async function ensureDayReset() {
         [KEYS.alertsSent]: {},
         [KEYS.snoozeHistory]: {}
     });
+    await queueDnrRulesSync();
 }
 
 async function updateDomainActivity(domain, options = {}) {
@@ -321,76 +755,118 @@ async function updateDomainActivity(domain, options = {}) {
 
     const fresh = await get([KEYS.blockedDomains, KEYS.statsToday]);
     await checkAndSendAlerts(normalized, fresh[KEYS.blockedDomains] || {}, fresh[KEYS.statsToday] || {});
+    await queueDnrRulesSync();
+    if (normalized === activeDomain) {
+        await scheduleActiveLimitWakeups(normalized);
+    }
 }
 
 function activeSessionRecord() {
-    return activeDomain && activeStartedAt
-        ? { tabId: activeTabId, domain: activeDomain, startedAt: activeStartedAt }
+    return activeDomain
+        ? { tabId: activeTabId, domain: activeDomain, lastHeartbeatAt: activeLastHeartbeatAt || 0 }
         : null;
 }
 
-async function persistActiveSession() {
-    await set({ [KEYS.activeSession]: activeSessionRecord() });
+function setActiveContext(tabId, domain, lastHeartbeatAt = 0) {
+    const numericTabId = tabId == null ? NaN : Number(tabId);
+    activeTabId = Number.isFinite(numericTabId) ? numericTabId : null;
+    activeDomain = normalizeDomain(domain);
+    activeLastHeartbeatAt = Number.isFinite(lastHeartbeatAt) ? Math.max(0, lastHeartbeatAt) : 0;
+}
+
+function clearActiveSessionState() {
+    activeTabId = null;
+    activeDomain = "";
+    activeLastHeartbeatAt = 0;
+}
+
+async function persistActiveSession(record = activeSessionRecord()) {
+    await set({ [KEYS.activeSession]: record });
 }
 
 async function restoreActiveSession() {
-    if (activeDomain && activeStartedAt) return true;
+    if (activeDomain) return true;
 
     const data = await get([KEYS.activeSession]);
     const session = data[KEYS.activeSession] || {};
     const domain = normalizeDomain(session.domain);
-    const startedAt = Number(session.startedAt || 0);
-    if (!isValidDomain(domain) || !Number.isFinite(startedAt) || startedAt <= 0) return false;
+    if (!isValidDomain(domain)) return false;
 
     const tabId = Number(session.tabId);
-    activeTabId = Number.isFinite(tabId) ? tabId : null;
-    activeDomain = domain;
-    activeStartedAt = startedAt;
+    const lastHeartbeatAt = Number(session.lastHeartbeatAt || session.startedAt || 0);
+    setActiveContext(tabId, domain, Number.isFinite(lastHeartbeatAt) ? lastHeartbeatAt : 0);
     return true;
 }
 
 async function clearActiveSession() {
-    activeTabId = null;
-    activeDomain = "";
-    activeStartedAt = 0;
+    clearActiveSessionState();
+    await persistActiveSession(null);
+}
+
+async function pauseActiveTracking() {
+    clearActiveSessionState();
+    await Promise.all([
+        persistActiveSession(null),
+        clearActiveLimitAlarms()
+    ]);
+}
+
+async function flushTime() {
+    if (!activeDomain) await restoreActiveSession();
     await persistActiveSession();
 }
 
-async function flushTime({ ignoreCurrentGap = false } = {}) {
-    if (!activeDomain || !activeStartedAt) {
-        await restoreActiveSession();
-    }
-    if (!activeDomain || !activeStartedAt) return;
+async function flushPopupActiveTick() {
+    if (!(await isBrowserFocused())) return 0;
+    if (!activeDomain) await restoreActiveSession();
+    if (!isValidDomain(activeDomain)) return 0;
 
     const now = Date.now();
-    const deltaMs = now - activeStartedAt;
-    activeStartedAt = now;
+    const previousHeartbeatAt = Number(activeLastHeartbeatAt || 0);
+    setActiveContext(activeTabId, activeDomain, now);
     await persistActiveSession();
 
-    if (ignoreCurrentGap || deltaMs < 0 || deltaMs > 5 * 60 * 1000) return;
-    await updateDomainActivity(activeDomain, { deltaMs, startMs: now - deltaMs, endMs: now });
+    if (!previousHeartbeatAt) return 0;
+
+    const deltaMs = Math.min(ACTIVE_HEARTBEAT_MAX_DELTA_MS, Math.max(0, now - previousHeartbeatAt));
+    if (deltaMs > 0) {
+        await updateDomainActivity(activeDomain, {
+            deltaMs,
+            startMs: now - deltaMs,
+            endMs: now
+        });
+    }
+    return deltaMs;
 }
 
 async function setActiveDomain(tabId, countVisit = false, options = {}) {
     const shouldEnforce = options.enforce !== false;
     const shouldBadge = options.badge !== false;
-    await flushTime();
-    activeTabId = tabId;
+    const previousDomain = activeDomain;
+    if (!(await isBrowserFocused())) {
+        await clearActiveLimitAlarms();
+        await clearActiveSession();
+        return;
+    }
 
     const tab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
     const domain = domainFromUrl(tab?.url || "");
-    activeDomain = domain;
-    activeStartedAt = domain ? Date.now() : 0;
+    setActiveContext(tabId, domain, 0);
     await persistActiveSession();
 
     if (domain && countVisit) {
         await updateDomainActivity(domain, { deltaMs: 0, countVisit: true });
     }
+    if (previousDomain && previousDomain !== domain) {
+        await clearActiveLimitAlarms(previousDomain);
+    }
+    await scheduleActiveLimitWakeups(domain);
     if (shouldEnforce) await enforceIfNeeded(tabId);
     if (shouldBadge) await syncActionBadge({ hydrate: false });
 }
 
-async function currentActiveTab() {
+async function currentActiveTab(options = {}) {
+    const skipOwnExtension = Boolean(options.skipOwnExtension);
     const queries = [
         { active: true, lastFocusedWindow: true },
         { active: true, currentWindow: true },
@@ -398,10 +874,37 @@ async function currentActiveTab() {
     ];
 
     for (const query of queries) {
-        const [tab] = await chrome.tabs.query(query).catch(() => []);
-        if (tab) return tab;
+        const tabs = await chrome.tabs.query(query).catch(() => []);
+        for (const tab of tabs || []) {
+            if (skipOwnExtension && isOwnExtensionUrl(tab.url)) continue;
+            if (tab) return tab;
+        }
     }
     return null;
+}
+
+async function isBrowserFocused() {
+    if (browserFocusStateLoaded) return browserFocused;
+
+    const data = await get([BROWSER_FOCUS_KEY]).catch(() => ({}));
+    const stored = data?.[BROWSER_FOCUS_KEY];
+    if (typeof stored?.focused === "boolean") {
+        browserFocused = stored.focused;
+    }
+    browserFocusStateLoaded = true;
+    return browserFocused;
+}
+
+async function setBrowserFocused(focused) {
+    browserFocused = Boolean(focused);
+    browserFocusStateLoaded = true;
+    await set({
+        [BROWSER_FOCUS_KEY]: {
+            focused: browserFocused,
+            updatedAt: Date.now()
+        }
+    }).catch(() => {});
+    return browserFocused;
 }
 
 async function isCurrentActiveTabId(tabId) {
@@ -409,12 +912,25 @@ async function isCurrentActiveTabId(tabId) {
     return tab?.id === tabId;
 }
 
-async function hydrateActiveContext({ countVisit = false, badge = false, force = false } = {}) {
+async function isActiveHeartbeatTab(tab = {}) {
+    if (tab?.id == null) return false;
+    if (tab.active === true) return true;
+
+    const windowId = Number(tab.windowId);
+    if (Number.isFinite(windowId) && windowId >= 0) {
+        const [activeTab] = await chrome.tabs.query({ active: true, windowId }).catch(() => []);
+        if (activeTab?.id === tab.id) return true;
+    }
+
+    return isCurrentActiveTabId(tab.id);
+}
+
+async function hydrateActiveContext({ countVisit = false, badge = false, force = false, preserveOwnExtensionContext = false } = {}) {
     if (!activeContextHydration) {
         activeContextHydration = (async () => {
-            const tab = await currentActiveTab();
+            const tab = await currentActiveTab({ skipOwnExtension: preserveOwnExtensionContext });
             if (!tab) {
-                if (!activeDomain || !activeStartedAt) await restoreActiveSession();
+                if (!activeDomain) await restoreActiveSession();
                 return null;
             }
 
@@ -433,7 +949,141 @@ async function hydrateActiveContext({ countVisit = false, badge = false, force =
 async function initActive(countVisit = false, options = {}) {
     await hydrateActiveContext({ countVisit, badge: false });
     if (options.enforce !== false) await enforceIfNeeded();
+    await scheduleActiveLimitWakeups(activeDomain);
     await syncActionBadge({ hydrate: false });
+}
+
+async function activeImmutableOverrideTarget() {
+    const tab = await currentActiveTab();
+    const pageInfo = blockedPageInfoFromUrl(tab?.url || "");
+    if (!pageInfo) return null;
+
+    const data = await get([
+        KEYS.activeBlocks,
+        KEYS.blockedDomains,
+        KEYS.statsToday,
+        KEYS.snoozedDomains,
+        KEYS.recentlyReset,
+        ADMIN_OVERRIDE_LAST_USED_KEY
+    ]);
+    const block = immutableBlockForDomain(pageInfo.domain, pageInfo.source, data);
+    if (!block) return null;
+
+    return {
+        ...block,
+        tabId: tab?.id ?? null,
+        tabUrl: tab?.url || "",
+        original: pageInfo.original,
+        label: pageInfo.source === "scheduled" ? "scheduled block" : "daily limit",
+        overrideUsedToday: immutableOverrideUsedToday(data[ADMIN_OVERRIDE_LAST_USED_KEY])
+    };
+}
+
+async function getImmutableOverrideState() {
+    const target = await activeImmutableOverrideTarget();
+    if (!target) {
+        return {
+            available: false,
+            message: "Available only while this tab is blocked by an active immutable rule."
+        };
+    }
+
+    if (target.overrideUsedToday) {
+        return {
+            available: false,
+            usedToday: true,
+            domain: target.domain,
+            source: target.source,
+            label: target.label,
+            message: "Emergency override already used today."
+        };
+    }
+
+    return {
+        available: true,
+        domain: target.domain,
+        source: target.source,
+        label: target.label,
+        message: `Immutable ${target.label} active for ${target.domain}.`
+    };
+}
+
+async function useImmutableOverrideForTarget(target) {
+    if (!target || !isValidDomain(target.domain)) {
+        return { success: false, error: "No active immutable block found." };
+    }
+
+    const usage = await get([ADMIN_OVERRIDE_LAST_USED_KEY]);
+    if (immutableOverrideUsedToday(usage[ADMIN_OVERRIDE_LAST_USED_KEY])) {
+        await set({ [ADMIN_OVERRIDE_KEY]: false }).catch(() => {});
+        return { success: false, usedToday: true, error: "Emergency override already used today." };
+    }
+
+    const redirectUrl = redirectUrlForDomain(
+        target.domain,
+        { original: target.original },
+        { tab: { url: target.tabUrl } }
+    );
+
+    if (target.source === "scheduled") {
+        const data = await get([KEYS.activeBlocks, KEYS.scheduledBlocks]);
+        const activeBlocks = data[KEYS.activeBlocks] || [];
+        const removed = [];
+        const nextActiveBlocks = activeBlocks.filter((block) => {
+            const matches = normalizeDomain(block.domain) === target.domain
+                && normalizeTier(block.tier, "standard") === "immutable";
+            if (matches) removed.push(block);
+            return !matches;
+        });
+
+        if (!removed.length) {
+            return { success: false, error: "No active immutable block found." };
+        }
+
+        await set({ [KEYS.activeBlocks]: nextActiveBlocks });
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(target.domain);
+
+        const scheduled = data[KEYS.scheduledBlocks] || [];
+        await Promise.all(removed.map(async (block) => {
+            const schedule = scheduled.find((item) => item.id === block.id);
+            if (schedule) await scheduleBlockAlarms(normalizeBlock(schedule));
+        }));
+    } else {
+        const reset = await resetDomainUsage(target.domain);
+        if (!reset) return { success: false, error: "No active immutable block found." };
+    }
+
+    await set({
+        [ADMIN_OVERRIDE_KEY]: false,
+        [ADMIN_OVERRIDE_LAST_USED_KEY]: getDayKey()
+    });
+
+    let redirected = false;
+    if (target.tabId != null) {
+        redirected = Boolean(await chrome.tabs.update(target.tabId, { url: redirectUrl }).then(() => true).catch(() => false));
+    }
+
+    return {
+        success: true,
+        domain: target.domain,
+        source: target.source,
+        redirectUrl,
+        redirected
+    };
+}
+
+async function useImmutableOverrideFromActiveTab() {
+    const target = await activeImmutableOverrideTarget();
+    if (!target) {
+        await set({ [ADMIN_OVERRIDE_KEY]: false }).catch(() => {});
+        return {
+            success: false,
+            error: "Open an active immutable block page before using the emergency override."
+        };
+    }
+
+    return useImmutableOverrideForTarget(target);
 }
 
 function domainKeysFor(records = {}, domain) {
@@ -553,12 +1203,16 @@ async function enforceDomainAfterSnoozeCleared(domain) {
     ]);
 
     if (isSnoozed(normalized, data[KEYS.snoozedDomains] || {})) {
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(normalized);
         await enforceIfNeeded();
         return false;
     }
 
     const scheduled = activeScheduledBlockFor(normalized, data[KEYS.activeBlocks] || []);
     if (scheduled) {
+        await queueDnrRulesSync();
+        await clearActiveLimitAlarms(normalized);
         await redirectOpenTabsForDomain(normalized, "scheduled", normalizeTier(scheduled.tier, "standard"));
         await enforceIfNeeded();
         return true;
@@ -568,11 +1222,15 @@ async function enforceDomainAfterSnoozeCleared(domain) {
     const limitMs = config.enabled ? config.limitSeconds * 1000 : 0;
     const usedMs = entryTimeMs(data[KEYS.statsToday]?.[normalized] || {});
     if (limitMs > 0 && usedMs >= limitMs && !wasRecentlyReset(normalized, data[KEYS.recentlyReset] || {})) {
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(normalized);
         await redirectOpenTabsForDomain(normalized, "limit", config.tier);
         await enforceIfNeeded();
         return true;
     }
 
+    await queueDnrRulesSync();
+    await scheduleActiveLimitWakeups(normalized);
     await enforceIfNeeded();
     return false;
 }
@@ -658,7 +1316,7 @@ async function syncActionBadge(options = {}) {
     }
 
     const limitMs = limitMsFor(activeDomain, data[KEYS.blockedDomains] || {});
-    const usedMs = entryTimeMs(data[KEYS.statsToday]?.[activeDomain] || {});
+    const usedMs = activeLimitUsedMs(activeDomain, data[KEYS.statsToday] || {});
     const text = limitMs ? `${Math.min(99, Math.round((usedMs / limitMs) * 100))}%` : "";
 
     await chrome.action.setBadgeBackgroundColor?.({ color: "#2563eb" }).catch(() => {});
@@ -686,6 +1344,8 @@ async function resetDomainUsage(domain) {
         [KEYS.alertsSent]: alertsSent,
         [KEYS.recentlyReset]: recentlyReset
     });
+    await queueDnrRulesSync();
+    await scheduleActiveLimitWakeups(normalized);
     await syncActionBadge();
     return true;
 }
@@ -778,6 +1438,7 @@ async function activateScheduledBlock(id) {
     const activeBlocks = (data[KEYS.activeBlocks] || []).filter((item) => item.id !== id);
     activeBlocks.push({ ...block, startedAt: Date.now() });
     await set({ [KEYS.activeBlocks]: activeBlocks });
+    await queueDnrRulesSync();
     await redirectOpenTabsForDomain(block.domain, "scheduled", block.tier);
     await scheduleBlockAlarms(block);
 }
@@ -786,6 +1447,7 @@ async function deactivateScheduledBlock(id) {
     const data = await get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
     const activeBlocks = (data[KEYS.activeBlocks] || []).filter((item) => item.id !== id);
     await set({ [KEYS.activeBlocks]: activeBlocks });
+    await queueDnrRulesSync();
 
     const block = (data[KEYS.scheduledBlocks] || []).map(normalizeBlock).find((item) => item.id === id);
     if (block) await scheduleBlockAlarms(block);
@@ -802,6 +1464,7 @@ async function reconcileSchedules() {
     }
 
     await set({ [KEYS.scheduledBlocks]: scheduled, [KEYS.activeBlocks]: active });
+    await queueDnrRulesSync();
 }
 
 async function snoozeDomain(domain, minutes, challengeToken = null) {
@@ -825,6 +1488,11 @@ async function snoozeDomain(domain, minutes, challengeToken = null) {
 
     await set({ [KEYS.snoozedDomains]: snoozedDomains, [KEYS.snoozeHistory]: snoozeHistory });
     chrome.alarms.create(`snoozeEnd_${normalized}`, { when: expiresAt });
+    await queueDnrRulesSync();
+    await clearActiveLimitAlarms(normalized);
+    if (normalized === activeDomain) {
+        await chrome.alarms.clear(ACTIVE_LIMIT_BADGE_ALARM).catch(() => false);
+    }
 
     return { expiresAt, redirectUrl: `https://${normalized}/` };
 }
@@ -847,6 +1515,8 @@ async function clearDomainSnooze(domain, options = {}) {
     )));
     if (!removed.length) return false;
     if (enforceDelayMs) return true;
+    await queueDnrRulesSync();
+    await scheduleActiveLimitWakeups(normalized);
     return enforceDomainAfterSnoozeCleared(normalized);
 }
 
@@ -870,7 +1540,8 @@ async function sendAnalyticsEvent(eventName, params = {}) {
 
 async function refreshStoredPremiumStatus(source = "manual") {
     const data = await get([WHOP_TOKEN_KEY, WHOP_PENDING_TOKEN_KEY, PREMIUM_KEY]);
-    const token = data[WHOP_TOKEN_KEY] || data[WHOP_PENDING_TOKEN_KEY] || "";
+    // Prefer pending checkout tokens so re-linking can replace stale stored access.
+    const token = data[WHOP_PENDING_TOKEN_KEY] || data[WHOP_TOKEN_KEY] || "";
     const fallback = data[PREMIUM_KEY] || { active: false, planName: "Free" };
 
     if (!token || typeof fetch !== "function") {
@@ -909,6 +1580,7 @@ async function initializeExtension(options = {}) {
         [KEYS.scheduledBlocks]: data[KEYS.scheduledBlocks] || []
     });
     await reconcileSchedules();
+    await queueDnrRulesSync({ force: true });
     await initActive(countVisit, { enforce: enforceActive });
     chrome.alarms.create("flush", { periodInMinutes: 1 });
     chrome.alarms.create("enforce", { periodInMinutes: 1 });
@@ -964,15 +1636,37 @@ function respond(sendResponse, promise) {
     return true;
 }
 
-async function flushActiveTimeNow() {
-    await hydrateActiveContext({ countVisit: false, badge: false });
+async function openPremiumActivationPopup() {
+    if (!chrome.action?.openPopup) return false;
+
+    try {
+        await chrome.action.openPopup();
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function flushActiveTimeNow(request = {}) {
+    const fromPopup = request?.source === "popup";
+    if (fromPopup) {
+        await setBrowserFocused(true);
+    }
+
+    await hydrateActiveContext({
+        countVisit: false,
+        badge: false,
+        preserveOwnExtensionContext: fromPopup
+    });
+    const countedMs = fromPopup ? await flushPopupActiveTick() : 0;
     await flushTime();
     await syncActionBadge({ hydrate: false });
-    return { success: true, activeDomain };
+    return { success: true, activeDomain, countedMs };
 }
 
 const handlers = {
     flushActiveTimeNow,
+    activePageHeartbeat: async (request, sender) => handleActivePageHeartbeat(sender, request),
     refreshActionBadge: async () => {
         await syncActionBadge({ recheckActiveTab: true });
         return { success: true };
@@ -1006,6 +1700,8 @@ const handlers = {
         const scheduled = [...(data[KEYS.scheduledBlocks] || []), block];
         await set({ [KEYS.scheduledBlocks]: scheduled });
         await scheduleBlockAlarms(block);
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(activeDomain);
         return { success: true, block };
     },
     updateScheduledBlock: async (request) => {
@@ -1014,6 +1710,8 @@ const handlers = {
         const scheduled = (data[KEYS.scheduledBlocks] || []).map((item) => item.id === block.id ? block : item);
         await set({ [KEYS.scheduledBlocks]: scheduled });
         await scheduleBlockAlarms(block);
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(activeDomain);
         return { success: true, block };
     },
     toggleScheduledBlockEnabled: async (request) => {
@@ -1025,6 +1723,8 @@ const handlers = {
         await set({ [KEYS.scheduledBlocks]: scheduled });
         const block = scheduled.find((item) => item.id === id);
         if (block) await scheduleBlockAlarms(normalizeBlock(block));
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(activeDomain);
         return { success: true };
     },
     toggleDomainLimitEnabled: async (request) => {
@@ -1037,6 +1737,8 @@ const handlers = {
             blockedDomains[key] = { ...normalizeLimitConfig(blockedDomains[key]), enabled: request.enabled !== false };
         });
         await set({ [KEYS.blockedDomains]: blockedDomains });
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(domain);
         return { success: true };
     },
     clearDomainSnooze: async (request) => {
@@ -1047,25 +1749,54 @@ const handlers = {
             })
         };
     },
+    getImmutableOverrideState: async () => ({
+        success: true,
+        ...(await getImmutableOverrideState())
+    }),
+    useImmutableAdminOverride: async () => useImmutableOverrideFromActiveTab(),
     setImmutableAdminOverride: async (request) => {
-        await set({
-            [ADMIN_OVERRIDE_KEY]: Boolean(request.enabled),
-            [ADMIN_OVERRIDE_LAST_USED_KEY]: request.enabled ? getDayKey() : ""
-        });
+        if (request.enabled) {
+            const state = await getImmutableOverrideState();
+            if (!state.available) {
+                await set({ [ADMIN_OVERRIDE_KEY]: false });
+                return { success: false, error: state.message };
+            }
+        }
+        const items = { [ADMIN_OVERRIDE_KEY]: Boolean(request.enabled) };
+        if (!request.enabled) items[ADMIN_OVERRIDE_LAST_USED_KEY] = "";
+        await set(items);
         return { success: true };
     },
     adminOverrideBypassImmutable: async (request, sender) => {
-        const data = await get([ADMIN_OVERRIDE_KEY]);
+        const data = await get([
+            ADMIN_OVERRIDE_KEY,
+            KEYS.activeBlocks,
+            KEYS.blockedDomains,
+            KEYS.statsToday,
+            KEYS.snoozedDomains,
+            KEYS.recentlyReset
+        ]);
         if (!data[ADMIN_OVERRIDE_KEY]) return { success: false, error: "Admin override is off." };
-        await resetDomainUsage(request.domain);
-        await set({ [ADMIN_OVERRIDE_LAST_USED_KEY]: getDayKey() });
-        return { success: true, redirectUrl: redirectUrlForDomain(request.domain, request, sender) };
+
+        const domain = normalizeDomain(request.domain);
+        const source = request.source === "scheduled" ? "scheduled" : "limit";
+        const block = immutableBlockForDomain(domain, source, data);
+        if (!block) return { success: false, error: "No active immutable block found." };
+
+        return useImmutableOverrideForTarget({
+            ...block,
+            tabId: sender?.tab?.id ?? null,
+            tabUrl: sender?.tab?.url || "",
+            original: safeOriginalUrlForDomain(domain, request.original)
+        });
     },
     endScheduledBlock: async (request, sender) => {
         const domain = normalizeDomain(request.domain);
         const data = await get([KEYS.activeBlocks]);
         const next = (data[KEYS.activeBlocks] || []).filter((block) => normalizeDomain(block.domain) !== domain);
         await set({ [KEYS.activeBlocks]: next });
+        await queueDnrRulesSync();
+        await scheduleActiveLimitWakeups(domain);
         return { success: true, redirectUrl: redirectUrlForDomain(domain, request, sender) };
     },
     snoozeBlock: async (request, sender) => ({
@@ -1127,7 +1858,19 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
         sendResponse({ success: false, error: "unauthorized-origin" });
         return false;
     }
-    return respond(sendResponse, handlers.completeWhopCheckout(request));
+    return respond(sendResponse, (async () => {
+        const result = await handlers.completeWhopCheckout(request);
+        if (result?.success && result?.premium?.active) {
+            await set({ [WHOP_ACTIVATION_NOTICE_KEY]: { createdAt: Date.now() } });
+            const openedPopup = await openPremiumActivationPopup();
+            return {
+                ...result,
+                openedExtension: openedPopup,
+                openedPopup
+            };
+        }
+        return result;
+    })());
 });
 
 chrome.tabs.onActivated?.addListener(({ tabId }) => setActiveDomain(tabId, true));
@@ -1142,25 +1885,51 @@ chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
 });
 chrome.tabs.onRemoved?.addListener((tabId) => {
     if (tabId === activeTabId) {
-        flushTime().then(clearActiveSession).catch(() => {});
+        clearActiveSession().catch(() => {});
     }
 });
+
+async function handleWindowFocusChanged(windowId) {
+    const isUnfocused = windowId === chrome.windows.WINDOW_ID_NONE || windowId === -1;
+
+    if (isUnfocused) {
+        await Promise.all([
+            setBrowserFocused(false),
+            pauseActiveTracking()
+        ]);
+        return;
+    }
+
+    await setBrowserFocused(true);
+    await initActive();
+}
+
 chrome.windows?.onFocusChanged?.addListener((windowId) => {
-    if (windowId === chrome.windows.WINDOW_ID_NONE) flushTime();
-    else initActive();
+    handleWindowFocusChanged(windowId).catch(() => {});
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === ACTIVE_LIMIT_BADGE_ALARM || alarm.name.startsWith(ACTIVE_LIMIT_ALARM_PREFIX)) {
+        await handleActiveLimitWakeup(alarm.name);
+    }
     if (alarm.name === "flush") {
+        if (!(await isBrowserFocused())) {
+            await pauseActiveTracking();
+            return;
+        }
         await hydrateActiveContext({ countVisit: false, badge: false });
-        await flushTime();
         await syncActionBadge({ hydrate: false });
+        await scheduleActiveLimitWakeups(activeDomain);
     }
     if (alarm.name === "enforce") {
+        if (!(await isBrowserFocused())) {
+            await pauseActiveTracking();
+            return;
+        }
         await hydrateActiveContext({ countVisit: false, badge: false });
-        await flushTime();
         await enforceIfNeeded();
         await syncActionBadge({ hydrate: false });
+        await scheduleActiveLimitWakeups(activeDomain);
     }
     if (alarm.name.startsWith("startBlock_")) await activateScheduledBlock(alarm.name.replace("startBlock_", ""));
     if (alarm.name.startsWith("endBlock_")) await deactivateScheduledBlock(alarm.name.replace("endBlock_", ""));
@@ -1176,6 +1945,10 @@ chrome.runtime.onInstalled?.addListener(async (details) => {
 chrome.storage.onChanged?.addListener((changes, area) => {
     if (area === "local" && (changes.blockedDomains || changes.activeBlocks || changes.statsToday || changes.snoozedDomains)) {
         syncActionBadge();
+    }
+    if (area === "local" && dnrRelevantStorageChanged(changes)) {
+        queueDnrRulesSync();
+        scheduleActiveLimitWakeups(activeDomain);
     }
     if (area === "local" && changes.snoozedDomains) {
         const oldSnoozes = changes.snoozedDomains.oldValue || {};
@@ -1213,4 +1986,12 @@ if (typeof module !== "undefined" && module.exports) {
     global.redirectUrlForDomain = redirectUrlForDomain;
     global.isScheduleActive = isScheduleActive;
     global.nextScheduleTime = nextScheduleTime;
+    global.buildDnrBlockEntries = buildDnrBlockEntries;
+    global.buildDnrRedirectRule = buildDnrRedirectRule;
+    global.syncDnrRules = syncDnrRules;
+    global.scheduleActiveLimitWakeups = scheduleActiveLimitWakeups;
+    global.handleActiveLimitWakeup = handleActiveLimitWakeup;
+    global.handleActivePageHeartbeat = handleActivePageHeartbeat;
+    global.handleWindowFocusChanged = handleWindowFocusChanged;
+    global.ACTIVE_LIMIT_BADGE_ALARM = ACTIVE_LIMIT_BADGE_ALARM;
 }

@@ -49,7 +49,6 @@ const TIER_LABELS = {
     immutable: "Immutable"
 };
 const DEFAULT_SNOOZE_MINUTES = 5;
-const IMMUTABLE_ADMIN_OVERRIDE_KEY = "immutableAdminOverrideEnabled";
 
 let strictChallengeReadyAt = 0;
 let strictChallengeWindowEndsAt = 0;
@@ -586,38 +585,7 @@ async function renderTierActions() {
     }
 
     immutableNotice.hidden = false;
-
-    chrome.storage.local.get([IMMUTABLE_ADMIN_OVERRIDE_KEY], (data) => {
-        const overrideEnabled = Boolean(data?.[IMMUTABLE_ADMIN_OVERRIDE_KEY]);
-        if (!overrideEnabled) {
-            immutableNotice.textContent = "Immutable mode is active. Use the hidden admin override in popup settings if you need emergency access.";
-            return;
-        }
-
-        immutableNotice.textContent = "Admin override is enabled. Emergency bypass is available for this immutable block.";
-
-        const overrideButton = document.createElement("button");
-        overrideButton.className = "btn snooze";
-        overrideButton.type = "button";
-        overrideButton.textContent = source === "scheduled" ? "End Immutable Session" : "Emergency Bypass (5 min)";
-        overrideButton.addEventListener("click", async () => {
-            trackBlockedPageAction("immutable_admin_override");
-            const response = await chrome.runtime.sendMessage({
-                action: "adminOverrideBypassImmutable",
-                domain: d,
-                source,
-                original: String(params.get("u") || "").trim()
-            }).catch(() => ({ success: false }));
-
-            if (!response?.success) {
-                immutableNotice.textContent = response?.error || "Override failed. Re-open popup and enable admin override.";
-                return;
-            }
-
-            window.location.href = String(response.redirectUrl || "").trim() || `https://${d}`;
-        });
-        primary.appendChild(overrideButton);
-    });
+    immutableNotice.textContent = "Immutable mode is active. Open the extension popup and use Emergency Override from Settings while this block is active.";
 }
 
 if (source === "scheduled") {

@@ -110,6 +110,22 @@ Use GA4's Active Users metric against this event if you want a rough measure of 
 
 ---
 
+## Whop Premium Handoff
+
+The popup opens `/whop/start` on the Cloudflare Worker instead of linking directly to Whop. The Worker receives the current `chrome.runtime.id`, creates a Whop checkout configuration when `WHOP_PLAN_ID` is set, and uses a return URL that lets the post-payment page message this exact extension install.
+
+Required Worker values:
+
+- `WHOP_API_KEY`
+- `WHOP_COMPANY_ID`
+- `WHOP_PRODUCT_ID` (`prod_...`) or `WHOP_PLAN_ID` (`plan_...`)
+- `WHOP_CHECKOUT_URL` as a fallback direct checkout link
+- `WHOP_EXTENSION_ID` as a production fallback for Chrome Web Store installs
+
+If only `WHOP_PRODUCT_ID` is configured, the Worker looks up the first non-archived buy-now plan for that product before creating checkout. The Whop API key needs checkout configuration create/read permissions, plan read permission, plus the membership/payment read permissions already used by verification.
+
+---
+
 ## Project Structure
 
 ```

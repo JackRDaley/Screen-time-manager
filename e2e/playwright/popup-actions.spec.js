@@ -13,6 +13,12 @@ function dayKey(date = new Date()) {
     return `${y}-${m}-${d}`;
 }
 
+function dayKeyOffset(offset) {
+    const date = new Date();
+    date.setDate(date.getDate() - offset);
+    return dayKey(date);
+}
+
 async function installPopupChromeMock(page, overrides = {}) {
     await page.addInitScript(({ today, overrides }) => {
         const listeners = [];
@@ -153,11 +159,13 @@ test('popup live refresh keeps flushing and repainting visible stats', async ({ 
 
     await page.goto(popupUrl());
     await expect(page.locator('#ranking')).toContainText('alpha.com');
+    await expect(page.locator('#statScreenTimeDelta')).toHaveText('+100%');
 
     await expect.poll(() => page.evaluate(() => window.__popupFlushCount), { timeout: 3500 }).toBeGreaterThanOrEqual(3);
     await expect.poll(() => page.evaluate(() => window.__popupData.statsToday['alpha.com']?.timeMs), { timeout: 3500 })
         .toBeGreaterThanOrEqual((20 * 60 * 1000) + 3000);
     await expect(page.locator('#statScreenTime')).toContainText('30m');
+    await expect(page.locator('#statScreenTimeDelta')).not.toHaveText('Today');
 });
 
 test('selected hourly bar survives live refresh repaint', async ({ page }) => {
@@ -179,6 +187,72 @@ test('selected hourly bar survives live refresh repaint', async ({ page }) => {
     await expect(page.locator('#usageInsight')).toContainText('alpha.com');
 });
 
+test('hourly usage bars scale against the full daily distribution', async ({ page }) => {
+    const today = dayKey();
+    const hourlyUsage = Object.fromEntries(
+        Array.from({ length: 13 }, (_, hour) => [
+            String(hour).padStart(2, '0'),
+            {
+                timeMs: 60 * 60 * 1000,
+                visits: 1,
+                domains: { 'focus.example': 60 * 60 * 1000 }
+            }
+        ])
+    );
+    hourlyUsage['21'] = {
+        timeMs: 5 * 60 * 1000,
+        visits: 1,
+        domains: { 'focus.example': 5 * 60 * 1000 }
+    };
+
+    await installPopupChromeMock(page, {
+        statsToday: { 'focus.example': { timeMs: (13 * 60 + 5) * 60 * 1000, visits: 14 } },
+        allStatsToday: { 'focus.example': { timeMs: (13 * 60 + 5) * 60 * 1000, visits: 14 } },
+        hourlyUsageHistory: { [today]: hourlyUsage }
+    });
+
+    await page.goto(popupUrl());
+
+    await expect(page.locator('.hourly-slot[data-hour="0"]')).toHaveAttribute('data-height-pct', '31');
+    await expect(page.locator('.hourly-slot[data-hour="21"]')).toHaveAttribute('data-height-pct', '6');
+    await expect(page.locator('.hourly-slot[data-hour="15"]')).toHaveAttribute('data-height-pct', '0');
+});
+
+test('usage graph updates when the stats date range changes', async ({ page }) => {
+    const today = dayKey();
+    const yesterday = dayKeyOffset(1);
+
+    await installPopupChromeMock(page, {
+        statsHistory: {
+            [yesterday]: { 'old.example': { timeMs: 45 * 60 * 1000, visits: 3 } }
+        },
+        hourlyUsageHistory: {
+            [today]: {
+                '10': {
+                    timeMs: 20 * 60 * 1000,
+                    visits: 1,
+                    domains: { 'today.example': 20 * 60 * 1000 }
+                }
+            },
+            [yesterday]: {
+                '14': {
+                    timeMs: 45 * 60 * 1000,
+                    visits: 3,
+                    domains: { 'old.example': 45 * 60 * 1000 }
+                }
+            }
+        }
+    });
+
+    await page.goto(popupUrl());
+    await expect(page.locator('.hourly-slot.is-selected')).toHaveAttribute('data-hour', '10');
+    await expect(page.locator('#usageInsight')).toContainText('today.example');
+
+    await page.locator('#statRange').selectOption('Yesterday');
+    await expect(page.locator('.hourly-slot.is-selected')).toHaveAttribute('data-hour', '14');
+    await expect(page.locator('#usageInsight')).toContainText('old.example');
+});
+
 test('popup dashboard actions add limits, end pauses, and switch hourly bars', async ({ page }) => {
     await installPopupChromeMock(page);
     await page.goto(popupUrl());
@@ -196,7 +270,9 @@ test('popup dashboard actions add limits, end pauses, and switch hourly bars', a
     ))).toBe(true);
     await expect(page.locator('[data-action="clear-snooze"][data-domain="alpha.com"]')).toHaveCount(0);
 
-    await page.locator('[data-action="quick-limit"][data-domain="alpha.com"]').first().click();
+    const alphaRankingRow = page.locator('#ranking .row', { hasText: 'alpha.com' }).first();
+    await alphaRankingRow.hover();
+    await alphaRankingRow.locator('[data-action="quick-limit"][data-domain="alpha.com"]').click();
     await expect.poll(() => page.evaluate(() => window.__popupData.blockedDomains['alpha.com']?.limitSeconds)).toBe(1800);
     await expect(page.locator('#tab1')).toBeChecked();
     await expect(page.locator('#limitList')).toContainText('alpha.com');

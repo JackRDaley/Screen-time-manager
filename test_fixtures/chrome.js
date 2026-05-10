@@ -43,20 +43,29 @@ const chromeMock = {
     },
     alarms: {
         create: jest.fn(),
-        clear: jest.fn(),
+        clear: jest.fn(async () => true),
+        getAll: jest.fn(async () => []),
         onAlarm: { addListener: jest.fn() }
     },
     action: {
+        openPopup: jest.fn(async () => {}),
         setBadgeText: jest.fn(async () => {}),
         setBadgeBackgroundColor: jest.fn(async () => {}),
         setBadgeTextColor: jest.fn(async () => {})
     },
     windows: {
+        get: jest.fn(async () => ({ focused: true })),
+        getLastFocused: jest.fn(async () => ({ focused: true })),
         onFocusChanged: { addListener: jest.fn() },
         WINDOW_ID_NONE: -1
     },
     notifications: {
         create: jest.fn()
+    },
+    declarativeNetRequest: {
+        MAX_NUMBER_OF_REGEX_RULES: 1000,
+        getDynamicRules: jest.fn(async () => []),
+        updateDynamicRules: jest.fn(async () => {})
     }
 };
 

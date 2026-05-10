@@ -37,6 +37,7 @@ describe('Extension packaging references', () => {
       ...Object.values(manifest.icons || {}),
       manifest.action?.default_popup,
       manifest.background?.service_worker,
+      ...(manifest.content_scripts || []).flatMap((entry) => entry.js || []),
       ...(manifest.web_accessible_resources || []).flatMap((entry) => entry.resources || [])
     ];
 

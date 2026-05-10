@@ -10,11 +10,16 @@ const getDayKey = Shared.getDayKey || ((date = new Date()) => {
 
 const SETTINGS_KEY = "uiSettings";
 const PREMIUM_KEY = "premiumState";
+const WHOP_ACTIVATION_NOTICE_KEY = "whopActivationNotice";
 const ONBOARDING_KEY = "onboardingState";
 const ONBOARDING_VERSION = 2;
 const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
+const WHOP_CHECKOUT_START_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/start";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
 const LIVE_REFRESH_INTERVAL_MS = 1000;
+const LIVE_REFRESH_MOTION_SUPPRESSION_MS = 120;
+const HOURLY_BAR_MIN_ACTIVE_HEIGHT_PCT = 6;
+const HOURLY_BAR_DAILY_SHARE_SCALE = 0.25;
 
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 30,
@@ -76,12 +81,15 @@ const state = {
     settings: { ...DEFAULT_SETTINGS },
     premium: { ...DEFAULT_PREMIUM },
     onboarding: { step: 0, completed: false, completedAt: null, version: ONBOARDING_VERSION },
+    immutableOverride: { available: false },
     selectedDays: [0, 1, 2, 3, 4, 5, 6],
     selectedHourlyHour: null,
-    editingScheduleId: null
+    editingScheduleId: null,
+    rankingSignature: ""
 };
 
 let liveRefreshPromise = null;
+let rankingMotionRestoreTimer = null;
 
 function normalizeDomain(input) {
     const raw = String(input || "").trim().toLowerCase();
@@ -200,6 +208,29 @@ function getColorGradientForIntensity(value) {
     return `linear-gradient(180deg, rgba(${r},${g},${b},.95), rgba(${Math.round(r * .85)},${Math.round(g * .85)},${Math.round(b * .85)},.82))`;
 }
 
+function getHourlyChartScaleMs(buckets = []) {
+    const totals = buckets.reduce((summary, bucket) => {
+        const timeMs = Math.max(0, Number(bucket.timeMs || 0));
+        summary.totalMs += timeMs;
+        summary.maxMs = Math.max(summary.maxMs, timeMs);
+        return summary;
+    }, { totalMs: 0, maxMs: 0 });
+    return Math.max(totals.maxMs, totals.totalMs * HOURLY_BAR_DAILY_SHARE_SCALE);
+}
+
+function getHourlyBarMetrics(timeMs, scaleMs) {
+    const usageMs = Math.max(0, Number(timeMs || 0));
+    if (usageMs <= 0 || scaleMs <= 0) {
+        return { heightPct: 0, normalized: 0 };
+    }
+
+    const normalized = Math.min(1, usageMs / scaleMs);
+    return {
+        heightPct: Math.max(HOURLY_BAR_MIN_ACTIVE_HEIGHT_PCT, Math.round(normalized * 100)),
+        normalized
+    };
+}
+
 function getTopDomainsForHour(bucket = {}, limit = 3) {
     const domains = bucket.domains || {};
     return Object.entries(domains)
@@ -280,6 +311,55 @@ function statsForRange(rangeLabel) {
     return result;
 }
 
+function offsetsForRange(rangeLabel) {
+    const label = String(rangeLabel || "Today").toLowerCase();
+    if (label === "today") return [0];
+    if (label === "yesterday") return [1];
+
+    const days = label.includes("month") ? 30 : 7;
+    return Array.from({ length: days }, (_, index) => days - 1 - index);
+}
+
+function statsForOffsets(offsets = []) {
+    const result = {};
+    const today = state.data.allStatsToday || state.data.statsToday || {};
+    const history = state.data.statsHistory || {};
+
+    offsets.forEach((offset) => {
+        mergeStats(result, offset === 0 ? today : (history[dayKeyOffset(offset)] || {}));
+    });
+
+    return result;
+}
+
+function previousOffsets(offsets = []) {
+    const periodLength = offsets.length || 1;
+    return offsets.map((offset) => offset + periodLength);
+}
+
+function snoozesForOffsets(offsets = []) {
+    const history = state.data.snoozeHistory || {};
+    return offsets.reduce((sum, offset) => sum + Number(history[dayKeyOffset(offset)] || 0), 0);
+}
+
+function hourlyUsageForOffsets(offsets = []) {
+    const history = state.data.hourlyUsageHistory || {};
+    return offsets.reduce((hours, offset) => {
+        const dayBuckets = history[dayKeyOffset(offset)] || {};
+        Object.entries(dayBuckets).forEach(([hourKey, bucket]) => {
+            const normalizedHour = String(hourKey).padStart(2, "0");
+            hours[normalizedHour] ||= { timeMs: 0, visits: 0, domains: {} };
+            hours[normalizedHour].timeMs += Number(bucket?.timeMs || 0);
+            hours[normalizedHour].visits += Number(bucket?.visits || 0);
+
+            Object.entries(bucket?.domains || {}).forEach(([domain, ms]) => {
+                hours[normalizedHour].domains[domain] = Number(hours[normalizedHour].domains[domain] || 0) + Number(ms || 0);
+            });
+        });
+        return hours;
+    }, {});
+}
+
 function mergeStats(target, source) {
     Object.entries(source || {}).forEach(([domain, entry]) => {
         target[domain] ||= { timeMs: 0, visits: 0 };
@@ -294,6 +374,15 @@ function totals(stats) {
         timeMs: sum.timeMs + timeMs(entry),
         visits: sum.visits + visits(entry)
     }), { timeMs: 0, visits: 0 });
+}
+
+function formatPercentDelta(current, previous) {
+    const currentValue = Number(current || 0);
+    const previousValue = Number(previous || 0);
+    if (previousValue <= 0 && currentValue <= 0) return "0%";
+    if (previousValue <= 0) return "+100%";
+    const pct = Math.round(((currentValue - previousValue) / previousValue) * 100);
+    return `${pct > 0 ? "+" : ""}${pct}%`;
 }
 
 function rowTemplate({ title, meta = "", metrics = [], actions = "", accent = "cyan", rank = "" }) {
@@ -380,16 +469,21 @@ function bindLiveListActions() {
 
 function renderStats() {
     const range = $("statRange")?.value || "Today";
-    const current = statsForRange(range);
+    const currentOffsets = offsetsForRange(range);
+    const previousPeriodOffsets = previousOffsets(currentOffsets);
+    const current = statsForOffsets(currentOffsets);
+    const previous = statsForOffsets(previousPeriodOffsets);
     const total = totals(current);
-    const todaySnoozes = Number((state.data.snoozeHistory || {})[getDayKey()] || 0);
+    const previousTotal = totals(previous);
+    const snoozes = snoozesForOffsets(currentOffsets);
+    const previousSnoozes = snoozesForOffsets(previousPeriodOffsets);
 
     setText("statScreenTime", formatShortTime(total.timeMs));
     setText("statVisits", String(total.visits));
-    setText("statSnoozes", String(todaySnoozes));
-    setText("statScreenTimeDelta", range);
-    setText("statVisitsDelta", "");
-    setText("statSnoozesDelta", "");
+    setText("statSnoozes", String(snoozes));
+    setText("statScreenTimeDelta", formatPercentDelta(total.timeMs, previousTotal.timeMs));
+    setText("statVisitsDelta", formatPercentDelta(total.visits, previousTotal.visits));
+    setText("statSnoozesDelta", formatPercentDelta(snoozes, previousSnoozes));
 }
 
 function renderActive() {
@@ -511,16 +605,36 @@ function renderRanking() {
     renderList("rankingByVisits", byVisits, "No data yet.");
 }
 
+function rankingRows(sortByVisits, range = $("statRange")?.value || "Today") {
+    return Object.entries(statsForRange(range))
+        .filter(([, entry]) => sortByVisits ? visits(entry) > 0 : timeMs(entry) > 0)
+        .sort((a, b) => sortByVisits ? visits(b[1]) - visits(a[1]) : timeMs(b[1]) - timeMs(a[1]))
+        .slice(0, 3);
+}
+
+function rankingSignature(range = $("statRange")?.value || "Today") {
+    const blockedDomains = state.data.blockedDomains || {};
+    const serializeRows = (sortByVisits) => rankingRows(sortByVisits, range)
+        .map(([domain]) => {
+            const config = blockedDomains[domain] ? limitConfig(blockedDomains[domain]) : null;
+            return [
+                domain,
+                config ? Number(config.enabled) : 0,
+                config?.limitSeconds || 0,
+                config?.tier || ""
+            ].join(":");
+        })
+        .join(",");
+
+    return `${range}|${serializeRows(false)}|${serializeRows(true)}`;
+}
+
 function renderRankingStyled() {
     const range = $("statRange")?.value || "Today";
-    const stats = Object.entries(statsForRange(range));
     const blockedDomains = state.data.blockedDomains || {};
     const todayStats = state.data.statsToday || {};
 
-    const makeRows = (sortByVisits) => [...stats]
-        .filter(([, entry]) => sortByVisits ? visits(entry) > 0 : timeMs(entry) > 0)
-        .sort((a, b) => sortByVisits ? visits(b[1]) - visits(a[1]) : timeMs(b[1]) - timeMs(a[1]))
-        .slice(0, 3)
+    const makeRows = (sortByVisits) => rankingRows(sortByVisits, range)
         .map(([domain, entry], index) => {
             const cfg = blockedDomains[domain];
             const config = cfg ? limitConfig(cfg) : null;
@@ -532,17 +646,17 @@ function renderRankingStyled() {
                 ? (pct >= 100 ? "row-accent-red" : "row-accent-purple")
                 : (cfg ? "row-accent-cyan" : "row-accent-muted");
             const right = `
-                <div class="row-right">
-                    <span class="tag metric-chip metric-chip-glass">${escapeHtml(metricValue)}</span>
+                <div class="row-right ranking-row-right">
+                    <span class="tag metric-chip metric-chip-glass ranking-stat-chip">${escapeHtml(metricValue)}</span>
                     ${cfg
-                        ? `<span class="tag metric-chip metric-chip-glass metric-chip-muted">Limited</span>`
-                        : actionChip("+ Limit", "quick-limit", "action-chip-primary", `data-domain="${escapeHtml(domain)}"`)}
+                        ? `<span class="tag ranking-limit-chip action-chip-primary">Limited</span>`
+                        : actionChip("+ Limit", "quick-limit", "action-chip-primary ranking-limit-chip", `data-domain="${escapeHtml(domain)}"`)}
                 </div>
             `;
 
             if (hasProgress) {
                 return `
-                    <div class="row row-ranking row-with-bar ${accentClass}">
+                    <div class="row row-ranking row-with-bar ${accentClass}" data-domain="${escapeHtml(domain)}">
                         <div class="row-top">
                             <div class="row-main-inline">
                                 <span class="rank-num ${rankClass(index)}">${index + 1}</span>
@@ -557,7 +671,7 @@ function renderRankingStyled() {
             }
 
             return `
-                <div class="row row-ranking ${accentClass}">
+                <div class="row row-ranking ${accentClass}" data-domain="${escapeHtml(domain)}">
                     <span class="rank-num ${rankClass(index)}">${index + 1}</span>
                     <div class="row-main">
                         <div class="row-title">${escapeHtml(domain)}</div>
@@ -572,8 +686,48 @@ function renderRankingStyled() {
     const visitsTitle = $("rankingByVisits")?.parentElement?.querySelector(".card-title");
     if (timeTitle) timeTitle.textContent = `Time Spent · ${range}`;
     if (visitsTitle) visitsTitle.textContent = `Most Visited · ${range}`;
+    state.rankingSignature = rankingSignature(range);
     renderList("ranking", makeRows(false), "No data yet.");
     renderList("rankingByVisits", makeRows(true), "No data yet.");
+}
+
+function updateRankingMetricsInPlace() {
+    const range = $("statRange")?.value || "Today";
+    const nextSignature = rankingSignature(range);
+    if (nextSignature !== state.rankingSignature) {
+        renderRankingStyled();
+        return;
+    }
+
+    const stats = statsForRange(range);
+    const todayStats = state.data.statsToday || {};
+    const blockedDomains = state.data.blockedDomains || {};
+
+    const updateRows = (listId, sortByVisits) => {
+        $(listId)?.querySelectorAll(".row-ranking[data-domain]").forEach((row) => {
+            const domain = row.dataset.domain || "";
+            const entry = stats[domain] || {};
+            const statChip = row.querySelector(".ranking-stat-chip");
+            if (statChip) {
+                statChip.textContent = sortByVisits ? String(visits(entry)) : formatShortTime(timeMs(entry));
+            }
+
+            const config = blockedDomains[domain] ? limitConfig(blockedDomains[domain]) : null;
+            if (!config?.limitSeconds || range !== "Today") return;
+
+            const usedSec = Math.round(timeMs(todayStats[domain]) / 1000);
+            const pct = Math.min(100, Math.round((usedSec / config.limitSeconds) * 100));
+            const meta = row.querySelector(".row-meta");
+            const fill = row.querySelector(".prog-fill");
+            if (meta) meta.textContent = `Limit used: ${formatTimeSec(usedSec)} / ${formatTimeSec(config.limitSeconds)}`;
+            if (fill) fill.style.width = `${pct}%`;
+            row.classList.toggle("row-accent-red", pct >= 100);
+            row.classList.toggle("row-accent-purple", pct < 100);
+        });
+    };
+
+    updateRows("ranking", false);
+    updateRows("rankingByVisits", true);
 }
 
 function renderHourly() {
@@ -654,23 +808,25 @@ function renderHourlyStyled() {
     const insight = $("usageInsight");
     const title = $("usageCardTitle");
     if (!list) return;
-    if (title) title.textContent = `Daily Usage Distribution · ${$("statRange")?.value || "Today"}`;
+    const range = $("statRange")?.value || "Today";
+    if (title) title.textContent = `Usage Distribution · ${range}`;
 
-    const bucketsByHour = state.data.hourlyUsageHistory?.[getDayKey()] || {};
+    const bucketsByHour = hourlyUsageForOffsets(offsetsForRange(range));
     const buckets = Array.from({ length: 24 }, (_, hour) => {
         const key = String(hour).padStart(2, "0");
         const bucket = bucketsByHour[key] || {};
+        const hasDomains = Object.keys(bucket.domains || {}).length > 0;
         return {
             hour,
             timeMs: Number(bucket.timeMs || 0),
             domains: bucket.domains || {},
-            hasDomainBreakdown: Boolean(bucket.domains)
+            hasDomainBreakdown: hasDomains
         };
     });
-    const maxMs = buckets.reduce((max, bucket) => Math.max(max, bucket.timeMs), 0);
+    const scaleMs = getHourlyChartScaleMs(buckets);
     const peakHour = buckets.reduce((peak, bucket) => bucket.timeMs > peak.timeMs ? bucket : peak, buckets[0]);
 
-    if (maxMs <= 0) {
+    if (scaleMs <= 0) {
         list.classList.add("muted");
         list.textContent = "No data yet.";
         if (insight) {
@@ -685,13 +841,14 @@ function renderHourlyStyled() {
         <div class="hourly-chart-wrap">
             <div class="hourly-chart" aria-label="Hourly usage distribution">
                 ${buckets.map((bucket) => {
-                    const heightPct = Math.max(6, Math.round((bucket.timeMs / maxMs) * 100));
-                    const normalized = bucket.timeMs / maxMs;
+                    const { heightPct, normalized } = getHourlyBarMetrics(bucket.timeMs, scaleMs);
                     const isPeak = bucket.hour === peakHour.hour && peakHour.timeMs > 0;
                     return `
-                        <div class="hourly-slot${isPeak ? " is-peak" : ""}"
+                        <div class="hourly-slot${isPeak ? " is-peak" : ""}${bucket.timeMs > 0 ? "" : " is-empty"}"
                              data-hour="${bucket.hour}"
                              data-time-ms="${bucket.timeMs}"
+                             data-height-pct="${heightPct}"
+                             data-scale-ms="${scaleMs}"
                              data-domains='${escapeHtml(JSON.stringify(getTopDomainsForHour(bucket, 3)))}'
                              data-has-domain-breakdown="${bucket.hasDomainBreakdown}"
                              data-is-peak="${isPeak}"
@@ -985,6 +1142,35 @@ function renderStreak() {
     setText("streakHeaderValue", String(streak));
 }
 
+function renderImmutableOverride() {
+    const button = $("immutableAdminOverrideBtn");
+    const copy = $("immutableOverrideCopy");
+    const override = state.immutableOverride || {};
+    const available = Boolean(override.available);
+    const usedToday = Boolean(override.usedToday);
+    const sourceLabel = override.source === "scheduled" ? "scheduled block" : "daily limit";
+
+    if (copy) {
+        copy.textContent = usedToday
+            ? "Emergency override already used today."
+            : available
+            ? `Immutable ${sourceLabel} active for ${override.domain}.`
+            : (override.message || "Available only while this tab is blocked by an immutable rule.");
+    }
+
+    if (button) {
+        button.disabled = !available;
+        button.classList.toggle("is-unavailable", !available);
+        button.classList.toggle("is-used", usedToday);
+        button.textContent = usedToday
+            ? "Override Used Today"
+            : available
+            ? (override.source === "scheduled" ? "End Immutable Session" : "Use Emergency Override")
+            : "No Active Immutable Block";
+    }
+
+}
+
 function renderSettings() {
     const defaultLimit = $("defaultLimitMinutes");
     const use24Hour = $("use24HourTime");
@@ -992,27 +1178,55 @@ function renderSettings() {
     if (defaultLimit) defaultLimit.value = state.settings.defaultLimitMinutes;
     if (use24Hour) use24Hour.checked = Boolean(state.settings.use24HourTime);
     if (limitNotifications) limitNotifications.checked = state.settings.limitNotificationsEnabled !== false;
+    renderImmutableOverride();
 
     setText("premiumStatusMsg", state.premium.active
         ? `${state.premium.planName || "Premium"} active`
         : "Premium inactive");
 }
 
-function renderAll() {
-    renderStats();
-    renderActive();
-    renderRankingStyled();
-    renderHourlyStyled();
-    renderLimitsStyled();
-    renderScheduleDays();
-    renderSchedulesStyled();
-    renderStreak();
-    renderSettings();
+function beginRankingMotionSuppression() {
+    if (!document.body) return;
+    if (rankingMotionRestoreTimer) {
+        window.clearTimeout(rankingMotionRestoreTimer);
+        rankingMotionRestoreTimer = null;
+    }
+    document.body.classList.add("is-live-refresh-render");
+}
+
+function endRankingMotionSuppressionSoon() {
+    if (!document.body) return;
+    void document.body.offsetHeight;
+    rankingMotionRestoreTimer = window.setTimeout(() => {
+        document.body?.classList.remove("is-live-refresh-render");
+        rankingMotionRestoreTimer = null;
+    }, LIVE_REFRESH_MOTION_SUPPRESSION_MS);
+}
+
+function renderAll(options = {}) {
+    const suppressRankingMotion = options.suppressRankingMotion === true;
+    const updateRankingInPlace = options.updateRankingInPlace === true;
+    if (suppressRankingMotion) beginRankingMotionSuppression();
+
+    try {
+        renderStats();
+        renderActive();
+        if (updateRankingInPlace) updateRankingMetricsInPlace();
+        else renderRankingStyled();
+        renderHourlyStyled();
+        renderLimitsStyled();
+        renderScheduleDays();
+        renderSchedulesStyled();
+        renderStreak();
+        renderSettings();
+    } finally {
+        if (suppressRankingMotion) endRankingMotionSuppressionSoon();
+    }
 }
 
 async function loadAll(options = {}) {
     const shouldFlush = options.flush === true;
-    if (shouldFlush) await send("flushActiveTimeNow");
+    if (shouldFlush) await send("flushActiveTimeNow", { source: "popup" });
     state.data = await storageGet([
         "blockedDomains",
         "statsToday",
@@ -1032,12 +1246,17 @@ async function loadAll(options = {}) {
     state.settings = { ...DEFAULT_SETTINGS, ...(state.data[SETTINGS_KEY] || {}) };
     state.premium = { ...DEFAULT_PREMIUM, ...(state.data[PREMIUM_KEY] || {}) };
     state.onboarding = { ...state.onboarding, ...(state.data[ONBOARDING_KEY] || {}) };
-    renderAll();
+    const overrideState = await send("getImmutableOverrideState");
+    state.immutableOverride = overrideState?.success ? overrideState : { available: false };
+    renderAll({
+        suppressRankingMotion: options.suppressRankingMotion === true,
+        updateRankingInPlace: options.updateRankingInPlace === true
+    });
 }
 
 function refreshLive() {
     if (liveRefreshPromise) return liveRefreshPromise;
-    liveRefreshPromise = loadAll({ flush: true }).finally(() => {
+    liveRefreshPromise = loadAll({ flush: true, suppressRankingMotion: true, updateRankingInPlace: true }).finally(() => {
         liveRefreshPromise = null;
     });
     return liveRefreshPromise;
@@ -1244,10 +1463,20 @@ async function saveSettings(event) {
     await persistSettings();
 }
 
-async function toggleImmutableOverride() {
-    const enabled = !Boolean(state.data.immutableAdminOverrideEnabled);
-    const response = await send("setImmutableAdminOverride", { enabled });
-    setFeedback("immutableOverrideMsg", response.success ? `Override ${enabled ? "enabled" : "disabled"}.` : response.error, response.success);
+async function useImmutableOverride() {
+    const response = await send("useImmutableAdminOverride");
+    if (response?.success) {
+        setFeedback(
+            "immutableOverrideMsg",
+            response.source === "scheduled" ? "Immutable session ended." : "Emergency override used.",
+            true
+        );
+        state.immutableOverride = { available: false, usedToday: true };
+        renderImmutableOverride();
+        return;
+    }
+
+    setFeedback("immutableOverrideMsg", response?.error || "No active immutable block found.", false);
     await loadAll();
 }
 
@@ -1270,6 +1499,30 @@ async function linkWhopToken() {
     const response = await send("completeWhopCheckout", { token });
     setFeedback("premiumStatusMsg", response.success ? "Premium status synced." : response.error, response.success);
     await loadAll();
+}
+
+function whopCheckoutStartUrl() {
+    try {
+        const url = new URL(WHOP_CHECKOUT_START_URL);
+        const extensionId = chrome.runtime?.id || "";
+        if (extensionId) url.searchParams.set("ext", extensionId);
+        return url.toString();
+    } catch {
+        return WHOP_CHECKOUT_URL;
+    }
+}
+
+function openWhopCheckout() {
+    chrome.tabs.create({ url: whopCheckoutStartUrl() });
+}
+
+async function handleActivationNotice() {
+    const data = await storageGet([WHOP_ACTIVATION_NOTICE_KEY]);
+    if (!data[WHOP_ACTIVATION_NOTICE_KEY]) return;
+
+    setActiveTab("tab4");
+    setFeedback("premiumStatusMsg", "Premium activated.", true);
+    await chrome.storage.local.remove(WHOP_ACTIVATION_NOTICE_KEY);
 }
 
 function selectedOnboardingStep() {
@@ -1455,18 +1708,21 @@ function bindDelegatedActions() {
 }
 
 function bindEvents() {
-    $("statRange")?.addEventListener("change", renderAll);
+    $("statRange")?.addEventListener("change", () => {
+        state.selectedHourlyHour = null;
+        renderAll();
+    });
     $("addForm")?.addEventListener("submit", addDomain);
     $("scheduledForm")?.addEventListener("submit", saveSchedule);
     $("cancelScheduledEditBtn")?.addEventListener("click", resetScheduleForm);
     $("settingsForm")?.addEventListener("submit", saveSettings);
     $("use24HourTime")?.addEventListener("change", persistSettings);
     $("limitNotificationsEnabled")?.addEventListener("change", persistSettings);
-    $("immutableAdminOverrideBtn")?.addEventListener("click", toggleImmutableOverride);
+    $("immutableAdminOverrideBtn")?.addEventListener("click", useImmutableOverride);
     $("verifyWhopBtn")?.addEventListener("click", syncPremium);
     $("manageWhopBtn")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_MANAGE_URL }));
-    $("upgradeBtnFromLimits")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_CHECKOUT_URL }));
-    $("upgradeBtnFromSchedule")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_CHECKOUT_URL }));
+    $("upgradeBtnFromLimits")?.addEventListener("click", openWhopCheckout);
+    $("upgradeBtnFromSchedule")?.addEventListener("click", openWhopCheckout);
     $("linkWhopTokenBtn")?.addEventListener("click", linkWhopToken);
     $("manualWhopToken")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") linkWhopToken();
@@ -1496,7 +1752,16 @@ function bindEvents() {
             SETTINGS_KEY,
             PREMIUM_KEY
         ];
-        if (watched.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) loadAll({ flush: false });
+        const changedWatchedKeys = watched.filter((key) => Object.prototype.hasOwnProperty.call(changes, key));
+        if (changedWatchedKeys.length) {
+            const liveUsageKeys = ["statsToday", "allStatsToday", "hourlyUsageHistory"];
+            const isLiveUsageOnly = changedWatchedKeys.every((key) => liveUsageKeys.includes(key));
+            loadAll({
+                flush: false,
+                suppressRankingMotion: isLiveUsageOnly,
+                updateRankingInPlace: isLiveUsageOnly
+            });
+        }
     });
 
     bindDelegatedActions();
@@ -1506,11 +1771,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     bindEvents();
     renderScheduleDays();
     await refreshLive();
+    await handleActivationNotice();
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
     showOnboardingIfNeeded();
     setInterval(refreshLive, LIVE_REFRESH_INTERVAL_MS);
 });
 
 window.addEventListener("unload", () => {
-    send("flushActiveTimeNow");
+    send("flushActiveTimeNow", { source: "popup" });
 });

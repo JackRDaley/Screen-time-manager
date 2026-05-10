@@ -287,7 +287,19 @@ function isPlaceholderValue(value) {
 function looksLikeBillingToken(value) {
     const normalized = String(value || "").trim();
     if (!normalized) return false;
-    return /^(user_|mem_|mber_|pay_)/.test(normalized);
+    return /^(user_|mem_|mber_|pay_|receipt_|rcpt_|rct_)/.test(normalized);
+}
+
+function looksLikeEntitlementToken(value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) return false;
+    return /^(user_|mem_|mber_)/.test(normalized) || normalized.split(".").length === 3;
+}
+
+function looksLikePaymentToken(value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) return false;
+    return /^(pay_|receipt_|rcpt_|rct_)/.test(normalized);
 }
 
 function isValidChromeExtensionId(value) {
@@ -339,6 +351,135 @@ function discoverTokenFromSearchParams(searchParams) {
     }
 
     return "";
+}
+
+function discoverPaymentIdFromSearchParams(searchParams, token = "") {
+    return firstUsableToken([
+        searchParams.get("payment_id"),
+        searchParams.get("receipt_id"),
+        looksLikePaymentToken(token) ? token : ""
+    ]);
+}
+
+function workerOriginFromUrl(url) {
+    return `${url.protocol}//${url.host}`;
+}
+
+function whopCheckoutFallbackUrl(env) {
+    return String(env.WHOP_CHECKOUT_URL || "https://whop.com/screen-time-manager/screen-time-manager-pro/").trim();
+}
+
+function whopApiBaseUrl(env) {
+    return String(env.WHOP_API_BASE_URL || "https://api.whop.com/api/v1").replace(/\/$/, "");
+}
+
+function normalizeWhopPurchaseUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+        return new URL(raw, "https://whop.com").toString();
+    } catch {
+        return "";
+    }
+}
+
+async function resolveWhopCheckoutPlanId(env) {
+    const configuredPlanId = String(env.WHOP_PLAN_ID || "").trim();
+    if (configuredPlanId.startsWith("plan_")) {
+        return configuredPlanId;
+    }
+
+    const productId = String(env.WHOP_PRODUCT_ID || (configuredPlanId.startsWith("prod_") ? configuredPlanId : "")).trim();
+    const companyId = String(env.WHOP_COMPANY_ID || "").trim();
+    if (!env.WHOP_API_KEY || !companyId || !productId) {
+        return "";
+    }
+
+    const plansUrl = new URL(`${whopApiBaseUrl(env)}/plans`);
+    plansUrl.searchParams.set("company_id", companyId);
+    plansUrl.searchParams.set("first", "10");
+    plansUrl.searchParams.append("product_ids", productId);
+    plansUrl.searchParams.append("release_methods", "buy_now");
+    plansUrl.searchParams.append("visibilities", "visible");
+    plansUrl.searchParams.append("visibilities", "hidden");
+    plansUrl.searchParams.append("visibilities", "quick_link");
+
+    const response = await fetch(plansUrl.toString(), {
+        method: "GET",
+        headers: {
+            Authorization: `Bearer ${env.WHOP_API_KEY}`
+        }
+    });
+    if (!response.ok) {
+        throw new Error(`Whop plan lookup failed (${response.status})`);
+    }
+
+    const payload = await response.json();
+    const plans = Array.isArray(payload?.data) ? payload.data : [];
+    const matchingPlans = plans.filter((plan) => {
+        const planProductId = plan?.product?.id || plan?.product_id;
+        return planProductId === productId && String(plan?.visibility || "").toLowerCase() !== "archived";
+    });
+    const renewalPlan = matchingPlans.find((plan) => String(plan?.plan_type || "").toLowerCase() === "renewal");
+    const selectedPlan = renewalPlan || matchingPlans[0];
+    return String(selectedPlan?.id || "");
+}
+
+async function readJsonResponse(response) {
+    const text = await response.text();
+    if (!text) return null;
+    try {
+        return JSON.parse(text);
+    } catch {
+        return null;
+    }
+}
+
+async function createWhopCheckoutUrl({ requestUrl, extensionId }, env) {
+    const planId = await resolveWhopCheckoutPlanId(env);
+    if (!env.WHOP_API_KEY || !planId) {
+        return whopCheckoutFallbackUrl(env);
+    }
+
+    const completeUrl = new URL("/whop/complete", workerOriginFromUrl(requestUrl));
+    if (extensionId) {
+        completeUrl.searchParams.set("ext", extensionId);
+    }
+
+    const metadata = {
+        source: "chrome_extension",
+        ...(extensionId ? { extension_id: extensionId } : {})
+    };
+
+    const basePayload = {
+        mode: "payment",
+        ...(env.WHOP_COMPANY_ID ? { company_id: String(env.WHOP_COMPANY_ID).trim() } : {}),
+        redirect_url: completeUrl.toString(),
+        metadata
+    };
+    const payloads = [
+        { ...basePayload, plan_id: planId },
+        { ...basePayload, plan: { id: planId } }
+    ];
+
+    for (const payload of payloads) {
+        const response = await fetch(`${whopApiBaseUrl(env)}/checkout_configurations`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${env.WHOP_API_KEY}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await readJsonResponse(response);
+        if (response.ok) {
+            const purchaseUrl = normalizeWhopPurchaseUrl(result?.purchase_url || result?.data?.purchase_url);
+            if (purchaseUrl) return purchaseUrl;
+        }
+    }
+
+    return whopCheckoutFallbackUrl(env);
 }
 
 function buildSignedTokenPayload(entitlement, env) {
@@ -764,8 +905,10 @@ function renderCheckoutCallbackPage({ token, extensionId, hasStateBridge }) {
                         return;
                     }
 
-                    setStatus("Premium activated. You can return to the extension.", "ok");
-                    hintEl.textContent = "Activation completed successfully.";
+                    setStatus(response.openedPopup ? "Premium activated. Extension opened." : "Premium activated.", "ok");
+                    hintEl.textContent = response.openedPopup
+                        ? "You can close this checkout tab."
+                        : "Open the extension from the toolbar to confirm your Premium status.";
                 }
             );
         }
@@ -878,6 +1021,50 @@ async function kvGetPaymentToUser(env, paymentId) {
     if (!env.PREMIUM_STATUS || !paymentId) return null;
     const value = await env.PREMIUM_STATUS.get(`payment:${paymentId}`);
     return value || null;
+}
+
+async function resolvePaymentToToken(env, paymentId) {
+    const normalizedPaymentId = String(paymentId || "").trim();
+    if (!normalizedPaymentId) return null;
+
+    const mappedUserId = await kvGetPaymentToUser(env, normalizedPaymentId);
+    if (mappedUserId) {
+        return mappedUserId;
+    }
+
+    if (!env.WHOP_API_KEY || !normalizedPaymentId.startsWith("pay_")) {
+        return null;
+    }
+
+    const response = await fetch(`${whopApiBaseUrl(env)}/payments/${encodeURIComponent(normalizedPaymentId)}`, {
+        method: "GET",
+        headers: {
+            Authorization: `Bearer ${env.WHOP_API_KEY}`
+        }
+    });
+    if (!response.ok) {
+        return null;
+    }
+
+    const payload = await response.json();
+    const payment = payload?.data || payload;
+    const companyId = String(env.WHOP_COMPANY_ID || "").trim();
+    const paymentCompanyId = payment?.company?.id || payment?.company_id;
+    if (companyId && paymentCompanyId && paymentCompanyId !== companyId) {
+        return null;
+    }
+
+    const userId =
+        payment?.user?.id ||
+        payment?.membership?.user?.id ||
+        payment?.member?.user?.id ||
+        null;
+    if (userId) {
+        await kvSetPaymentToUser(env, normalizedPaymentId, userId);
+        return userId;
+    }
+
+    return payment?.membership?.id || null;
 }
 
 async function kvSetClientStateToken(env, clientState, token) {
@@ -1037,16 +1224,32 @@ export default {
         });
         }
 
+        if (request.method === "GET" && url.pathname === "/whop/start") {
+        const extFromQuery = String(url.searchParams.get("ext") || "").trim();
+        const extFromEnv = String(env.WHOP_EXTENSION_ID || "").trim();
+        const extensionId = isValidChromeExtensionId(extFromQuery)
+            ? extFromQuery
+            : (isValidChromeExtensionId(extFromEnv) ? extFromEnv : "");
+        let checkoutUrl;
+        try {
+            checkoutUrl = await createWhopCheckoutUrl({ requestUrl: url, extensionId }, env);
+        } catch (error) {
+            console.log(JSON.stringify({
+                source: "whop-checkout-start",
+                error: error instanceof Error ? error.message : "checkout-url-failed"
+            }));
+            checkoutUrl = whopCheckoutFallbackUrl(env);
+        }
+        return Response.redirect(checkoutUrl, 302);
+        }
+
         if (request.method === "GET" && url.pathname === "/whop/complete") {
         // Accept any token-like param Whop or the extension might send.
         // Prefer user_id / membership_id for direct verification; fall back to
         // payment identifiers and try a membership lookup by company + status.
         const rawToken = discoverTokenFromSearchParams(url.searchParams);
 
-        const paymentId =
-            url.searchParams.get("payment_id") ||
-            url.searchParams.get("receipt_id") ||
-            (rawToken.startsWith("pay_") ? rawToken : "");
+        const paymentId = discoverPaymentIdFromSearchParams(url.searchParams, rawToken);
 
         const extFromQuery = String(url.searchParams.get("ext") || "").trim();
         const extFromEnv = String(env.WHOP_EXTENSION_ID || "").trim();
@@ -1056,20 +1259,19 @@ export default {
         const rawClientState = String(url.searchParams.get("client_state") || "").trim();
         const clientState = isValidClientState(rawClientState) ? rawClientState : "";
 
-        let token = rawToken;
+        const tokenCameFromPaymentParam = paymentId && rawToken === paymentId && !looksLikeEntitlementToken(rawToken);
+        let token = looksLikePaymentToken(rawToken) || tokenCameFromPaymentParam ? "" : rawToken;
 
-        if (!token && paymentId) {
-            const mappedUserId = await kvGetPaymentToUser(env, paymentId);
-            if (mappedUserId) {
-                token = mappedUserId;
-            }
-        }
-
-        if (token.startsWith("pay_")) {
-            const mappedUserId = await kvGetPaymentToUser(env, token);
-            if (mappedUserId) {
-                token = mappedUserId;
-            }
+        if ((!token || !looksLikeEntitlementToken(token)) && paymentId) {
+            const mappedToken = await resolvePaymentToToken(env, paymentId).catch((error) => {
+                console.log(JSON.stringify({
+                    source: "whop-checkout-complete",
+                    paymentId,
+                    error: error instanceof Error ? error.message : "payment-resolve-failed"
+                }));
+                return null;
+            });
+            token = mappedToken || "";
         }
 
         const looksLikePlaceholder = isPlaceholderValue(token);
