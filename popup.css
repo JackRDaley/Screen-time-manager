@@ -460,91 +460,6 @@ nav label:focus-visible {
     flex-shrink: 0;
 }
 
-.row-action-menu-wrap {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-}
-
-.action-chip-menu {
-    width: 24px;
-    min-width: 24px;
-    height: 24px;
-    padding: 0;
-    font-size: 13px;
-    line-height: 1;
-    color: #ffffff;
-    border: 0;
-    background: rgba(255,255,255,.16);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.07), 0 4px 10px rgba(0,0,0,.16);
-}
-
-.row-action-menu-wrap:focus-within .action-chip-menu {
-    background: rgba(255,255,255,.16);
-}
-
-.action-chip-menu[aria-expanded="true"] {
-    background: rgba(255,255,255,.24);
-}
-
-.row-action-menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 4px);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 2px;
-    border-radius: 10px;
-    border: 1px solid rgba(255,255,255,.05);
-    background: rgba(10,13,22,.94);
-    box-shadow: 0 10px 20px rgba(0,0,0,.18);
-    opacity: 0;
-    transform: translateY(-3px);
-    pointer-events: none;
-    transition: opacity .16s ease, transform .16s ease;
-    z-index: 15;
-}
-
-.row-action-menu.is-open {
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: auto;
-}
-
-.row-action-menu .action-chip {
-    width: 100%;
-    justify-content: center;
-    min-width: 84px;
-    padding: 5px 9px;
-    text-align: center;
-}
-
-.row-action-menu .action-chip-primary,
-.row-action-menu .action-chip-danger {
-    border-radius: 8px;
-}
-
-.row-action-menu .action-chip-primary {
-    background: rgba(255,255,255,.08);
-    color: rgba(255,255,255,.88);
-    border: 1px solid rgba(255,255,255,.08);
-}
-
-.row-action-menu .action-chip-primary:hover {
-    background: rgba(255,255,255,.14);
-}
-
-.row-action-menu .action-chip-danger {
-    background: rgba(255,77,109,.26);
-    color: #ffffff;
-    border: 1px solid rgba(255,77,109,.26);
-}
-
-.row-action-menu .action-chip-danger:hover {
-    background: rgba(255,77,109,.34);
-}
-
 /* ── Rank numbers ────────────────────────────────────────────── */
 .rank-num {
     width: 16px;
@@ -719,11 +634,6 @@ body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
     line-height: 1;
     white-space: nowrap;
 }
-.tag-cyan  { color: var(--cyan); }
-.tag-red   { color: var(--danger); }
-.tag-green { color: #2EFFA8; }
-.tag-muted { color: var(--muted); }
-
 .metric-chip {
     padding-inline: 7px;
     min-width: 0;
@@ -737,45 +647,11 @@ body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
     color: rgba(237,242,255,.82);
 }
 
-.metric-chip-muted {
-    color: rgba(237,242,255,.64);
-}
-
-.limit-chip {
-    border: 0;
-    background: var(--purple);
-    color: #ffffff;
-    cursor: pointer;
-    user-select: none;
-    text-decoration: none;
-    transition: border-color .15s, background .15s, color .15s;
-    font-weight: 700;
-    letter-spacing: 0;
-}
-
-.limit-chip:hover {
-    background: #7d62f2;
-    color: #ffffff;
-}
-
-.limit-chip:focus-visible {
-    outline: 2px solid rgba(139,111,255,.55);
-    outline-offset: 2px;
-}
-
 .action-chip {
     cursor: pointer;
     text-decoration: none;
     user-select: none;
     transition: border-color .15s, background .15s, color .15s, opacity .15s, transform .15s;
-}
-
-.action-chip-muted {
-    color: var(--muted);
-}
-
-.action-chip-muted:hover {
-    color: var(--text);
 }
 
 .action-chip-primary {
@@ -1281,30 +1157,6 @@ body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
 .hourly-slot.is-selected .hourly-slot-label {
     color: rgba(255,255,255,.96);
     text-shadow: 0 0 10px rgba(99,169,255,.5);
-}
-
-.hourly-peak-badge {
-    position: absolute;
-    top: -2px;
-    right: 2px;
-    background: linear-gradient(135deg, rgba(255,166,77,.9), rgba(255,77,109,.85));
-    color: rgba(237,242,255,.95);
-    font-size: 7px;
-    font-weight: 700;
-    padding: 2px 4px;
-    border-radius: 3px;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
-    line-height: 1;
-    white-space: nowrap;
-    opacity: 0;
-    transform: scale(0.8) translateY(-4px);
-    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.hourly-slot.is-peak .hourly-peak-badge {
-    opacity: 1;
-    transform: scale(1) translateY(0);
 }
 
 .chart-insight {

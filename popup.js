@@ -154,10 +154,6 @@ function limitConfig(raw = {}) {
     };
 }
 
-function formatLimit(seconds) {
-    return seconds ? formatTimeSec(seconds) : "No daily limit";
-}
-
 function formatShortTime(ms) {
     return formatTimeSec(Math.round(timeMs({ timeMs: ms }) / 1000));
 }
@@ -385,23 +381,6 @@ function formatPercentDelta(current, previous) {
     return `${pct > 0 ? "+" : ""}${pct}%`;
 }
 
-function rowTemplate({ title, meta = "", metrics = [], actions = "", accent = "cyan", rank = "" }) {
-    const rankHtml = rank ? `<div class="rank-num ${rank.className || ""}">${rank.label}</div>` : "";
-    const metricHtml = metrics.map((metric) => `<span class="tag ${metric.className || "tag-muted"}">${escapeHtml(metric.label)}</span>`).join("");
-
-    return `
-        <div class="row row-accent-${accent}">
-            ${rankHtml}
-            <div class="row-main">
-                <div class="row-title">${escapeHtml(title)}</div>
-                ${meta ? `<div class="row-meta">${escapeHtml(meta)}</div>` : ""}
-                ${metricHtml ? `<div class="row-metrics">${metricHtml}</div>` : ""}
-            </div>
-            ${actions ? `<div class="row-right">${actions}</div>` : ""}
-        </div>
-    `;
-}
-
 function actionChip(label, action, extra = "action-chip-primary", attrs = "") {
     return `<button type="button" class="tag action-chip ${extra}" data-action="${action}" ${attrs}>${escapeHtml(label)}</button>`;
 }
@@ -411,60 +390,6 @@ function renderList(id, html, emptyText) {
     if (!el) return;
     el.classList.toggle("muted", !html);
     el.innerHTML = html || escapeHtml(emptyText);
-}
-
-function bindActionButtons(container, selector, handler) {
-    container?.querySelectorAll(selector).forEach((button) => {
-        button.addEventListener("click", async (event) => {
-            if (event.stmHandled) return;
-            event.stmHandled = true;
-            event.preventDefault();
-            event.stopPropagation();
-            await handler(event.currentTarget);
-        });
-    });
-}
-
-function bindLimitListActions(list) {
-    list?.querySelectorAll('.switch-input[data-action="toggle-domain"]').forEach((input) => {
-        input.addEventListener("change", async (event) => {
-            if (event.stmHandled) return;
-            event.stmHandled = true;
-            event.stopPropagation();
-            await toggleDomain(event.currentTarget.dataset.domain, event.currentTarget.checked);
-        });
-    });
-    bindActionButtons(list, '[data-action="remove-domain"]', (button) => removeDomain(button.dataset.domain));
-}
-
-function bindLiveListActions() {
-    $("activeList")?.addEventListener("click", async (event) => {
-        const button = event.target.closest('[data-action="clear-snooze"], [data-action="stop-active"]');
-        if (!button || event.stmHandled) return;
-        event.stmHandled = true;
-        event.preventDefault();
-        event.stopPropagation();
-
-        if (button.dataset.action === "clear-snooze") await clearSnooze(button.dataset.domain);
-        if (button.dataset.action === "stop-active") await stopActiveBlock(button.dataset.domain);
-    }, true);
-
-    $("limitList")?.addEventListener("click", async (event) => {
-        const button = event.target.closest('[data-action="remove-domain"]');
-        if (!button || event.stmHandled) return;
-        event.stmHandled = true;
-        event.preventDefault();
-        event.stopPropagation();
-        await removeDomain(button.dataset.domain);
-    }, true);
-
-    $("limitList")?.addEventListener("change", async (event) => {
-        const input = event.target.closest('.switch-input[data-action="toggle-domain"]');
-        if (!input || event.stmHandled) return;
-        event.stmHandled = true;
-        event.stopPropagation();
-        await toggleDomain(input.dataset.domain, input.checked);
-    }, true);
 }
 
 function renderStats() {
@@ -562,47 +487,10 @@ function renderActive() {
     setText("activeCount", String(activeRows.length + pausedRows.length + reachedRows.length));
     $("activeCard")?.style.setProperty("display", html ? "" : "none");
     renderList("activeList", html, "No active blocks.");
-
-    const list = $("activeList");
-    bindActionButtons(list, '[data-action="clear-snooze"]', (button) => clearSnooze(button.dataset.domain));
-    bindActionButtons(list, '[data-action="stop-active"]', (button) => stopActiveBlock(button.dataset.domain));
 }
 
 function rankClass(index) {
     return ["gold", "silver", "bronze"][index] || "";
-}
-
-function renderRanking() {
-    return renderRankingStyled();
-    const stats = Object.entries(statsForRange($("statRange")?.value || "Today"));
-    const byTime = [...stats]
-        .filter(([, entry]) => timeMs(entry) > 0)
-        .sort((a, b) => timeMs(b[1]) - timeMs(a[1]))
-        .slice(0, 5)
-        .map(([domain, entry], index) => rowTemplate({
-            title: domain,
-            meta: `${formatShortTime(timeMs(entry))} tracked`,
-            accent: "cyan",
-            rank: { label: index + 1, className: rankClass(index) },
-            metrics: [{ label: `${visits(entry)} visits`, className: "tag-muted" }]
-        }))
-        .join("");
-
-    const byVisits = [...stats]
-        .filter(([, entry]) => visits(entry) > 0)
-        .sort((a, b) => visits(b[1]) - visits(a[1]))
-        .slice(0, 5)
-        .map(([domain, entry], index) => rowTemplate({
-            title: domain,
-            meta: `${visits(entry)} visits`,
-            accent: "purple",
-            rank: { label: index + 1, className: rankClass(index) },
-            metrics: [{ label: formatShortTime(timeMs(entry)), className: "tag-cyan" }]
-        }))
-        .join("");
-
-    renderList("ranking", byTime, "No data yet.");
-    renderList("rankingByVisits", byVisits, "No data yet.");
 }
 
 function rankingRows(sortByVisits, range = $("statRange")?.value || "Today") {
@@ -730,79 +618,6 @@ function updateRankingMetricsInPlace() {
     updateRows("rankingByVisits", true);
 }
 
-function renderHourly() {
-    return renderHourlyStyled();
-    const container = $("hourlyDistribution");
-    if (!container) return;
-
-    const buckets = state.data.hourlyUsageHistory?.[getDayKey()] || {};
-    const hours = Array.from({ length: 24 }, (_, hour) => {
-        const key = String(hour).padStart(2, "0");
-        return { hour, timeMs: Number(buckets[key]?.timeMs || 0), domains: buckets[key]?.domains || {} };
-    });
-    const max = Math.max(1, ...hours.map((hour) => hour.timeMs));
-    const peak = hours.reduce((best, hour) => hour.timeMs > best.timeMs ? hour : best, hours[0]);
-
-    if (!hours.some((hour) => hour.timeMs > 0)) {
-        container.className = "hourly-distribution muted";
-        container.textContent = "No data yet.";
-        setText("usageInsight", "Click a bar to view details.");
-        $("usageInsight")?.classList.add("muted");
-        return;
-    }
-
-    container.className = "hourly-distribution";
-    container.innerHTML = `
-        <div class="hourly-chart-wrap">
-            <div class="hourly-chart">
-                ${hours.map((hour) => `
-                    <button type="button"
-                        class="hourly-slot ${hour.hour === peak.hour ? "is-peak" : ""}"
-                        data-hour="${hour.hour}"
-                        title="${hour.hour}:00 - ${formatShortTime(hour.timeMs)}">
-                        <span class="hourly-peak-badge">Peak</span>
-                        <span class="hourly-slot-bar">
-                            <span class="hourly-slot-fill" style="height:${Math.max(4, Math.round((hour.timeMs / max) * 100))}%"></span>
-                        </span>
-                        <span class="hourly-slot-label">${hour.hour % 6 === 0 ? hour.hour : ""}</span>
-                    </button>
-                `).join("")}
-            </div>
-        </div>
-    `;
-
-    container.querySelectorAll(".hourly-slot").forEach((slot) => {
-        slot.addEventListener("click", () => renderHourInsight(hours[Number(slot.dataset.hour)]));
-    });
-
-    renderHourInsight(peak);
-}
-
-function renderHourInsight(hour) {
-    const insight = $("usageInsight");
-    if (!insight || !hour) return;
-
-    const topDomains = Object.entries(hour.domains || {})
-        .sort((a, b) => Number(b[1]) - Number(a[1]))
-        .slice(0, 3);
-
-    insight.classList.remove("muted");
-    insight.innerHTML = `
-        <div class="hourly-tip-header">
-            <div class="hourly-tip-time">${hour.hour}:00</div>
-            <div class="hourly-tip-time-spent">${formatShortTime(hour.timeMs)}</div>
-        </div>
-        <div class="hourly-tip-sites">
-            ${topDomains.length ? topDomains.map(([domain, ms]) => `
-                <div class="hourly-tip-site-row">
-                    <div class="hourly-tip-site-domain">${escapeHtml(domain)}</div>
-                    <div class="hourly-tip-site-time">${formatShortTime(ms)}</div>
-                </div>
-            `).join("") : `<div class="hourly-tip-empty">No domains recorded for this hour.</div>`}
-        </div>
-    `;
-}
-
 function renderHourlyStyled() {
     const list = $("hourlyDistribution");
     const insight = $("usageInsight");
@@ -870,7 +685,6 @@ function renderHourlyStyled() {
     const slots = list.querySelectorAll(".hourly-slot");
 
     slots.forEach((slot) => {
-        slot.addEventListener("click", () => selectHourlySlot(slot, { persist: true }));
         slot.addEventListener("keydown", (event) => {
             if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
@@ -946,41 +760,6 @@ function renderHourInsightStyled(slot) {
     `;
 }
 
-function renderLimits() {
-    return renderLimitsStyled();
-    const blockedDomains = state.data.blockedDomains || {};
-    const stats = state.data.statsToday || {};
-    const rows = Object.entries(blockedDomains)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([domain, raw]) => {
-            const config = limitConfig(raw);
-            const usedMs = timeMs(stats[domain]);
-            const pct = config.limitSeconds ? Math.min(100, Math.round((usedMs / (config.limitSeconds * 1000)) * 100)) : 0;
-            const status = config.enabled ? `${pct}% used` : "disabled";
-            return `
-                <div class="row row-with-bar row-accent-${config.enabled ? "cyan" : "muted"} ${config.enabled ? "" : "is-disabled"}">
-                    <div class="row-top">
-                        <div class="row-main-inline">
-                            <div class="row-title">${escapeHtml(domain)}</div>
-                            <span class="tag limit-chip">${formatLimit(config.limitSeconds)}</span>
-                        </div>
-                        <div class="row-right">
-                            ${actionChip(config.enabled ? "Off" : "On", "toggle-domain", "action-chip-primary", `data-domain="${escapeHtml(domain)}" data-enabled="${config.enabled ? "false" : "true"}"`)}
-                            ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}"`)}
-                        </div>
-                    </div>
-                    <div class="row-meta">${escapeHtml(config.tier)} - ${status}</div>
-                    <div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>
-                </div>
-            `;
-        })
-        .join("");
-
-    renderList("limitList", rows, "No limits set yet.");
-    bindLimitListActions($("limitList"));
-    renderPaywalls();
-}
-
 function renderLimitsStyled() {
     const blockedDomains = state.data.blockedDomains || {};
     const stats = state.data.statsToday || {};
@@ -1012,9 +791,7 @@ function renderLimitsStyled() {
                                 <input class="switch-input" type="checkbox" data-action="toggle-domain" data-domain="${escapeHtml(domain)}" ${config.enabled ? "checked" : ""} aria-label="Toggle ${escapeHtml(domain)} limit" />
                                 <span class="switch-slider" aria-hidden="true"></span>
                             </label>
-                            <div class="row-action-menu-wrap">
-                                ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}"`)}
-                            </div>
+                            ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}"`)}
                         </div>
                     </div>
                     ${config.limitSeconds ? `<div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>` : ""}
@@ -1024,7 +801,6 @@ function renderLimitsStyled() {
         .join("");
 
     renderList("limitList", rows, "No limits set yet.");
-    bindLimitListActions($("limitList"));
     renderPaywalls();
 }
 
@@ -1047,34 +823,6 @@ function renderScheduleDays() {
             renderScheduleDays();
         });
     });
-}
-
-function renderSchedules() {
-    return renderSchedulesStyled();
-    const activeIds = new Set((state.data.activeBlocks || []).map((block) => block.id));
-    const rows = (state.data.scheduledBlocks || [])
-        .map((block) => {
-            const days = (block.days || []).map((day) => DAY_OPTIONS.find(([, value]) => value === day)?.[0]).join("");
-            const active = activeIds.has(block.id);
-            return rowTemplate({
-                title: block.domain,
-                meta: `${block.startTime} to ${block.endTime} - ${days || "daily"}`,
-                accent: active ? "red" : "purple",
-                metrics: [
-                    { label: block.tier || "standard", className: "tag-cyan" },
-                    { label: block.enabled === false ? "off" : active ? "active" : "ready", className: active ? "tag-red" : "tag-muted" }
-                ],
-                actions: [
-                    actionChip("Edit", "edit-schedule", "action-chip-primary", `data-id="${escapeHtml(block.id)}"`),
-                    actionChip(block.enabled === false ? "On" : "Off", "toggle-schedule", "action-chip-primary", `data-id="${escapeHtml(block.id)}" data-enabled="${block.enabled === false ? "true" : "false"}"`),
-                    actionChip("Remove", "remove-schedule", "action-chip-danger", `data-id="${escapeHtml(block.id)}" ${active ? "disabled" : ""}`)
-                ].join("")
-            });
-        })
-        .join("");
-
-    renderList("scheduledList", rows, "No scheduled sessions.");
-    renderPaywalls();
 }
 
 function renderSchedulesStyled() {
@@ -1736,7 +1484,6 @@ function bindEvents() {
         const marker = event.target.closest("[data-step]");
         if (marker) showOnboardingStep(Number(marker.dataset.step));
     });
-    bindLiveListActions();
 
     chrome.storage.onChanged?.addListener((changes, area) => {
         if (area !== "local") return;
