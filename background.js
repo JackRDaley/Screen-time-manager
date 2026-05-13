@@ -1,11 +1,32 @@
 importScripts("shared-extension-utils.js");
 importScripts("gdpr-utils.js");
+importScripts("insights.js");
 
 const {
     formatTimeSec,
     getDayKey,
     getOrCreateAnalyticsClientId
 } = globalThis.StmSharedUtils || {};
+
+const InsightEngine = globalThis.StmInsights || {};
+const getInsightSettings = typeof InsightEngine.getInsightSettings === "function"
+    ? InsightEngine.getInsightSettings
+    : ((raw = {}) => {
+        const maxNotifications = Number(raw.insightMaxNotificationsPerDay);
+        const sensitivity = ["low", "normal", "high"].includes(String(raw.insightSensitivity || "").toLowerCase())
+            ? String(raw.insightSensitivity).toLowerCase()
+            : "normal";
+
+        return {
+            personalInsightsEnabled: raw.personalInsightsEnabled !== false,
+            insightNotificationsEnabled: raw.insightNotificationsEnabled !== false,
+            insightMaxNotificationsPerDay: Number.isFinite(maxNotifications) ? Math.max(0, Math.round(maxNotifications)) : 1,
+            insightSensitivity: sensitivity
+        };
+    });
+const analyzeUsagePatterns = typeof InsightEngine.analyzeUsagePatterns === "function"
+    ? InsightEngine.analyzeUsagePatterns
+    : (() => []);
 
 function normalizeDomain(input) {
     const raw = String(input || "").trim().toLowerCase();
@@ -40,6 +61,12 @@ const KEYS = Object.freeze({
     statsHistory: "statsHistory",
     recentlyReset: "recentlyReset",
     activeSession: "activeSession",
+    personalInsights: "personalInsights",
+    dismissedInsights: "dismissedInsights",
+    insightNotificationHistory: "insightNotificationHistory",
+    insightNotificationDaily: "insightNotificationDaily",
+    lastInsightNotificationDate: "lastInsightNotificationDate",
+    lastInsightAnalysisAt: "lastInsightAnalysisAt",
     uiSettings: "uiSettings",
     onboarding: "onboardingState",
     onboardingMetrics: "onboardingMetrics",
@@ -70,18 +97,26 @@ const ACTIVE_LIMIT_ALARM_PREFIX = "activeLimitThreshold:";
 const ACTIVE_LIMIT_BADGE_ALARM = "activeLimitBadgeTick";
 const ACTIVE_LIMIT_WAKE_THRESHOLDS = Object.freeze([75, 90, 100]);
 const ACTIVE_HEARTBEAT_MAX_DELTA_MS = 2 * 1000;
+const INSIGHT_ANALYSIS_THROTTLE_MS = 5 * 60 * 1000;
+const INSIGHT_NOTIFICATION_DEDUPE_MS = 7 * 24 * 60 * 60 * 1000;
+const INSIGHT_MAX_STORED = 24;
+const DISMISSED_INSIGHT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const tokenCaches = {
     reset: new Map(),
     strict: new Map()
 };
 const alertClaims = new Set();
+const insightNotificationClaims = new Set();
 const snoozeEnforcementTimers = new Map();
 
 let activeTabId = null;
 let activeDomain = "";
 let activeLastHeartbeatAt = 0;
+let activeSessionStartedAt = 0;
 let activeContextHydration = null;
+let insightAnalysisPromise = null;
+let lastInsightAnalysisAtMemory = 0;
 let browserFocused = true;
 let browserFocusStateLoaded = false;
 let dnrRulesStateKey = "";
@@ -89,16 +124,12 @@ let dnrRulesSyncPromise = null;
 let dnrRulesSyncQueued = false;
 let dnrRulesSyncForceQueued = false;
 
-function local() {
-    return chrome.storage.local;
-}
-
 async function get(keys) {
-    return local().get(keys);
+    return chrome.storage.local.get(keys);
 }
 
 async function set(items) {
-    return local().set(items);
+    return chrome.storage.local.set(items);
 }
 
 function randomToken(prefix) {
@@ -702,10 +733,14 @@ function addHourlyUsage(history, domain, startMs, endMs, countVisit = false) {
         const sliceEnd = Math.min(endMs, nextHour.getTime());
 
         history[day] ||= {};
-        history[day][hour] ||= { timeMs: 0, visits: 0, domains: {} };
+        history[day][hour] ||= { timeMs: 0, visits: 0, domains: {}, domainVisits: {} };
         history[day][hour].timeMs += sliceEnd - cursor;
         history[day][hour].visits += countVisit ? 1 : 0;
         history[day][hour].domains[domain] = (history[day][hour].domains[domain] || 0) + (sliceEnd - cursor);
+        if (countVisit) {
+            history[day][hour].domainVisits ||= {};
+            history[day][hour].domainVisits[domain] = (history[day][hour].domainVisits[domain] || 0) + 1;
+        }
 
         countVisit = false;
         cursor = sliceEnd;
@@ -755,6 +790,7 @@ async function updateDomainActivity(domain, options = {}) {
 
     const fresh = await get([KEYS.blockedDomains, KEYS.statsToday]);
     await checkAndSendAlerts(normalized, fresh[KEYS.blockedDomains] || {}, fresh[KEYS.statsToday] || {});
+    await maybeGenerateInsightsAfterActivity({ allowNotifications: true });
     await queueDnrRulesSync();
     if (normalized === activeDomain) {
         await scheduleActiveLimitWakeups(normalized);
@@ -763,21 +799,36 @@ async function updateDomainActivity(domain, options = {}) {
 
 function activeSessionRecord() {
     return activeDomain
-        ? { tabId: activeTabId, domain: activeDomain, lastHeartbeatAt: activeLastHeartbeatAt || 0 }
+        ? {
+            tabId: activeTabId,
+            domain: activeDomain,
+            startedAt: activeSessionStartedAt || activeLastHeartbeatAt || 0,
+            lastHeartbeatAt: activeLastHeartbeatAt || 0
+        }
         : null;
 }
 
 function setActiveContext(tabId, domain, lastHeartbeatAt = 0) {
     const numericTabId = tabId == null ? NaN : Number(tabId);
-    activeTabId = Number.isFinite(numericTabId) ? numericTabId : null;
-    activeDomain = normalizeDomain(domain);
+    const nextTabId = Number.isFinite(numericTabId) ? numericTabId : null;
+    const nextDomain = normalizeDomain(domain);
+    const sameSession = nextDomain && nextDomain === activeDomain && nextTabId === activeTabId;
+
+    activeTabId = nextTabId;
+    activeDomain = nextDomain;
     activeLastHeartbeatAt = Number.isFinite(lastHeartbeatAt) ? Math.max(0, lastHeartbeatAt) : 0;
+    if (!activeDomain) {
+        activeSessionStartedAt = 0;
+    } else if (!sameSession || !activeSessionStartedAt) {
+        activeSessionStartedAt = activeLastHeartbeatAt || Date.now();
+    }
 }
 
 function clearActiveSessionState() {
     activeTabId = null;
     activeDomain = "";
     activeLastHeartbeatAt = 0;
+    activeSessionStartedAt = 0;
 }
 
 async function persistActiveSession(record = activeSessionRecord()) {
@@ -794,7 +845,11 @@ async function restoreActiveSession() {
 
     const tabId = Number(session.tabId);
     const lastHeartbeatAt = Number(session.lastHeartbeatAt || session.startedAt || 0);
+    const startedAt = Number(session.startedAt || lastHeartbeatAt || 0);
     setActiveContext(tabId, domain, Number.isFinite(lastHeartbeatAt) ? lastHeartbeatAt : 0);
+    if (Number.isFinite(startedAt) && startedAt > 0) {
+        activeSessionStartedAt = startedAt;
+    }
     return true;
 }
 
@@ -1295,6 +1350,248 @@ async function checkAndSendAlerts(domain, blockedDomains, statsToday) {
     }
 }
 
+function normalizeInsightRecord(insight = {}) {
+    if (!insight || typeof insight !== "object") return null;
+    const type = String(insight.type || "").trim();
+    const domain = normalizeDomain(insight.domain);
+    const id = String(insight.id || `${type}:${domain}:${getDayKey()}`).trim();
+    if (!id || !type || !isValidDomain(domain)) return null;
+
+    return {
+        id,
+        type,
+        domain,
+        title: String(insight.title || "Personal insight").slice(0, 80),
+        message: String(insight.message || "").slice(0, 220),
+        action: insight.action === "addLimit" ? "addLimit" : "viewUsage",
+        priority: Number(insight.priority || 0),
+        notify: Boolean(insight.notify),
+        timestamp: Number(insight.timestamp || Date.now()),
+        dateKey: String(insight.dateKey || getDayKey()),
+        context: typeof insight.context === "object" && insight.context ? insight.context : {}
+    };
+}
+
+function pruneDismissedInsights(dismissed = {}, now = Date.now()) {
+    return Object.entries(dismissed || {}).reduce((result, [id, timestamp]) => {
+        const dismissedAt = Number(timestamp || 0);
+        if (Number.isFinite(dismissedAt) && now - dismissedAt < DISMISSED_INSIGHT_TTL_MS) {
+            result[id] = dismissedAt;
+        }
+        return result;
+    }, {});
+}
+
+function mergeInsightList(existing = [], insight, dismissed = {}) {
+    const normalized = normalizeInsightRecord(insight);
+    if (!normalized || dismissed[normalized.id]) return existing.filter(Boolean).map(normalizeInsightRecord).filter(Boolean);
+
+    const byId = new Map();
+    existing.forEach((item) => {
+        const record = normalizeInsightRecord(item);
+        if (record && !dismissed[record.id]) byId.set(record.id, record);
+    });
+    byId.set(normalized.id, {
+        ...byId.get(normalized.id),
+        ...normalized,
+        timestamp: Math.max(Number(byId.get(normalized.id)?.timestamp || 0), normalized.timestamp)
+    });
+
+    return Array.from(byId.values())
+        .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || Number(b.timestamp || 0) - Number(a.timestamp || 0))
+        .slice(0, INSIGHT_MAX_STORED);
+}
+
+async function saveInsight(insight) {
+    const data = await get([KEYS.personalInsights, KEYS.dismissedInsights]);
+    const dismissed = pruneDismissedInsights(data[KEYS.dismissedInsights] || {});
+    const personalInsights = mergeInsightList(data[KEYS.personalInsights] || [], insight, dismissed);
+    await set({
+        [KEYS.personalInsights]: personalInsights,
+        [KEYS.dismissedInsights]: dismissed
+    });
+    return normalizeInsightRecord(insight);
+}
+
+async function dismissInsight(id) {
+    const insightId = String(id || "").trim();
+    if (!insightId) return { success: false, error: "Missing insight id." };
+
+    const data = await get([KEYS.personalInsights, KEYS.dismissedInsights]);
+    const dismissed = pruneDismissedInsights(data[KEYS.dismissedInsights] || {});
+    dismissed[insightId] = Date.now();
+    await set({
+        [KEYS.personalInsights]: (data[KEYS.personalInsights] || []).filter((insight) => insight?.id !== insightId),
+        [KEYS.dismissedInsights]: dismissed
+    });
+    return { success: true, id: insightId };
+}
+
+function notificationKeyForInsight(insight = {}) {
+    const record = normalizeInsightRecord(insight);
+    return record ? `${record.type}:${record.domain}` : "";
+}
+
+async function shouldSendNotification(insight, options = {}) {
+    const record = normalizeInsightRecord(insight);
+    if (!record?.notify) return false;
+    if (!chrome.notifications?.create) return false;
+
+    const now = Number(options.now || Date.now());
+    const settings = getInsightSettings(options.settings || (await get([KEYS.uiSettings]))[KEYS.uiSettings] || {});
+    if (!settings.personalInsightsEnabled || !settings.insightNotificationsEnabled) return false;
+    if (settings.insightMaxNotificationsPerDay <= 0) return false;
+
+    const data = options.data || await get([
+        KEYS.insightNotificationHistory,
+        KEYS.insightNotificationDaily
+    ]);
+    const today = getDayKey(new Date(now));
+    const daily = data[KEYS.insightNotificationDaily] || {};
+    const todaysCount = daily.date === today ? Number(daily.count || 0) : 0;
+    if (todaysCount >= settings.insightMaxNotificationsPerDay) return false;
+
+    const history = data[KEYS.insightNotificationHistory] || {};
+    const notificationKey = notificationKeyForInsight(record);
+    const lastSentAt = Number(history[notificationKey] || 0);
+    return !lastSentAt || now - lastSentAt >= INSIGHT_NOTIFICATION_DEDUPE_MS;
+}
+
+async function sendPatternNotification(insight, options = {}) {
+    const record = normalizeInsightRecord(insight);
+    const notificationKey = notificationKeyForInsight(record);
+    if (!record || !notificationKey || insightNotificationClaims.has(notificationKey)) return false;
+
+    insightNotificationClaims.add(notificationKey);
+    try {
+        const data = await get([
+            KEYS.uiSettings,
+            KEYS.insightNotificationHistory,
+            KEYS.insightNotificationDaily
+        ]);
+        const settings = getInsightSettings(data[KEYS.uiSettings] || {});
+        const now = Number(options.now || Date.now());
+        if (!(await shouldSendNotification(record, { ...options, now, settings, data }))) return false;
+
+        try {
+            await chrome.notifications.create(`stminsight:${record.id}:${now}`, {
+                type: "basic",
+                iconUrl: "assets/icons/extension_icon.png",
+                title: record.title,
+                message: record.message
+            });
+        } catch (error) {
+            console.warn("Insight notification failed", error);
+            return false;
+        }
+
+        const today = getDayKey(new Date(now));
+        const daily = data[KEYS.insightNotificationDaily] || {};
+        const count = daily.date === today ? Number(daily.count || 0) : 0;
+        await set({
+            [KEYS.insightNotificationHistory]: {
+                ...(data[KEYS.insightNotificationHistory] || {}),
+                [notificationKey]: now
+            },
+            [KEYS.insightNotificationDaily]: {
+                date: today,
+                count: count + 1,
+                lastAt: now
+            },
+            [KEYS.lastInsightNotificationDate]: today
+        });
+
+        return true;
+    } finally {
+        insightNotificationClaims.delete(notificationKey);
+    }
+}
+
+async function generateInsights(options = {}) {
+    await ensureDayReset();
+    const data = await get([
+        KEYS.statsToday,
+        KEYS.allStatsToday,
+        KEYS.statsHistory,
+        KEYS.hourlyUsageHistory,
+        KEYS.blockedDomains,
+        KEYS.activeSession,
+        KEYS.personalInsights,
+        KEYS.dismissedInsights,
+        KEYS.uiSettings
+    ]);
+    const settings = getInsightSettings(data[KEYS.uiSettings] || {});
+    const now = Number(options.now || Date.now());
+    const dismissed = pruneDismissedInsights(data[KEYS.dismissedInsights] || {}, now);
+
+    if (!settings.personalInsightsEnabled) {
+        await set({ [KEYS.dismissedInsights]: dismissed });
+        return { success: true, insights: [] };
+    }
+
+    const generated = analyzeUsagePatterns({
+        statsToday: data[KEYS.statsToday] || {},
+        allStatsToday: data[KEYS.allStatsToday] || data[KEYS.statsToday] || {},
+        statsHistory: data[KEYS.statsHistory] || {},
+        hourlyUsageHistory: data[KEYS.hourlyUsageHistory] || {},
+        blockedDomains: data[KEYS.blockedDomains] || {},
+        activeSession: data[KEYS.activeSession] || activeSessionRecord(),
+        settings,
+        now
+    }).map(normalizeInsightRecord).filter(Boolean);
+
+    let personalInsights = data[KEYS.personalInsights] || [];
+    generated.forEach((insight) => {
+        personalInsights = mergeInsightList(personalInsights, insight, dismissed);
+    });
+
+    await set({
+        [KEYS.personalInsights]: personalInsights,
+        [KEYS.dismissedInsights]: dismissed,
+        [KEYS.lastInsightAnalysisAt]: now
+    });
+
+    if (options.allowNotifications !== false) {
+        for (const insight of generated) {
+            if (await sendPatternNotification(insight, { now, settings })) break;
+        }
+    }
+
+    return { success: true, insights: personalInsights };
+}
+
+async function maybeGenerateInsightsAfterActivity(options = {}) {
+    const now = Number(options.now || Date.now());
+    if (!options.force && now - lastInsightAnalysisAtMemory < INSIGHT_ANALYSIS_THROTTLE_MS) {
+        return false;
+    }
+
+    const data = await get([KEYS.lastInsightAnalysisAt, KEYS.uiSettings]);
+    const settings = getInsightSettings(data[KEYS.uiSettings] || {});
+    if (!settings.personalInsightsEnabled) return false;
+
+    const lastStored = Number(data[KEYS.lastInsightAnalysisAt] || 0);
+    if (!options.force && lastStored && now - lastStored < INSIGHT_ANALYSIS_THROTTLE_MS) {
+        lastInsightAnalysisAtMemory = Math.max(lastInsightAnalysisAtMemory, lastStored);
+        return false;
+    }
+
+    if (!insightAnalysisPromise) {
+        lastInsightAnalysisAtMemory = now;
+        insightAnalysisPromise = generateInsights({
+            now,
+            allowNotifications: options.allowNotifications !== false
+        }).catch((error) => {
+            console.warn("Insight generation failed", error);
+            return false;
+        }).finally(() => {
+            insightAnalysisPromise = null;
+        });
+    }
+
+    return insightAnalysisPromise;
+}
+
 async function syncActionBadge(options = {}) {
     if (!chrome.action?.setBadgeText) return;
     if (options.hydrate !== false && (!activeDomain || options.recheckActiveTab)) {
@@ -1522,7 +1819,7 @@ async function clearDomainSnooze(domain, options = {}) {
 
 async function sendAnalyticsEvent(eventName, params = {}) {
     try {
-        const clientId = await getOrCreateAnalyticsClientId(local());
+        const clientId = await getOrCreateAnalyticsClientId(chrome.storage.local);
         await fetch(ANALYTICS_EVENT_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1573,11 +1870,23 @@ async function initializeExtension(options = {}) {
     const enforceActive = Boolean(options.enforceActive);
     const countVisit = Boolean(options.countVisit);
     await ensureDayReset();
-    const data = await get([KEYS.onboarding, KEYS.blockedDomains, KEYS.scheduledBlocks]);
+    const data = await get([
+        KEYS.onboarding,
+        KEYS.blockedDomains,
+        KEYS.scheduledBlocks,
+        KEYS.personalInsights,
+        KEYS.dismissedInsights,
+        KEYS.insightNotificationHistory,
+        KEYS.insightNotificationDaily
+    ]);
     await set({
         [KEYS.onboarding]: data[KEYS.onboarding] || { step: 0, completed: false, completedAt: null },
         [KEYS.blockedDomains]: data[KEYS.blockedDomains] || {},
-        [KEYS.scheduledBlocks]: data[KEYS.scheduledBlocks] || []
+        [KEYS.scheduledBlocks]: data[KEYS.scheduledBlocks] || [],
+        [KEYS.personalInsights]: Array.isArray(data[KEYS.personalInsights]) ? data[KEYS.personalInsights] : [],
+        [KEYS.dismissedInsights]: data[KEYS.dismissedInsights] || {},
+        [KEYS.insightNotificationHistory]: data[KEYS.insightNotificationHistory] || {},
+        [KEYS.insightNotificationDaily]: data[KEYS.insightNotificationDaily] || {}
     });
     await reconcileSchedules();
     await queueDnrRulesSync({ force: true });
@@ -1671,6 +1980,11 @@ const handlers = {
         await syncActionBadge({ recheckActiveTab: true });
         return { success: true };
     },
+    generateInsights: async (request) => generateInsights({
+        allowNotifications: request.allowNotifications === true,
+        now: request.now
+    }),
+    dismissInsight: async (request) => dismissInsight(request.id),
     trackAnalyticsEvent: async (request) => {
         await sendAnalyticsEvent(request.eventName, request.params || {});
         return { success: true };
@@ -1977,6 +2291,13 @@ if (typeof module !== "undefined" && module.exports) {
     global.verifyResetToken = verifyResetToken;
     global.resetDomainUsage = resetDomainUsage;
     global.checkAndSendAlerts = checkAndSendAlerts;
+    global.analyzeUsagePatterns = analyzeUsagePatterns;
+    global.generateInsights = generateInsights;
+    global.shouldSendNotification = shouldSendNotification;
+    global.sendPatternNotification = sendPatternNotification;
+    global.getInsightSettings = getInsightSettings;
+    global.saveInsight = saveInsight;
+    global.dismissInsight = dismissInsight;
     global.clearDomainSnooze = clearDomainSnooze;
     global.enforceIfNeeded = enforceIfNeeded;
     global.flushActiveTimeNow = flushActiveTimeNow;

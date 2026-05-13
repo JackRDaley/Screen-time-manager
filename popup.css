@@ -250,6 +250,7 @@ nav label:focus-visible {
 
 .panel-dashboard .stat-strip,
 .panel-dashboard #activeCard,
+.panel-dashboard #personalInsightsCard,
 .panel-dashboard #distributionCard {
     grid-column: 1 / -1;
 }
@@ -266,6 +267,34 @@ nav label:focus-visible {
 #usageCardInfo {
     display: flex;
     flex-direction: column;
+}
+
+#personalInsightsCard {
+    overflow: visible;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.072), rgba(255,255,255,.026)),
+        linear-gradient(118deg, rgba(255,116,203,.22), rgba(139,111,255,.18) 34%, rgba(34,217,255,.16) 66%, rgba(46,255,168,.11)),
+        var(--surface0);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.09),
+        inset 0 0 0 1px rgba(255,255,255,.065),
+        0 8px 16px rgba(0,0,0,.20);
+}
+
+#personalInsightsCard .card-head {
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 8px 14px 0;
+}
+
+.insight-header-nav {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 2px;
+    min-height: 20px;
+    margin-left: 2px;
 }
 
 .panel::-webkit-scrollbar { width: 6px; }
@@ -295,6 +324,11 @@ nav label:focus-visible {
     box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.03), 0 8px 16px rgba(0,0,0,.20);
 }
 
+.card[hidden],
+.dashboard-card-hidden {
+    display: none !important;
+}
+
 .card::before {
     display: none;
 }
@@ -317,6 +351,20 @@ nav label:focus-visible {
     text-decoration-thickness: 1px;
     text-underline-offset: 3px;
     text-decoration-color: rgba(237,242,255,.24);
+}
+
+.card-title-with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.card-title-icon {
+    width: 17px;
+    height: 17px;
+    object-fit: contain;
+    opacity: .96;
+    filter: brightness(0) invert(1) drop-shadow(0 0 8px rgba(255,255,255,.35)) drop-shadow(0 0 10px rgba(139,111,255,.34));
 }
 
 .card-body { padding: 8px 11px; }
@@ -518,13 +566,159 @@ nav label:focus-visible {
 
 #ranking,
 #rankingByVisits,
-#activeList {
+#activeList,
+#personalInsightsList {
     padding-top: 4px;
+}
+
+#personalInsightsList {
+    padding: 2px 14px 7px;
+}
+
+#personalInsightsList .insight-row {
+    --insight-close-size: 16px;
+    --insight-action-gap: 6px;
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 0 5px;
+    min-height: 50px;
+}
+
+#personalInsightsList .insight-copy {
+    white-space: normal;
+    line-height: 1.35;
+}
+
+.insight-headline-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin-bottom: 0;
+}
+
+.insight-copy-block {
+    min-width: 0;
+}
+
+.insight-stat-headline {
+    min-width: 0;
+    color: rgba(237,242,255,.84);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.26;
+    white-space: normal;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.insight-stat-subheading {
+    margin-top: 2px;
+    min-width: 0;
+    color: rgba(237,242,255,.58);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.18;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.insight-domain-emphasis,
+.insight-stat-emphasis {
+    color: rgba(255,255,255,.93);
+    font-weight: 700;
+}
+
+.insight-carousel {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.insight-carousel-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-height: 22px;
+    margin-top: 1px;
+}
+
+.insight-carousel-count {
+    min-width: 38px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.insight-nav-chip {
+    width: 32px;
+    min-width: 32px;
+    height: 28px;
+    justify-content: center;
+    padding: 0;
+    font-size: 20px;
+    line-height: 1;
+}
+
+.insight-actions {
+    position: static;
+    width: auto;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    justify-self: end;
+    pointer-events: none;
+}
+
+.insight-primary-action {
+    font-weight: 800;
+    white-space: nowrap;
+    pointer-events: auto;
+}
+
+.insight-close-x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--insight-close-size);
+    min-width: var(--insight-close-size);
+    height: var(--insight-close-size);
+    padding: 0;
+    color: rgba(237,242,255,.46);
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    font-weight: 750;
+    font-size: 10px;
+    pointer-events: auto;
+}
+
+.insight-close-x:hover {
+    color: rgba(237,242,255,.78);
+}
+
+.row.is-highlighted {
+    background:
+        linear-gradient(165deg, rgba(255,141,83,.18), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.035));
+    box-shadow: inset 0 0 0 1px rgba(255,141,83,.35), 0 0 0 1px rgba(255,141,83,.12);
 }
 
 #ranking .row,
 #rankingByVisits .row,
-#activeList .row {
+#activeList .row,
+#personalInsightsList .row {
     border-radius: 0;
     padding: 10px 0;
     background: transparent;
@@ -532,9 +726,19 @@ nav label:focus-visible {
     border-bottom: 1px solid rgba(255,255,255,.08);
 }
 
+#personalInsightsList .row {
+    background: transparent;
+}
+
+#personalInsightsList .row.insight-row {
+    padding: 4px 0 5px;
+    min-height: 50px;
+}
+
 #ranking .row:last-of-type,
 #rankingByVisits .row:last-of-type,
-#activeList .row:last-of-type {
+#activeList .row:last-of-type,
+#personalInsightsList .row:last-of-type {
     border-bottom: 0;
 }
 
@@ -681,6 +885,68 @@ body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
 .action-chip:disabled {
     opacity: .35;
     cursor: not-allowed;
+}
+
+.action-chip-primary.insight-nav-chip,
+.action-chip-primary.insight-close-x {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.action-chip-primary.insight-nav-chip:hover,
+.action-chip-primary.insight-close-x:hover {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.tag.action-chip.insight-nav-chip {
+    width: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    height: 20px;
+    padding: 0;
+    color: rgba(237,242,255,.70);
+    font-size: 0;
+}
+
+.tag.action-chip.insight-nav-chip:hover {
+    color: rgba(255,255,255,.96);
+}
+
+.insight-nav-prev::before,
+.insight-nav-next::before {
+    font-size: 17px;
+    font-weight: 900;
+    line-height: 1;
+}
+
+.insight-nav-prev::before {
+    content: "\2039";
+}
+
+.insight-nav-next::before {
+    content: "\203A";
+}
+
+.tag.action-chip.insight-close-x {
+    width: 16px;
+    min-width: 16px;
+    min-height: 16px;
+    height: 16px;
+    padding: 0;
+    border-radius: 50%;
+    color: rgba(237,242,255,.46);
+}
+
+.tag.action-chip.insight-close-x:hover {
+    color: rgba(237,242,255,.72);
+}
+
+.insight-nav-chip:focus-visible,
+.insight-close-x:focus-visible {
+    outline: none;
 }
 
 /* ── Timer ───────────────────────────────────────────────────── */
@@ -1796,6 +2062,12 @@ body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
     max-width: 84px;
     flex: 0 0 84px;
     text-align: center;
+    padding: 7px 8px;
+}
+
+.settings-select {
+    max-width: 116px;
+    flex: 0 0 116px;
     padding: 7px 8px;
 }
 

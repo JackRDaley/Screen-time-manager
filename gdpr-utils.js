@@ -14,6 +14,12 @@ const GdprUtils = (() => {
         "snoozeHistory",
         "statsHistory",
         "recentlyReset",
+        "personalInsights",
+        "dismissedInsights",
+        "insightNotificationHistory",
+        "insightNotificationDaily",
+        "lastInsightNotificationDate",
+        "lastInsightAnalysisAt",
         "onboardingState",
         "onboardingMetrics",
         "uiSettings",
@@ -35,7 +41,13 @@ const GdprUtils = (() => {
         "snoozeHistory",
         "statsHistory",
         "alertsSent",
-        "recentlyReset"
+        "recentlyReset",
+        "personalInsights",
+        "dismissedInsights",
+        "insightNotificationHistory",
+        "insightNotificationDaily",
+        "lastInsightNotificationDate",
+        "lastInsightAnalysisAt"
     ]);
 
     const ANALYTICS_KEYS = Object.freeze([

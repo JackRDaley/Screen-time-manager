@@ -9,6 +9,8 @@ const getDayKey = Shared.getDayKey || ((date = new Date()) => {
 });
 
 const SETTINGS_KEY = "uiSettings";
+const PERSONAL_INSIGHTS_KEY = "personalInsights";
+const DISMISSED_INSIGHTS_KEY = "dismissedInsights";
 const PREMIUM_KEY = "premiumState";
 const WHOP_ACTIVATION_NOTICE_KEY = "whopActivationNotice";
 const ONBOARDING_KEY = "onboardingState";
@@ -24,7 +26,11 @@ const HOURLY_BAR_DAILY_SHARE_SCALE = 0.25;
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 30,
     use24HourTime: false,
-    limitNotificationsEnabled: true
+    limitNotificationsEnabled: true,
+    personalInsightsEnabled: true,
+    insightNotificationsEnabled: true,
+    insightMaxNotificationsPerDay: 1,
+    insightSensitivity: "normal"
 });
 
 const DEFAULT_PREMIUM = Object.freeze({
@@ -84,6 +90,7 @@ const state = {
     immutableOverride: { available: false },
     selectedDays: [0, 1, 2, 3, 4, 5, 6],
     selectedHourlyHour: null,
+    selectedInsightIndex: 0,
     editingScheduleId: null,
     rankingSignature: ""
 };
@@ -117,14 +124,6 @@ function send(action, payload = {}) {
     }));
 }
 
-function storageGet(keys) {
-    return chrome.storage.local.get(keys);
-}
-
-function storageSet(items) {
-    return chrome.storage.local.set(items);
-}
-
 function setText(id, text) {
     const el = $(id);
     if (el) el.textContent = text;
@@ -155,7 +154,7 @@ function limitConfig(raw = {}) {
 }
 
 function formatShortTime(ms) {
-    return formatTimeSec(Math.round(timeMs({ timeMs: ms }) / 1000));
+    return formatTimeSec(Math.round(Math.max(0, Number(ms) || 0) / 1000));
 }
 
 function formatCountdownMSS(seconds) {
@@ -184,9 +183,9 @@ function formatScheduleDays(days) {
 }
 
 function formatHourLabel(hour) {
-    if (hour === 0) return "12a";
-    if (hour === 12) return "12p";
-    return hour < 12 ? `${hour}a` : `${hour - 12}p`;
+    if (hour === 0) return "12am";
+    if (hour === 12) return "12pm";
+    return hour < 12 ? `${hour}am` : `${hour - 12}pm`;
 }
 
 function formatHourRangeTooltip(hour) {
@@ -262,14 +261,10 @@ function deleteSnoozeEntriesForDomain(snoozedDomains = {}, domain) {
     deleteEntriesForDomain(snoozedDomains, domain);
 }
 
-function snoozeEntryForDomain(snoozedDomains = {}, domain) {
-    return entryForDomain(snoozedDomains, domain);
-}
-
 function isLimitCurrentlyBlocking(domain, cfg, statsToday = {}, snoozedDomains = {}) {
     const limit = limitConfig(cfg);
     if (!limit.enabled || !limit.limitSeconds) return false;
-    const snooze = snoozeEntryForDomain(snoozedDomains, domain);
+    const snooze = entryForDomain(snoozedDomains, domain);
     const snoozeExpiresAt = Number(snooze?.expiresAt || snooze || 0);
     if (snoozeExpiresAt > Date.now()) return false;
     return timeMs(statsToday?.[domain]) >= limit.limitSeconds * 1000;
@@ -618,6 +613,423 @@ function updateRankingMetricsInPlace() {
     updateRows("rankingByVisits", true);
 }
 
+function insightTimeLabel(timestamp) {
+    const value = Number(timestamp || 0);
+    if (!value) return "Today";
+
+    const date = new Date(value);
+    const today = getDayKey();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    if (getDayKey(date) === today) return "Today";
+    if (getDayKey(date) === getDayKey(yesterday)) return "Yesterday";
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function personalInsightItems() {
+    if (state.settings.personalInsightsEnabled === false) return [];
+
+    const dismissed = state.data[DISMISSED_INSIGHTS_KEY] || {};
+    return (state.data[PERSONAL_INSIGHTS_KEY] || [])
+        .filter((insight) => insight?.id && !dismissed[insight.id])
+        .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || Number(b.timestamp || 0) - Number(a.timestamp || 0))
+        .slice(0, 4);
+}
+
+function formatInsightMinutes(ms) {
+    return `${Math.max(1, Math.round(Number(ms || 0) / 60000))} min`;
+}
+
+function formatInsightCompactTime(ms) {
+    const minutes = Math.max(1, Math.round(Number(ms || 0) / 60000));
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+function formatInsightIncreasePercent(value) {
+    const ratio = Number(value || 0);
+    if (!Number.isFinite(ratio) || ratio <= 0) return "";
+    return `${Math.max(0, Math.round((ratio - 1) * 100))}%`;
+}
+
+function pluralizeInsight(value, singular, plural = `${singular}s`) {
+    return `${Number(value || 0)} ${Number(value || 0) === 1 ? singular : plural}`;
+}
+
+function insightTitleCase(value) {
+    return String(value || "")
+        .split(/[\s.-]+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+}
+
+function insightDomainLabel(domain) {
+    const normalized = normalizeDomain(domain);
+    const labels = {
+        "youtube.com": "YouTube",
+        "youtu.be": "YouTube",
+        "reddit.com": "Reddit",
+        "tiktok.com": "TikTok",
+        "linkedin.com": "LinkedIn",
+        "instagram.com": "Instagram",
+        "facebook.com": "Facebook",
+        "twitter.com": "Twitter",
+        "x.com": "X",
+        "netflix.com": "Netflix",
+        "twitch.tv": "Twitch",
+        "discord.com": "Discord",
+        "gmail.com": "Gmail"
+    };
+
+    if (labels[normalized]) return labels[normalized];
+
+    const parts = normalized.split(".").filter(Boolean);
+    if (!parts.length) return normalized;
+
+    const last = parts[parts.length - 1] || "";
+    const secondLast = parts[parts.length - 2] || "";
+    const rootIndex = parts.length > 2 && last.length === 2 && secondLast.length <= 3
+        ? parts.length - 3
+        : Math.max(0, parts.length - 2);
+    return insightTitleCase(parts[rootIndex] || parts[0]);
+}
+
+function insightDaypartForHour(hour) {
+    const value = ((Number(hour) % 24) + 24) % 24;
+    if (value >= 5 && value < 12) return "mornings";
+    if (value >= 12 && value < 17) return "afternoons";
+    if (value >= 17 && value < 22) return "evenings";
+    return "late nights";
+}
+
+function normalizeInsightDaypart(value, plural = true) {
+    const text = String(value || "").toLowerCase();
+    if (text.includes("late")) return plural ? "late nights" : "late night";
+    if (text.includes("morning")) return plural ? "mornings" : "morning";
+    if (text.includes("afternoon")) return plural ? "afternoons" : "afternoon";
+    if (text.includes("evening")) return plural ? "evenings" : "evening";
+    return "";
+}
+
+function insightDaypartAdjective(value) {
+    const daypart = normalizeInsightDaypart(value, false);
+    if (daypart === "late night") return "Late-night";
+    if (daypart) return insightTitleCase(daypart);
+    return "";
+}
+
+function insightAfterHourText(hour) {
+    const value = ((Number(hour) % 24) + 24) % 24;
+    if (value === 0) return "after midnight";
+    if (value === 12) return "after noon";
+    return `after ${formatHourLabel(value)}`;
+}
+
+function insightWindowPhrase(context = {}, options = {}) {
+    const usePeak = options.usePeak !== false;
+    const hour = Number(usePeak ? (context.peakHour ?? context.hour) : context.hour);
+    const daypart = normalizeInsightDaypart(
+        (usePeak ? (context.peakDaypart || context.daypart) : context.daypart)
+            || (Number.isFinite(hour) ? insightDaypartForHour(hour) : ""),
+        false
+    );
+
+    if (daypart === "morning") return "before noon";
+    if (daypart === "afternoon") return "in the afternoon";
+    if (daypart === "evening") return Number.isFinite(hour) ? insightAfterHourText(hour) : "in the evening";
+    if (daypart === "late night") return Number.isFinite(hour) ? insightAfterHourText(hour) : "late at night";
+    if (Number.isFinite(hour)) return `around ${formatHourLabel(hour)}`;
+    return "";
+}
+
+function insightDayCountText(context = {}, preferStraight = false) {
+    const consecutiveDays = Number(context.consecutiveDays || 0);
+    const activeDays = Number(context.activeDays || context.peakActiveDays || consecutiveDays || 0);
+    const windowDays = Number(context.windowDays || 0);
+
+    if (preferStraight && consecutiveDays > 0) return `${consecutiveDays} straight days`;
+    if (windowDays > 0 && activeDays > 0) {
+        return activeDays >= windowDays
+            ? `each of the last ${windowDays} days`
+            : `${activeDays} of the last ${windowDays} days`;
+    }
+    if (consecutiveDays > 0) return `${consecutiveDays} straight days`;
+    if (activeDays > 0) return pluralizeInsight(activeDays, "day");
+    return "";
+}
+
+function hourlyDomainEntry(bucket = {}, domain = "") {
+    const normalized = normalizeDomain(domain);
+    const result = { timeMs: 0, visits: 0 };
+
+    Object.entries(bucket.domains || {}).forEach(([rawDomain, ms]) => {
+        if (normalizeDomain(rawDomain) === normalized) result.timeMs += Math.max(0, Number(ms || 0));
+    });
+    Object.entries(bucket.domainVisits || {}).forEach(([rawDomain, visitCount]) => {
+        if (normalizeDomain(rawDomain) === normalized) result.visits += Math.max(0, Number(visitCount || 0));
+    });
+
+    return result;
+}
+
+function recentDomainHourlyPattern(domain, days = 7) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return {};
+
+    const history = state.data.hourlyUsageHistory || {};
+    const hours = Array.from({ length: 24 }, () => ({ activeDays: 0, totalMs: 0, visits: 0 }));
+
+    for (let offset = 0; offset < days; offset += 1) {
+        const day = history[dayKeyOffset(offset)] || {};
+        for (let hour = 0; hour < 24; hour += 1) {
+            const bucket = day[String(hour).padStart(2, "0")] || {};
+            const entry = hourlyDomainEntry(bucket, normalized);
+            if (entry.timeMs <= 0 && entry.visits <= 0) continue;
+            hours[hour].activeDays += 1;
+            hours[hour].totalMs += entry.timeMs;
+            hours[hour].visits += entry.visits;
+        }
+    }
+
+    const best = hours
+        .map((entry, hour) => ({ hour, ...entry }))
+        .filter((entry) => entry.activeDays > 0)
+        .sort((a, b) => (
+            b.activeDays - a.activeDays
+            || b.totalMs - a.totalMs
+            || b.visits - a.visits
+        ))[0];
+
+    if (!best) return {};
+    return {
+        peakHour: best.hour,
+        peakDaypart: insightDaypartForHour(best.hour),
+        peakActiveDays: best.activeDays,
+        peakTotalMs: best.totalMs,
+        peakVisits: best.visits
+    };
+}
+
+function recentDomainSummary(domain, days = 7) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return { activeDays: 0, totalMs: 0, visits: 0 };
+
+    let activeDays = 0;
+    let totalMs = 0;
+    let visitCount = 0;
+
+    for (let offset = 0; offset < days; offset += 1) {
+        const stats = offset === 0
+            ? (state.data.allStatsToday || state.data.statsToday || {})
+            : ((state.data.statsHistory || {})[dayKeyOffset(offset)] || {});
+        const entry = entryForDomain(stats, normalized) || {};
+        const dayMs = timeMs(entry);
+        const dayVisits = visits(entry);
+        if (dayMs > 0 || dayVisits > 0) activeDays += 1;
+        totalMs += dayMs;
+        visitCount += dayVisits;
+    }
+
+    return { activeDays, totalMs, visits: visitCount };
+}
+
+function insightContextWithFallback(insight = {}, domain = "") {
+    const context = { ...(insight.context || {}) };
+    const baseWindowDays = Math.max(1, Number(context.windowDays || 7));
+    const hourlyPattern = recentDomainHourlyPattern(domain, baseWindowDays);
+
+    if (context.daypart == null && Number.isFinite(Number(context.hour))) {
+        context.daypart = insightDaypartForHour(Number(context.hour));
+    }
+    if (context.peakHour == null && Number.isFinite(Number(hourlyPattern.peakHour))) {
+        context.peakHour = hourlyPattern.peakHour;
+    }
+    if (!context.peakDaypart && context.peakHour != null) {
+        context.peakDaypart = insightDaypartForHour(Number(context.peakHour));
+    }
+    if (!context.peakDaypart && hourlyPattern.peakDaypart) {
+        context.peakDaypart = hourlyPattern.peakDaypart;
+    }
+    if (!context.peakActiveDays && hourlyPattern.peakActiveDays) {
+        context.peakActiveDays = hourlyPattern.peakActiveDays;
+    }
+    if (!context.peakTotalMs && hourlyPattern.peakTotalMs) {
+        context.peakTotalMs = hourlyPattern.peakTotalMs;
+    }
+    if (!context.peakVisits && hourlyPattern.peakVisits) {
+        context.peakVisits = hourlyPattern.peakVisits;
+    }
+
+    if (insight.type !== "limit_suggestion") return context;
+
+    const windowDays = baseWindowDays;
+    const summary = recentDomainSummary(domain, windowDays);
+    return {
+        ...context,
+        windowDays,
+        activeDays: Number(context.activeDays || summary.activeDays || 0),
+        totalMs: Number(context.totalMs || summary.totalMs || 0),
+        visits: Number(context.visits || summary.visits || 0)
+    };
+}
+
+function insightHeadlineEmphasis(value, className = "insight-stat-emphasis") {
+    return `<span class="${className}">${escapeHtml(value)}</span>`;
+}
+
+function insightUsageMetricText(context = {}) {
+    if (Number(context.totalMs || 0) > 0) return formatInsightCompactTime(context.totalMs);
+    if (Number(context.todayMs || 0) > 0) return formatInsightCompactTime(context.todayMs);
+    if (Number(context.visits || 0) > 0) return pluralizeInsight(context.visits, "visit");
+    return "";
+}
+
+function insightPersonalHeadlineHtml(insight = {}, domain = "") {
+    const context = insightContextWithFallback(insight, domain);
+    const domainHtml = insightHeadlineEmphasis(insightDomainLabel(domain), "insight-domain-emphasis");
+
+    if (insight.type === "long_session" && context.durationMs) {
+        return `${domainHtml} is holding your attention right now`;
+    }
+    if (insight.type === "recurring_time_block" && context.consecutiveDays) {
+        const hour = Number(context.hour);
+        const daypart = normalizeInsightDaypart(context.daypart || insightDaypartForHour(hour));
+        return `${domainHtml} often appears during your ${escapeHtml(daypart || "routine")}`;
+    }
+    if (insight.type === "high_visit_frequency" && context.visits) {
+        const hour = Number(context.hour);
+        const daypart = normalizeInsightDaypart(context.daypart || insightDaypartForHour(hour), false);
+        return `${domainHtml} keeps showing up ${escapeHtml(daypart ? `this ${daypart}` : "right now")}`;
+    }
+    if (insight.type === "usage_increase" && context.ratio) {
+        const daypart = context.peakDaypart || context.daypart;
+        const adjective = insightDaypartAdjective(daypart);
+        return `${adjective ? `${escapeHtml(adjective)} ` : ""}${domainHtml} activity is increasing`;
+    }
+    if (insight.type === "limit_suggestion" && context.activeDays) {
+        if (context.peakDaypart && Number(context.peakActiveDays || context.activeDays || 0) >= 2) {
+            return `${domainHtml} often appears during your ${escapeHtml(normalizeInsightDaypart(context.peakDaypart))}`;
+        }
+        return `${domainHtml} has been a frequent stop this week`;
+    }
+    return `${escapeHtml(insight.title || "New pattern")} for ${domainHtml}`;
+}
+
+function insightPersonalSubheadingHtml(insight = {}, domain = "") {
+    const context = insightContextWithFallback(insight, domain);
+
+    if (insight.type === "long_session" && context.durationMs) {
+        return `Active for ${insightHeadlineEmphasis(formatInsightMinutes(context.durationMs))} straight`;
+    }
+    if (insight.type === "recurring_time_block" && context.consecutiveDays) {
+        const windowText = insightWindowPhrase(context, { usePeak: false });
+        const daysText = insightDayCountText(context, true);
+        if (windowText && daysText) {
+            return `Active ${escapeHtml(windowText)} for ${insightHeadlineEmphasis(daysText)}`;
+        }
+        if (daysText) return `Active for ${insightHeadlineEmphasis(daysText)}`;
+        return "";
+    }
+    if (insight.type === "high_visit_frequency" && context.visits) {
+        return `Opened ${insightHeadlineEmphasis(pluralizeInsight(context.visits, "time"))} this hour`;
+    }
+    if (insight.type === "usage_increase" && context.ratio) {
+        const windowText = insightWindowPhrase(context);
+        return `Usage ${windowText ? `${escapeHtml(windowText)} ` : ""}rose ${insightHeadlineEmphasis(formatInsightIncreasePercent(context.ratio))} today`;
+    }
+    if (insight.type === "limit_suggestion" && context.activeDays) {
+        const windowText = insightWindowPhrase(context);
+        const daysText = insightDayCountText(context);
+        if (windowText && daysText) {
+            return `Active ${escapeHtml(windowText)} on ${insightHeadlineEmphasis(daysText)}`;
+        }
+        if (daysText) return `Active on ${insightHeadlineEmphasis(daysText)}`;
+
+        const metricText = insightUsageMetricText(context);
+        return metricText ? `Logged ${insightHeadlineEmphasis(metricText)} this week` : "";
+    }
+    return "";
+}
+
+function insightSlideHtml(insight, index) {
+    const blockedDomains = state.data.blockedDomains || {};
+    const domain = normalizeDomain(insight.domain);
+    const isLimited = Boolean(entryForDomain(blockedDomains, domain));
+    const action = !isLimited
+        ? actionChip("Add Limit", "insight-add-limit", "action-chip-primary insight-primary-action", `data-domain="${escapeHtml(domain)}"`)
+        : "";
+    const accent = insight.action === "addLimit" && !isLimited
+        ? "row-accent-purple"
+        : (index % 2 ? "row-accent-cyan" : "row-accent-muted");
+    const subheading = insightPersonalSubheadingHtml(insight, domain);
+
+    return `
+        <div class="row insight-row ${accent}" data-insight-id="${escapeHtml(insight.id)}" data-domain="${escapeHtml(domain)}">
+            <div class="row-main">
+                <div class="insight-headline-row">
+                    <div class="insight-copy-block">
+                        <div class="insight-stat-headline">${insightPersonalHeadlineHtml(insight, domain)}</div>
+                        ${subheading ? `<div class="insight-stat-subheading">${subheading}</div>` : ""}
+                    </div>
+                </div>
+            </div>
+            <div class="row-right insight-actions">
+                ${action}
+                ${actionChip("x", "dismiss-insight", "action-chip-primary insight-close-x", `data-id="${escapeHtml(insight.id)}" aria-label="Close insight"`)}
+            </div>
+        </div>
+    `;
+}
+
+function insightHeaderControls(count) {
+    if (count <= 1) return "";
+
+    return `
+        ${actionChip("", "insight-prev", "action-chip-primary insight-nav-chip insight-nav-prev", `aria-label="Previous insight"`)}
+        <span class="insight-carousel-count">${state.selectedInsightIndex + 1} / ${count}</span>
+        ${actionChip("", "insight-next", "action-chip-primary insight-nav-chip insight-nav-next", `aria-label="Next insight"`)}
+    `;
+}
+
+function renderPersonalInsights() {
+    const insights = personalInsightItems();
+    const card = $("personalInsightsCard");
+    const list = $("personalInsightsList");
+    const nav = $("personalInsightsNav");
+    if (card) {
+        card.hidden = !insights.length;
+        card.classList.toggle("dashboard-card-hidden", !insights.length);
+    }
+    if (nav) nav.innerHTML = "";
+    if (!list) return;
+
+    if (!insights.length) {
+        list.innerHTML = "";
+        return;
+    }
+
+    state.selectedInsightIndex = Math.max(0, Math.min(state.selectedInsightIndex, insights.length - 1));
+    if (nav) nav.innerHTML = insightHeaderControls(insights.length);
+    list.classList.remove("muted");
+    list.innerHTML = `
+        <div class="insight-carousel">
+            ${insightSlideHtml(insights[state.selectedInsightIndex], state.selectedInsightIndex)}
+        </div>
+    `;
+}
+
+function moveInsightCarousel(direction) {
+    const insights = personalInsightItems();
+    if (insights.length <= 1) return;
+    const nextIndex = (state.selectedInsightIndex + direction + insights.length) % insights.length;
+    state.selectedInsightIndex = nextIndex;
+    renderPersonalInsights();
+}
+
 function renderHourlyStyled() {
     const list = $("hourlyDistribution");
     const insight = $("usageInsight");
@@ -923,9 +1335,19 @@ function renderSettings() {
     const defaultLimit = $("defaultLimitMinutes");
     const use24Hour = $("use24HourTime");
     const limitNotifications = $("limitNotificationsEnabled");
+    const personalInsights = $("personalInsightsEnabled");
+    const insightNotifications = $("insightNotificationsEnabled");
+    const maxNotifications = $("insightMaxNotificationsPerDay");
+    const sensitivity = $("insightSensitivity");
     if (defaultLimit) defaultLimit.value = state.settings.defaultLimitMinutes;
     if (use24Hour) use24Hour.checked = Boolean(state.settings.use24HourTime);
     if (limitNotifications) limitNotifications.checked = state.settings.limitNotificationsEnabled !== false;
+    if (personalInsights) personalInsights.checked = state.settings.personalInsightsEnabled !== false;
+    if (insightNotifications) insightNotifications.checked = state.settings.insightNotificationsEnabled !== false;
+    if (maxNotifications) maxNotifications.value = Math.max(0, Math.min(5, Number(state.settings.insightMaxNotificationsPerDay ?? 1)));
+    if (sensitivity) sensitivity.value = ["low", "normal", "high"].includes(state.settings.insightSensitivity)
+        ? state.settings.insightSensitivity
+        : "normal";
     renderImmutableOverride();
 
     setText("premiumStatusMsg", state.premium.active
@@ -961,6 +1383,7 @@ function renderAll(options = {}) {
         renderActive();
         if (updateRankingInPlace) updateRankingMetricsInPlace();
         else renderRankingStyled();
+        renderPersonalInsights();
         renderHourlyStyled();
         renderLimitsStyled();
         renderScheduleDays();
@@ -975,12 +1398,17 @@ function renderAll(options = {}) {
 async function loadAll(options = {}) {
     const shouldFlush = options.flush === true;
     if (shouldFlush) await send("flushActiveTimeNow", { source: "popup" });
-    state.data = await storageGet([
+    if (options.refreshInsights === true) {
+        await send("generateInsights", { allowNotifications: false });
+    }
+    state.data = await chrome.storage.local.get([
         "blockedDomains",
         "statsToday",
         "allStatsToday",
         "statsHistory",
         "hourlyUsageHistory",
+        PERSONAL_INSIGHTS_KEY,
+        DISMISSED_INSIGHTS_KEY,
         "snoozeHistory",
         "snoozedDomains",
         "activeBlocks",
@@ -1035,7 +1463,7 @@ async function saveLimitForDomain(domain, minutes, tier = "standard") {
         return { success: false, error: "Enter a valid domain and limit." };
     }
 
-    const data = await storageGet(["blockedDomains", "alertsSent"]);
+    const data = await chrome.storage.local.get(["blockedDomains", "alertsSent"]);
     const blockedDomains = data.blockedDomains || {};
     deleteEntriesForDomain(blockedDomains, normalized);
     blockedDomains[normalized] = {
@@ -1046,12 +1474,12 @@ async function saveLimitForDomain(domain, minutes, tier = "standard") {
 
     const alertsSent = data.alertsSent || {};
     deleteEntriesForDomain(alertsSent, normalized);
-    await storageSet({ blockedDomains, alertsSent });
+    await chrome.storage.local.set({ blockedDomains, alertsSent });
     return { success: true, domain: normalized };
 }
 
 async function removeDomain(domain) {
-    const data = await storageGet(["blockedDomains", "alertsSent", "snoozedDomains"]);
+    const data = await chrome.storage.local.get(["blockedDomains", "alertsSent", "snoozedDomains"]);
     const blockedDomains = data.blockedDomains || {};
     const alertsSent = data.alertsSent || {};
     const snoozedDomains = data.snoozedDomains || {};
@@ -1059,7 +1487,7 @@ async function removeDomain(domain) {
     deleteEntriesForDomain(blockedDomains, normalized);
     deleteEntriesForDomain(alertsSent, normalized);
     deleteSnoozeEntriesForDomain(snoozedDomains, normalized);
-    await storageSet({ blockedDomains, alertsSent, snoozedDomains });
+    await chrome.storage.local.set({ blockedDomains, alertsSent, snoozedDomains });
     await send("refreshActionBadge");
     await loadAll();
 }
@@ -1084,10 +1512,10 @@ async function clearSnooze(domain) {
     });
     if (!response?.success) {
         console.error("End pause enforcement failed:", response?.error || "Unknown error");
-        const data = await storageGet(["snoozedDomains"]);
+        const data = await chrome.storage.local.get(["snoozedDomains"]);
         const snoozedDomains = data.snoozedDomains || {};
         deleteSnoozeEntriesForDomain(snoozedDomains, normalized);
-        await storageSet({ snoozedDomains });
+        await chrome.storage.local.set({ snoozedDomains });
     }
     await loadAll();
 }
@@ -1107,6 +1535,45 @@ async function quickAddLimit(domain) {
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
     setFeedback("addFormMsg", `Limit added for ${result.domain}.`);
     await send("refreshActionBadge");
+    await loadAll();
+}
+
+function prefillLimitForm(domain) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return;
+
+    const tab = $("tab2");
+    const input = $("domainInput");
+    if (tab) tab.checked = true;
+    if (input) input.value = normalized;
+    if ($("limitInput") && !$("limitInput").value) $("limitInput").value = state.settings.defaultLimitMinutes;
+    setFeedback("addFormMsg", `Ready to add a limit for ${normalized}.`);
+    input?.focus();
+}
+
+function viewInsightUsage(domain) {
+    const normalized = normalizeDomain(domain);
+    if (!isValidDomain(normalized)) return;
+
+    if ($("tab1")) $("tab1").checked = true;
+    if ($("statRange")) $("statRange").value = "Today";
+    state.selectedHourlyHour = null;
+    renderAll();
+
+    const row = Array.from(document.querySelectorAll("#ranking [data-domain], #rankingByVisits [data-domain]"))
+        .find((candidate) => normalizeDomain(candidate.dataset.domain) === normalized);
+    if (!row) return;
+    row.classList.add("is-highlighted");
+    row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    window.setTimeout(() => row.classList.remove("is-highlighted"), 1200);
+}
+
+async function dismissPersonalInsight(id) {
+    const response = await send("dismissInsight", { id });
+    if (!response?.success) {
+        console.error("Dismiss insight failed:", response?.error || "Unknown error");
+        return;
+    }
     await loadAll();
 }
 
@@ -1174,8 +1641,8 @@ function resetScheduleForm() {
 }
 
 async function removeSchedule(id) {
-    const data = await storageGet(["scheduledBlocks", "activeBlocks"]);
-    await storageSet({
+    const data = await chrome.storage.local.get(["scheduledBlocks", "activeBlocks"]);
+    await chrome.storage.local.set({
         scheduledBlocks: (data.scheduledBlocks || []).filter((block) => block.id !== id),
         activeBlocks: (data.activeBlocks || []).filter((block) => block.id !== id)
     });
@@ -1191,18 +1658,35 @@ async function toggleSchedule(id, enabled) {
 
 function settingsFromForm() {
     const limitNotifications = $("limitNotificationsEnabled");
+    const insightMax = Number($("insightMaxNotificationsPerDay")?.value ?? DEFAULT_SETTINGS.insightMaxNotificationsPerDay);
+    const sensitivity = String($("insightSensitivity")?.value || DEFAULT_SETTINGS.insightSensitivity).toLowerCase();
     return {
         defaultLimitMinutes: Math.max(1, Number($("defaultLimitMinutes")?.value || DEFAULT_SETTINGS.defaultLimitMinutes)),
         use24HourTime: Boolean($("use24HourTime")?.checked),
         limitNotificationsEnabled: limitNotifications
             ? Boolean(limitNotifications.checked)
-            : state.settings.limitNotificationsEnabled !== false
+            : state.settings.limitNotificationsEnabled !== false,
+        personalInsightsEnabled: $("personalInsightsEnabled")
+            ? Boolean($("personalInsightsEnabled").checked)
+            : state.settings.personalInsightsEnabled !== false,
+        insightNotificationsEnabled: $("insightNotificationsEnabled")
+            ? Boolean($("insightNotificationsEnabled").checked)
+            : state.settings.insightNotificationsEnabled !== false,
+        insightMaxNotificationsPerDay: Number.isFinite(insightMax)
+            ? Math.max(0, Math.min(5, Math.round(insightMax)))
+            : DEFAULT_SETTINGS.insightMaxNotificationsPerDay,
+        insightSensitivity: ["low", "normal", "high"].includes(sensitivity)
+            ? sensitivity
+            : DEFAULT_SETTINGS.insightSensitivity
     };
 }
 
 async function persistSettings() {
     state.settings = settingsFromForm();
-    await storageSet({ [SETTINGS_KEY]: state.settings });
+    await chrome.storage.local.set({ [SETTINGS_KEY]: state.settings });
+    if (state.settings.personalInsightsEnabled !== false) {
+        await send("generateInsights", { allowNotifications: false });
+    }
     setFeedback("settingsSavedMsg", "Settings saved");
 }
 
@@ -1265,7 +1749,7 @@ function openWhopCheckout() {
 }
 
 async function handleActivationNotice() {
-    const data = await storageGet([WHOP_ACTIVATION_NOTICE_KEY]);
+    const data = await chrome.storage.local.get([WHOP_ACTIVATION_NOTICE_KEY]);
     if (!data[WHOP_ACTIVATION_NOTICE_KEY]) return;
 
     setActiveTab("tab4");
@@ -1361,7 +1845,7 @@ function showOnboardingStep(step) {
         completed: false,
         version: ONBOARDING_VERSION
     };
-    storageSet({ [ONBOARDING_KEY]: state.onboarding });
+    chrome.storage.local.set({ [ONBOARDING_KEY]: state.onboarding });
 
     setText("onboardingStepCount", `${stepIndex + 1} of ${ONBOARDING_STEPS.length}`);
     setText("onboardingTitle", config.title);
@@ -1402,7 +1886,7 @@ async function completeOnboarding(skipped = false) {
         skipped,
         version: ONBOARDING_VERSION
     };
-    await storageSet({ [ONBOARDING_KEY]: state.onboarding });
+    await chrome.storage.local.set({ [ONBOARDING_KEY]: state.onboarding });
     const overlay = $("onboardingOverlay");
     if (overlay) overlay.style.display = "none";
 }
@@ -1442,6 +1926,11 @@ function bindDelegatedActions() {
         if (action === "edit-schedule") editSchedule(id);
         if (action === "remove-schedule") await removeSchedule(id);
         if (action === "quick-limit" || action === "hour-limit") await quickAddLimit(domain);
+        if (action === "insight-add-limit") prefillLimitForm(domain);
+        if (action === "insight-view-usage") viewInsightUsage(domain);
+        if (action === "dismiss-insight") await dismissPersonalInsight(id);
+        if (action === "insight-prev") moveInsightCarousel(-1);
+        if (action === "insight-next") moveInsightCarousel(1);
         if (action === "hour-schedule") {
             const hour = Number(target.dataset.hour || 0);
             if (domain) {
@@ -1466,6 +1955,10 @@ function bindEvents() {
     $("settingsForm")?.addEventListener("submit", saveSettings);
     $("use24HourTime")?.addEventListener("change", persistSettings);
     $("limitNotificationsEnabled")?.addEventListener("change", persistSettings);
+    $("personalInsightsEnabled")?.addEventListener("change", persistSettings);
+    $("insightNotificationsEnabled")?.addEventListener("change", persistSettings);
+    $("insightMaxNotificationsPerDay")?.addEventListener("change", persistSettings);
+    $("insightSensitivity")?.addEventListener("change", persistSettings);
     $("immutableAdminOverrideBtn")?.addEventListener("click", useImmutableOverride);
     $("verifyWhopBtn")?.addEventListener("click", syncPremium);
     $("manageWhopBtn")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_MANAGE_URL }));
@@ -1493,6 +1986,8 @@ function bindEvents() {
             "allStatsToday",
             "statsHistory",
             "hourlyUsageHistory",
+            PERSONAL_INSIGHTS_KEY,
+            DISMISSED_INSIGHTS_KEY,
             "snoozedDomains",
             "activeBlocks",
             "scheduledBlocks",
@@ -1517,7 +2012,7 @@ function bindEvents() {
 document.addEventListener("DOMContentLoaded", async () => {
     bindEvents();
     renderScheduleDays();
-    await refreshLive();
+    await loadAll({ flush: true, refreshInsights: true });
     await handleActivationNotice();
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
     showOnboardingIfNeeded();
