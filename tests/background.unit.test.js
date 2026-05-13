@@ -35,6 +35,10 @@ const {
   handleActiveLimitWakeup,
   handleActivePageHeartbeat,
   handleWindowFocusChanged,
+  analyzeUsagePatterns,
+  generateInsights,
+  shouldSendNotification,
+  sendPatternNotification,
   ACTIVE_LIMIT_BADGE_ALARM
 } = global;
 
@@ -1580,6 +1584,119 @@ describe('Background helper functions (unit)', () => {
     global.chrome.action.setBadgeText = origSetBadgeText;
     global.chrome.action.setBadgeBackgroundColor = origSetBadgeBackgroundColor;
     global.fetch = origFetch;
+  });
+
+  test('analyzeUsagePatterns detects session, recurring, and increase patterns', () => {
+    const now = new Date(2026, 4, 10, 10, 30).getTime();
+    const dayForOffset = (offset) => {
+      const date = new Date(now);
+      date.setDate(date.getDate() - offset);
+      return localDayKey(date);
+    };
+    const hourlyUsageHistory = {};
+
+    for (let offset = 0; offset < 3; offset += 1) {
+      hourlyUsageHistory[dayForOffset(offset)] = {
+        '10': {
+          timeMs: 8 * 60 * 1000,
+          visits: 1,
+          domains: { 'reddit.com': 8 * 60 * 1000 },
+          domainVisits: { 'reddit.com': 1 }
+        }
+      };
+    }
+
+    const insights = analyzeUsagePatterns({
+      now,
+      settings: { personalInsightsEnabled: true, insightSensitivity: 'normal' },
+      activeSession: {
+        domain: 'youtube.com',
+        startedAt: now - 40 * 60 * 1000,
+        lastHeartbeatAt: now
+      },
+      allStatsToday: {
+        'youtube.com': { timeMs: 50 * 60 * 1000, visits: 2 }
+      },
+      statsHistory: {
+        [dayForOffset(1)]: { 'youtube.com': { timeMs: 12 * 60 * 1000, visits: 1 } },
+        [dayForOffset(2)]: { 'youtube.com': { timeMs: 10 * 60 * 1000, visits: 1 } },
+        [dayForOffset(3)]: { 'youtube.com': { timeMs: 11 * 60 * 1000, visits: 1 } }
+      },
+      hourlyUsageHistory,
+      blockedDomains: {}
+    });
+
+    expect(insights.map((insight) => insight.type)).toEqual(expect.arrayContaining([
+      'long_session',
+      'recurring_time_block',
+      'usage_increase'
+    ]));
+  });
+
+  test('generateInsights stores insights and caps pattern notifications', async () => {
+    const now = new Date(2026, 4, 10, 11, 0).getTime();
+    const dayForOffset = (offset) => {
+      const date = new Date(now);
+      date.setDate(date.getDate() - offset);
+      return localDayKey(date);
+    };
+    const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+    const storage = {
+      data: {
+        statsDayKey: dayForOffset(0),
+        statsToday: { 'youtube.com': { timeMs: 45 * 60 * 1000, visits: 2 } },
+        allStatsToday: { 'youtube.com': { timeMs: 45 * 60 * 1000, visits: 2 } },
+        statsHistory: {
+          [dayForOffset(1)]: { 'youtube.com': { timeMs: 10 * 60 * 1000, visits: 1 } },
+          [dayForOffset(2)]: { 'youtube.com': { timeMs: 12 * 60 * 1000, visits: 1 } },
+          [dayForOffset(3)]: { 'youtube.com': { timeMs: 11 * 60 * 1000, visits: 1 } }
+        },
+        hourlyUsageHistory: {},
+        blockedDomains: {},
+        activeSession: {
+          domain: 'youtube.com',
+          startedAt: now - 40 * 60 * 1000,
+          lastHeartbeatAt: now
+        },
+        personalInsights: [],
+        dismissedInsights: {},
+        insightNotificationHistory: {},
+        insightNotificationDaily: {},
+        uiSettings: {
+          personalInsightsEnabled: true,
+          insightNotificationsEnabled: true,
+          insightMaxNotificationsPerDay: 1,
+          insightSensitivity: 'normal'
+        }
+      },
+      async get(keys) {
+        const out = {};
+        for (const k of keys) out[k] = clone(this.data[k]);
+        return out;
+      },
+      async set(items) {
+        Object.assign(this.data, clone(items));
+        return items;
+      }
+    };
+
+    const origStorage = global.chrome.storage.local;
+    const origNotificationCreate = global.chrome.notifications.create;
+    global.chrome.storage.local = storage;
+    global.chrome.notifications.create = jest.fn(async () => 'notification-id');
+
+    const result = await generateInsights({ now, allowNotifications: true });
+    expect(result.success).toBe(true);
+    expect(storage.data.personalInsights.length).toBeGreaterThan(0);
+    expect(global.chrome.notifications.create).toHaveBeenCalledTimes(1);
+
+    const notified = storage.data.personalInsights.find((insight) => insight.notify);
+    expect(await shouldSendNotification(notified, { now: now + 1000 })).toBe(false);
+    expect(await sendPatternNotification(notified, { now: now + 1000 })).toBe(false);
+    expect(global.chrome.notifications.create).toHaveBeenCalledTimes(1);
+
+    global.chrome.storage.local = origStorage;
+    global.chrome.notifications.create = origNotificationCreate;
   });
 
   test('overnight scheduled blocks stay active after midnight', () => {

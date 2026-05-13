@@ -19,15 +19,112 @@ function dayKeyOffset(offset) {
     return dayKey(date);
 }
 
+function insightMockUsageData() {
+    const today = dayKey();
+    const yesterday = dayKeyOffset(1);
+    const twoDaysAgo = dayKeyOffset(2);
+    const threeDaysAgo = dayKeyOffset(3);
+    const hour = new Date().getHours();
+    const hourKey = String(hour).padStart(2, '0');
+
+    return {
+        uiSettings: {
+            defaultLimitMinutes: 30,
+            use24HourTime: false,
+            limitNotificationsEnabled: true,
+            personalInsightsEnabled: true,
+            insightNotificationsEnabled: true,
+            insightMaxNotificationsPerDay: 1,
+            insightSensitivity: 'normal'
+        },
+        activeSession: {
+            domain: 'youtube.com',
+            startedAt: Date.now() - 40 * 60 * 1000,
+            lastHeartbeatAt: Date.now()
+        },
+        statsToday: {
+            'youtube.com': { timeMs: 50 * 60 * 1000, visits: 4 },
+            'reddit.com': { timeMs: 22 * 60 * 1000, visits: 9 },
+            'linkedin.com': { timeMs: 12 * 60 * 1000, visits: 1 }
+        },
+        allStatsToday: {
+            'youtube.com': { timeMs: 50 * 60 * 1000, visits: 4 },
+            'reddit.com': { timeMs: 22 * 60 * 1000, visits: 9 },
+            'linkedin.com': { timeMs: 12 * 60 * 1000, visits: 1 }
+        },
+        statsHistory: {
+            [yesterday]: {
+                'youtube.com': { timeMs: 10 * 60 * 1000, visits: 1 },
+                'linkedin.com': { timeMs: 12 * 60 * 1000, visits: 1 }
+            },
+            [twoDaysAgo]: {
+                'youtube.com': { timeMs: 11 * 60 * 1000, visits: 1 },
+                'linkedin.com': { timeMs: 12 * 60 * 1000, visits: 1 }
+            },
+            [threeDaysAgo]: {
+                'youtube.com': { timeMs: 12 * 60 * 1000, visits: 1 }
+            }
+        },
+        hourlyUsageHistory: {
+            [today]: {
+                '09': {
+                    timeMs: 8 * 60 * 1000,
+                    visits: 1,
+                    domains: { 'linkedin.com': 8 * 60 * 1000 },
+                    domainVisits: { 'linkedin.com': 1 }
+                },
+                [hourKey]: {
+                    timeMs: 32 * 60 * 1000,
+                    visits: 12,
+                    domains: {
+                        'youtube.com': 22 * 60 * 1000,
+                        'reddit.com': 10 * 60 * 1000
+                    },
+                    domainVisits: {
+                        'youtube.com': 3,
+                        'reddit.com': 9
+                    }
+                }
+            },
+            [yesterday]: {
+                '09': {
+                    timeMs: 8 * 60 * 1000,
+                    visits: 1,
+                    domains: { 'linkedin.com': 8 * 60 * 1000 },
+                    domainVisits: { 'linkedin.com': 1 }
+                }
+            },
+            [twoDaysAgo]: {
+                '09': {
+                    timeMs: 8 * 60 * 1000,
+                    visits: 1,
+                    domains: { 'linkedin.com': 8 * 60 * 1000 },
+                    domainVisits: { 'linkedin.com': 1 }
+                }
+            }
+        },
+        personalInsights: [],
+        dismissedInsights: {},
+        blockedDomains: {},
+        snoozedDomains: {}
+    };
+}
+
 async function installPopupChromeMock(page, overrides = {}) {
-    await page.addInitScript(({ today, overrides }) => {
+    const insightsSource = fs.readFileSync(path.join(process.cwd(), 'insights.js'), 'utf8');
+    await page.addInitScript(({ today, overrides, insightsSource }) => {
+        window.eval(insightsSource);
         const listeners = [];
         const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
         const data = {
             uiSettings: {
                 defaultLimitMinutes: 30,
                 use24HourTime: false,
-                limitNotificationsEnabled: true
+                limitNotificationsEnabled: true,
+                personalInsightsEnabled: true,
+                insightNotificationsEnabled: true,
+                insightMaxNotificationsPerDay: 1,
+                insightSensitivity: 'normal'
             },
             onboardingState: { step: 0, completed: true, completedAt: Date.now(), version: 2 },
             blockedDomains: {},
@@ -58,6 +155,8 @@ async function installPopupChromeMock(page, overrides = {}) {
             snoozedDomains: {
                 'www.alpha.com': { expiresAt: Date.now() + 10 * 60 * 1000, minutes: 5 }
             },
+            personalInsights: [],
+            dismissedInsights: {},
             activeBlocks: [],
             scheduledBlocks: [],
             premiumState: { active: false, planName: 'Free' },
@@ -123,6 +222,32 @@ async function installPopupChromeMock(page, overrides = {}) {
                         for (const key of keys) data.blockedDomains[key].enabled = message.enabled !== false;
                         if (!keys.length) return { success: false, error: 'Domain not found.' };
                     }
+                    if (message?.action === 'generateInsights') {
+                        const now = Number(message.now || Date.now());
+                        const insights = window.StmInsights.analyzeUsagePatterns({
+                            statsToday: data.statsToday || {},
+                            allStatsToday: data.allStatsToday || data.statsToday || {},
+                            statsHistory: data.statsHistory || {},
+                            hourlyUsageHistory: data.hourlyUsageHistory || {},
+                            blockedDomains: data.blockedDomains || {},
+                            activeSession: data.activeSession || null,
+                            settings: data.uiSettings || {},
+                            now
+                        });
+                        emitStorageChanges({
+                            personalInsights: insights,
+                            dismissedInsights: data.dismissedInsights || {},
+                            lastInsightAnalysisAt: now
+                        });
+                        return { success: true, insights: clone(insights) };
+                    }
+                    if (message?.action === 'dismissInsight') {
+                        const id = String(message.id || '');
+                        const dismissedInsights = { ...(data.dismissedInsights || {}), [id]: Date.now() };
+                        const personalInsights = (data.personalInsights || []).filter((insight) => insight?.id !== id);
+                        emitStorageChanges({ dismissedInsights, personalInsights });
+                        return { success: true, id };
+                    }
                     return { success: true };
                 }
             },
@@ -133,13 +258,22 @@ async function installPopupChromeMock(page, overrides = {}) {
                         for (const key of keys) result[key] = clone(data[key]);
                         return result;
                     },
-                    set: async (items) => emitStorageChanges(items)
+                    set: async (items) => emitStorageChanges(items),
+                    remove: async (keys) => {
+                        const list = Array.isArray(keys) ? keys : [keys];
+                        const changes = {};
+                        for (const key of list) {
+                            changes[key] = { oldValue: clone(data[key]), newValue: undefined };
+                            delete data[key];
+                        }
+                        listeners.forEach((listener) => listener(changes, 'local'));
+                    }
                 },
                 onChanged: { addListener: (listener) => listeners.push(listener) }
             },
             tabs: { create: async () => ({}) }
         };
-    }, { today: dayKey(), overrides });
+    }, { today: dayKey(), overrides, insightsSource });
 }
 
 test('storage updates from active website flush do not trap popup in a refresh loop', async ({ page }) => {
@@ -276,6 +410,71 @@ test('popup dashboard actions add limits, end pauses, and switch hourly bars', a
     await expect.poll(() => page.evaluate(() => window.__popupData.blockedDomains['alpha.com']?.limitSeconds)).toBe(1800);
     await expect(page.locator('#tab1')).toBeChecked();
     await expect(page.locator('#limitList')).toContainText('alpha.com');
+});
+
+test('fresh install with no usage history does not show insights', async ({ page }) => {
+    await installPopupChromeMock(page, {
+        uiSettings: {
+            defaultLimitMinutes: 30,
+            use24HourTime: false,
+            limitNotificationsEnabled: true,
+            personalInsightsEnabled: true,
+            insightNotificationsEnabled: true,
+            insightMaxNotificationsPerDay: 1,
+            insightSensitivity: 'normal'
+        },
+        blockedDomains: {},
+        statsToday: {},
+        allStatsToday: {},
+        statsHistory: {},
+        hourlyUsageHistory: {},
+        snoozeHistory: {},
+        snoozedDomains: {},
+        personalInsights: [],
+        dismissedInsights: {},
+        activeSession: null,
+        activeBlocks: [],
+        scheduledBlocks: []
+    });
+
+    await page.goto(popupUrl());
+
+    await expect.poll(() => page.evaluate(() => (
+        window.__popupMessages.some((message) => message.action === 'generateInsights')
+    ))).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.__popupData.personalInsights?.length || 0)).toBe(0);
+    await expect(page.locator('#personalInsightsCard')).toBeHidden();
+    await expect(page.locator('#personalInsightsList')).toBeEmpty();
+});
+
+test('mock insight data populates real insights and insight Add Limit saves a limit', async ({ page }) => {
+    await installPopupChromeMock(page, insightMockUsageData());
+
+    await page.goto(popupUrl());
+
+    await expect(page.locator('#personalInsightsCard')).toBeVisible();
+    await expect(page.locator('#personalInsightsNav')).toContainText('1 / 4');
+    await expect(page.locator('#personalInsightsList')).not.toContainText('Preview insight');
+
+    const insightRow = page.locator('#personalInsightsList .insight-row').first();
+    await expect(insightRow).toBeVisible();
+    await expect(insightRow.locator('.insight-stat-headline')).toContainText(/YouTube|Reddit|LinkedIn/);
+    await expect(insightRow.locator('.insight-stat-subheading')).not.toHaveText('');
+
+    const insightDomain = await insightRow.getAttribute('data-domain');
+    await insightRow.locator('[data-action="insight-add-limit"]').click();
+
+    await expect(page.locator('#tab2')).toBeChecked();
+    await expect(page.locator('#domainInput')).toHaveValue(insightDomain);
+    await expect(page.locator('#limitInput')).toHaveValue('30');
+
+    await page.locator('#limitTier').selectOption('strict');
+    await page.locator('#addForm button[type="submit"]').click();
+
+    await expect.poll(() => page.evaluate((domain) => window.__popupData.blockedDomains[domain], insightDomain))
+        .toMatchObject({ enabled: true, limitSeconds: 1800, tier: 'strict' });
+    await expect(page.locator('#addFormMsg')).toContainText('Limit saved.');
+    await expect(page.locator('#limitList')).toContainText(insightDomain);
 });
 
 test('limit list switches and remove buttons work from visible controls', async ({ page }) => {

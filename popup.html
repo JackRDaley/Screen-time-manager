@@ -125,6 +125,17 @@
                 </div>
             </div>
 
+            <div class="card dashboard-card-hidden" id="personalInsightsCard" hidden>
+                <div class="card-head">
+                    <div class="card-title card-title-with-icon">
+                        <img class="card-title-icon" src="assets/stars.png" alt="" />
+                        <span>Personal Insights</span>
+                    </div>
+                    <div id="personalInsightsNav" class="insight-header-nav" aria-label="Insight carousel controls"></div>
+                </div>
+                <div id="personalInsightsList" class="list"></div>
+            </div>
+
             <div class="card" id="activeCard" data-hide-if-empty="true">
                 <div class="card-head">
                     <div class="card-title">Active Blocks</div>
@@ -297,6 +308,30 @@
                             <div class="settings-row">
                                 <label class="settings-label" for="limitNotificationsEnabled">Limit notifications</label>
                                 <input id="limitNotificationsEnabled" class="settings-toggle" type="checkbox" />
+                            </div>
+
+                            <div class="settings-row">
+                                <label class="settings-label" for="personalInsightsEnabled">Personal insights</label>
+                                <input id="personalInsightsEnabled" class="settings-toggle" type="checkbox" />
+                            </div>
+
+                            <div class="settings-row">
+                                <label class="settings-label" for="insightNotificationsEnabled">Insight notifications</label>
+                                <input id="insightNotificationsEnabled" class="settings-toggle" type="checkbox" />
+                            </div>
+
+                            <div class="settings-row">
+                                <label class="settings-label" for="insightMaxNotificationsPerDay">Max insight notifications per day</label>
+                                <input id="insightMaxNotificationsPerDay" class="input input-min settings-number" type="number" min="0" max="5" />
+                            </div>
+
+                            <div class="settings-row">
+                                <label class="settings-label" for="insightSensitivity">Insight sensitivity</label>
+                                <select id="insightSensitivity" class="input settings-select">
+                                    <option value="low">Low</option>
+                                    <option value="normal">Normal</option>
+                                    <option value="high">High</option>
+                                </select>
                             </div>
 
                         </div>
