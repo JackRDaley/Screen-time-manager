@@ -1,13 +1,13 @@
 {
     "manifest_version": 3,
-    "name": "Screen Time Manager",
-    "version": "2.2.9",
-    "description": "Block distracting websites, set daily time limits, and track your screen time and visit history — all without leaving your browser.",
+    "name": "Screen Time Manager - Website Blocker and Focus Tool",
+    "version": "2.2.10",
+    "description": "Screen Time Manager helps you understand your browsing habits, set limits on distracting websites, and stay focused without leaving Chrome. See where your time goes, how often you revisit distracting sites, and when your usage patterns start becoming routines. Then set daily limits or scheduled blocks to take control before distractions take over.",
     "icons": {
-        "16": "assets/icons/extension_icon.png",
-        "32": "assets/icons/extension_icon.png",
-        "48": "assets/icons/extension_icon.png",
-        "128": "assets/icons/extension_icon.png"
+        "16": "new_logo.png",
+        "32": "new_logo.png",
+        "48": "new_logo.png",
+        "128": "new_logo.png"
     },
     "action": {
         "default_title": "Screen Time Manager",

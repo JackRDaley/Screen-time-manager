@@ -81,10 +81,11 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 
 ## Google Analytics Tracking
 
-Blocked-page redirects can be tracked with GA4 through the Cloudflare Worker.
+Blocked-page redirects and blocked-page actions can be tracked with GA4 through the Cloudflare Worker.
 
 - The extension sends one anonymous event per redirect to `/analytics/block-event`.
-- The Worker forwards that event to GA4 using the Measurement Protocol.
+- The extension sends low-cardinality blocked-page actions to `/analytics/event`.
+- The Worker forwards those events to GA4 using the Measurement Protocol.
 - No GA secret is stored in the extension.
 
 To enable it:
@@ -100,13 +101,25 @@ To enable it:
   ```
 4. Deploy the Worker again.
 
-The emitted GA4 event name is `blocked_page_view` and includes:
+The main emitted GA4 events are:
 
-- `block_source` (`limit` or `scheduled`)
+- `blocked_page_view`
+- `blocked_page_action`
+- `post_install_redirect_shown`
+- `post_install_redirect_failed`
+
+Recommended event-scoped custom dimensions:
+
 - `extension_version`
-- `redirect_event_id`
+- `block_source` (`limit` or `scheduled`)
+- `block_tier` (`lenient`, `standard`, `strict`, or `immutable`)
+- `action`
+- `install_reason`
+- `error_name`
 
-Use GA4's Active Users metric against this event if you want a rough measure of how many installs are still hitting real blocks.
+Avoid registering unique or high-cardinality values such as redirect IDs, domains, raw URLs, or client IDs as custom dimensions.
+
+Use GA4's Active Users metric against `blocked_page_view` if you want a rough measure of how many installs are still hitting real blocks.
 
 ---
 

@@ -38,15 +38,26 @@
         </section>
     </div>
 
-    <input type="radio" name="tabs" id="tab1" checked />
-    <input type="radio" name="tabs" id="tab2" />
-    <input type="radio" name="tabs" id="tab3" />
-    <input type="radio" name="tabs" id="tab4" />
+    <section id="reviewPromptToast" class="review-toast" role="dialog" aria-modal="false" aria-labelledby="reviewToastTitle" hidden>
+        <button id="dismissReviewToastBtn" class="review-toast-close" type="button" aria-label="Dismiss review prompt">&times;</button>
+        <div id="reviewToastTitle" class="review-toast-title">Enjoying Screen Time Manager?</div>
+        <div class="review-toast-text">A quick review helps others discover it and lets us know what to improve.</div>
+        <div class="review-toast-actions">
+            <button class="btn btn-gradient" id="leaveReviewToastBtn" type="button">Leave Review</button>
+            <button class="btn-ghost review-toast-secondary" id="notNowReviewToastBtn" type="button">Not now</button>
+        </div>
+    </section>
+
+    <input type="radio" name="tabs" id="tab1" checked/>
+    <input type="radio" name="tabs" id="tab2"/>
+    <input type="radio" name="tabs" id="tab3"/>
+    <input type="radio" name="tabs" id="tab4"/>
 
     <header>
         <div class="logo">
+            <img class="logo-mark" src="new_logo.png" alt="" aria-hidden="true" />
             <div>
-                <div class="logo-name">Screen Time</div>
+                <div class="logo-name">Screen Time Manager</div>
                 <div class="logo-sub">Focus &amp; Limits Manager</div>
             </div>
         </div>

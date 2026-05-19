@@ -86,6 +86,16 @@ header {
     align-items: center;
     gap: 9px;
     order: 1;
+    min-width: 0;
+}
+
+.logo-mark {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    object-fit: cover;
+    flex-shrink: 0;
+    box-shadow: 0 6px 14px rgba(34,217,255,.12);
 }
 
 .logo-name {
@@ -96,6 +106,9 @@ header {
     background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .logo-sub {
@@ -2235,6 +2248,128 @@ body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
     border-color: rgba(255,255,255,.16);
     background: rgba(255,255,255,.08);
     color: rgba(237,242,255,.62);
+}
+
+.review-toast {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 60;
+    width: min(356px, calc(100% - 24px));
+    padding: 13px;
+    border-radius: var(--r-card);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.105), rgba(255,255,255,.052)),
+        linear-gradient(135deg, rgba(139,111,255,.22), rgba(34,217,255,.16)),
+        rgba(11,15,27,.96);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.11),
+        inset 0 0 0 1px rgba(255,255,255,.07),
+        0 18px 34px rgba(0,0,0,.42);
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 12px)) scale(.98);
+    transition: opacity .18s ease, transform .18s ease;
+}
+
+.review-toast[hidden] {
+    display: none;
+}
+
+.review-toast.is-visible {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.review-toast-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 50%;
+    background: rgba(255,255,255,.06);
+    color: rgba(237,242,255,.74);
+    font-family: inherit;
+    font-size: 0;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.review-toast-close::before,
+.review-toast-close::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 11px;
+    height: 2px;
+    border-radius: 999px;
+    background: currentColor;
+    transform-origin: center;
+}
+
+.review-toast-close::before {
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.review-toast-close::after {
+    transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.review-toast-close:hover,
+.review-toast-close:focus-visible {
+    color: var(--text);
+    border-color: rgba(255,255,255,.22);
+    outline: none;
+}
+
+.review-toast-kicker {
+    margin-right: 28px;
+    color: var(--cyan);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .10em;
+    line-height: 1.1;
+    text-transform: uppercase;
+}
+
+.review-toast-title {
+    margin: 5px 28px 0 0;
+    color: rgba(255,255,255,.97);
+    font-size: 16px;
+    font-weight: 850;
+    line-height: 1.2;
+}
+
+.review-toast-text {
+    margin: 5px 28px 0 0;
+    color: rgba(237,242,255,.72);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.42;
+}
+
+.review-toast-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    margin-top: 11px;
+}
+
+.review-toast-actions .btn {
+    min-height: 36px;
+}
+
+.review-toast-secondary {
+    min-height: 36px;
+    padding: 8px 12px;
+    border-radius: 10px;
 }
 
 .billing-note {
