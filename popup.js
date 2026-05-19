@@ -18,6 +18,10 @@ const ONBOARDING_VERSION = 2;
 const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
 const WHOP_CHECKOUT_START_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/start";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
+const CHROME_WEBSTORE_REVIEW_URL = "https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo/reviews";
+const REVIEW_PROMPT_STATE_KEY = "reviewPromptState";
+const REVIEW_PROMPT_FIRST_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
+const REVIEW_PROMPT_INTERVAL_MS = 14 * 24 * 60 * 60 * 1000;
 const LIVE_REFRESH_INTERVAL_MS = 1000;
 const LIVE_REFRESH_MOTION_SUPPRESSION_MS = 120;
 const HOURLY_BAR_MIN_ACTIVE_HEIGHT_PCT = 6;
@@ -1415,6 +1419,7 @@ async function loadAll(options = {}) {
         "scheduledBlocks",
         SETTINGS_KEY,
         PREMIUM_KEY,
+        REVIEW_PROMPT_STATE_KEY,
         ONBOARDING_KEY,
         "immutableAdminOverrideEnabled"
     ]);
@@ -1748,6 +1753,82 @@ function openWhopCheckout() {
     chrome.tabs.create({ url: whopCheckoutStartUrl() });
 }
 
+function reviewPromptState() {
+    const value = state.data[REVIEW_PROMPT_STATE_KEY];
+    return value && typeof value === "object" ? value : {};
+}
+
+async function persistReviewPromptState(patch = {}) {
+    const now = Date.now();
+    const next = {
+        ...reviewPromptState(),
+        ...patch,
+        updatedAt: now
+    };
+    await chrome.storage.local.set({ [REVIEW_PROMPT_STATE_KEY]: next });
+    state.data[REVIEW_PROMPT_STATE_KEY] = next;
+    return next;
+}
+
+function showReviewPromptToast() {
+    const toast = $("reviewPromptToast");
+    if (!toast) return;
+    toast.hidden = false;
+    requestAnimationFrame(() => toast.classList.add("is-visible"));
+}
+
+function hideReviewPromptToast() {
+    const toast = $("reviewPromptToast");
+    if (!toast) return;
+    toast.classList.remove("is-visible");
+    window.setTimeout(() => {
+        toast.hidden = true;
+    }, 180);
+}
+
+async function maybeShowReviewPromptToast() {
+    const prompt = reviewPromptState();
+    const now = Date.now();
+    if (prompt.reviewedAt) return;
+
+    const nextPromptAt = Number(prompt.nextPromptAt || 0);
+    if (!nextPromptAt) {
+        await persistReviewPromptState({
+            createdAt: Number(prompt.createdAt || now),
+            nextPromptAt: now + REVIEW_PROMPT_FIRST_DELAY_MS,
+            shownCount: Number(prompt.shownCount || 0)
+        });
+        return;
+    }
+
+    if (nextPromptAt > now) return;
+
+    showReviewPromptToast();
+    await persistReviewPromptState({
+        lastShownAt: now,
+        nextPromptAt: now + REVIEW_PROMPT_INTERVAL_MS,
+        shownCount: Number(prompt.shownCount || 0) + 1
+    });
+}
+
+async function deferReviewPromptToast() {
+    const now = Date.now();
+    await persistReviewPromptState({
+        dismissedAt: now,
+        nextPromptAt: now + REVIEW_PROMPT_INTERVAL_MS
+    });
+    hideReviewPromptToast();
+}
+
+async function openChromeWebStoreReview() {
+    chrome.tabs.create({ url: CHROME_WEBSTORE_REVIEW_URL });
+    await persistReviewPromptState({
+        reviewedAt: Date.now(),
+        nextPromptAt: null
+    });
+    hideReviewPromptToast();
+}
+
 async function handleActivationNotice() {
     const data = await chrome.storage.local.get([WHOP_ACTIVATION_NOTICE_KEY]);
     if (!data[WHOP_ACTIVATION_NOTICE_KEY]) return;
@@ -1873,9 +1954,10 @@ function showOnboardingStep(step) {
 
 function showOnboardingIfNeeded() {
     const overlay = $("onboardingOverlay");
-    if (!overlay || !onboardingShouldShow()) return;
+    if (!overlay || !onboardingShouldShow()) return false;
     overlay.style.display = "block";
     showOnboardingStep(selectedOnboardingStep());
+    return true;
 }
 
 async function completeOnboarding(skipped = false) {
@@ -1964,6 +2046,9 @@ function bindEvents() {
     $("manageWhopBtn")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_MANAGE_URL }));
     $("upgradeBtnFromLimits")?.addEventListener("click", openWhopCheckout);
     $("upgradeBtnFromSchedule")?.addEventListener("click", openWhopCheckout);
+    $("leaveReviewToastBtn")?.addEventListener("click", openChromeWebStoreReview);
+    $("dismissReviewToastBtn")?.addEventListener("click", deferReviewPromptToast);
+    $("notNowReviewToastBtn")?.addEventListener("click", deferReviewPromptToast);
     $("linkWhopTokenBtn")?.addEventListener("click", linkWhopToken);
     $("manualWhopToken")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") linkWhopToken();
@@ -1992,7 +2077,8 @@ function bindEvents() {
             "activeBlocks",
             "scheduledBlocks",
             SETTINGS_KEY,
-            PREMIUM_KEY
+            PREMIUM_KEY,
+            REVIEW_PROMPT_STATE_KEY
         ];
         const changedWatchedKeys = watched.filter((key) => Object.prototype.hasOwnProperty.call(changes, key));
         if (changedWatchedKeys.length) {
@@ -2015,7 +2101,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadAll({ flush: true, refreshInsights: true });
     await handleActivationNotice();
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
-    showOnboardingIfNeeded();
+    const onboardingShown = showOnboardingIfNeeded();
+    if (!onboardingShown) await maybeShowReviewPromptToast();
     setInterval(refreshLive, LIVE_REFRESH_INTERVAL_MS);
 });
 

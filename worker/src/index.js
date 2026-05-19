@@ -2,16 +2,20 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function json(data, status = 200, extraHeaders = {}) {
-    return new Response(JSON.stringify(data), {
-        status,
-        headers: {
+    const headers = {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
         ...extraHeaders
-        }
-    });
+    };
+
+    if (status === 204 || data == null) {
+        delete headers["Content-Type"];
+        return new Response(null, { status, headers });
+    }
+
+    return new Response(JSON.stringify(data), { status, headers });
 }
 
 function getRequestOrigin(request) {
@@ -21,6 +25,29 @@ function getRequestOrigin(request) {
 function isTrustedExtensionOrigin(origin) {
     return /^chrome-extension:\/\/[a-p]{32}$/i.test(String(origin || ""));
 }
+
+const ANALYTICS_ALLOWED_EVENTS = new Set([
+    "blocked_page_view",
+    "blocked_page_action",
+    "post_install_redirect_shown",
+    "post_install_redirect_failed",
+    "extension_install",
+    "extension_update",
+    "review_prompt_shown",
+    "review_prompt_action"
+]);
+
+const ANALYTICS_ALLOWED_PARAMS = new Set([
+    "action",
+    "block_source",
+    "block_tier",
+    "extension_version",
+    "install_reason",
+    "error_name"
+]);
+
+const ANALYTICS_BLOCK_SOURCES = new Set(["limit", "scheduled", "unknown"]);
+const ANALYTICS_BLOCK_TIERS = new Set(["lenient", "standard", "strict", "immutable", "unknown"]);
 
 function bytesToBase64Url(bytes) {
     let binary = "";
@@ -560,6 +587,11 @@ function sanitizeAnalyticsEventName(value, fallback = "extension_event") {
     return normalized.slice(0, 40);
 }
 
+function sanitizeAnalyticsEnum(value, allowedValues, fallback = "unknown") {
+    const normalized = sanitizeAnalyticsEventName(value, fallback);
+    return allowedValues.has(normalized) ? normalized : fallback;
+}
+
 function sanitizeAnalyticsParams(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
         return {};
@@ -570,7 +602,7 @@ function sanitizeAnalyticsParams(value) {
 
     for (const [rawKey, rawValue] of entries) {
         const key = sanitizeAnalyticsEventName(rawKey, "param");
-        if (!key) continue;
+        if (!key || !ANALYTICS_ALLOWED_PARAMS.has(key)) continue;
 
         if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
             sanitized[key] = rawValue;
@@ -1153,9 +1185,9 @@ export default {
             eventName: "blocked_page_view",
             clientId,
             params: {
-                block_source: sanitizeAnalyticsText(body?.source, "unknown", 40),
-                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
-                redirect_event_id: sanitizeAnalyticsText(body?.eventId, "missing", 64)
+                block_source: sanitizeAnalyticsEnum(body?.source, ANALYTICS_BLOCK_SOURCES),
+                block_tier: sanitizeAnalyticsEnum(body?.tier, ANALYTICS_BLOCK_TIERS),
+                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32)
             }
         };
         logAnalyticsDebug(env, "[analytics/block-event] forwarding", blockEventPayload);
@@ -1197,6 +1229,13 @@ export default {
         }
 
         const eventName = sanitizeAnalyticsEventName(body?.eventName, "extension_event");
+        if (!ANALYTICS_ALLOWED_EVENTS.has(eventName)) {
+            return json({ error: "Unsupported eventName" }, 400, {
+                "Access-Control-Allow-Origin": requestOrigin,
+                "Vary": "Origin"
+            });
+        }
+
         const params = {
             engagement_time_msec: 1,
             extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),

@@ -69,6 +69,17 @@ function normalizedTierName() {
     return TIER_LABELS[tier] ? tier : "lenient";
 }
 
+function normalizedBlockSource() {
+    return source === "scheduled" ? "scheduled" : "limit";
+}
+
+function blockAnalyticsParams() {
+    return {
+        block_source: normalizedBlockSource(),
+        block_tier: normalizedTierName()
+    };
+}
+
 function setBadgeText() {
     const tierName = normalizedTierName();
     const sourceLabel = source === "scheduled" ? "Scheduled block" : "Limit reached";
@@ -90,11 +101,37 @@ function trackBlockedPageAction(action) {
         eventName: "blocked_page_action",
         params: {
             action,
-            domain_host: d,
-            block_source: source,
-            redirect_event_id: eventId || "none"
+            ...blockAnalyticsParams()
         }
     }).catch(() => null);
+}
+
+async function trackBlockedPageView() {
+    if (typeof getOrCreateAnalyticsClientId !== "function") return;
+
+    const trackerKey = `${BLOCK_EVENT_TRACKER_KEY}:${eventId || location.href}`;
+    try {
+        if (sessionStorage.getItem(trackerKey)) return;
+        sessionStorage.setItem(trackerKey, "1");
+    } catch {
+        // Best effort only; analytics should never affect the block page.
+    }
+
+    try {
+        const clientId = await getOrCreateAnalyticsClientId(chrome.storage.local);
+        await fetch(BLOCK_ANALYTICS_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                clientId,
+                extensionVersion: chrome.runtime.getManifest?.().version || "unknown",
+                source: normalizedBlockSource(),
+                tier: normalizedTierName()
+            })
+        });
+    } catch {
+        // Analytics should never interrupt extension behavior.
+    }
 }
 
 function renderStandardSnoozeButtons(container, increments = [5, 15, 30]) {
@@ -612,4 +649,4 @@ document.getElementById("closeTabBtn").addEventListener("click", async () => {
 setDomainText();
 setBadgeText();
 renderTierActions();
-
+trackBlockedPageView();
