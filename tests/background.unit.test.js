@@ -1615,12 +1615,13 @@ describe('Background helper functions (unit)', () => {
         lastHeartbeatAt: now
       },
       allStatsToday: {
-        'youtube.com': { timeMs: 50 * 60 * 1000, visits: 2 }
+        'youtube.com': { timeMs: 40 * 60 * 1000, visits: 2 },
+        'linkedin.com': { timeMs: 50 * 60 * 1000, visits: 2 }
       },
       statsHistory: {
-        [dayForOffset(1)]: { 'youtube.com': { timeMs: 12 * 60 * 1000, visits: 1 } },
-        [dayForOffset(2)]: { 'youtube.com': { timeMs: 10 * 60 * 1000, visits: 1 } },
-        [dayForOffset(3)]: { 'youtube.com': { timeMs: 11 * 60 * 1000, visits: 1 } }
+        [dayForOffset(1)]: { 'linkedin.com': { timeMs: 12 * 60 * 1000, visits: 1 } },
+        [dayForOffset(2)]: { 'linkedin.com': { timeMs: 10 * 60 * 1000, visits: 1 } },
+        [dayForOffset(3)]: { 'linkedin.com': { timeMs: 11 * 60 * 1000, visits: 1 } }
       },
       hourlyUsageHistory,
       blockedDomains: {}
@@ -1631,6 +1632,7 @@ describe('Background helper functions (unit)', () => {
       'recurring_time_block',
       'usage_increase'
     ]));
+    expect(new Set(insights.map((insight) => insight.domain)).size).toBe(insights.length);
   });
 
   test('generateInsights stores insights and caps pattern notifications', async () => {
@@ -1697,6 +1699,145 @@ describe('Background helper functions (unit)', () => {
 
     global.chrome.storage.local = origStorage;
     global.chrome.notifications.create = origNotificationCreate;
+  });
+
+  test('generateInsights replaces stale stored insights with current patterns', async () => {
+    const now = new Date(2026, 4, 10, 11, 0).getTime();
+    const today = localDayKey(new Date(now));
+    const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+    const storage = {
+      data: {
+        statsDayKey: today,
+        statsToday: { 'youtube.com': { timeMs: 45 * 60 * 1000, visits: 2 } },
+        allStatsToday: { 'youtube.com': { timeMs: 45 * 60 * 1000, visits: 2 } },
+        statsHistory: {},
+        hourlyUsageHistory: {},
+        blockedDomains: {},
+        activeSession: {
+          domain: 'youtube.com',
+          startedAt: now - 40 * 60 * 1000,
+          lastHeartbeatAt: now
+        },
+        personalInsights: [
+          {
+            id: `long_session:amazon.com:${today}`,
+            type: 'long_session',
+            domain: 'amazon.com',
+            title: 'Amazon is holding your attention right now',
+            message: 'Active for 148 minutes straight',
+            priority: 100,
+            timestamp: now - 60 * 60 * 1000,
+            dateKey: today,
+            context: { durationMs: 148 * 60 * 1000 }
+          },
+          {
+            id: `legacy-google-id:${today}`,
+            type: 'limit_suggestion',
+            domain: 'google.com',
+            title: 'Google has been a frequent stop this week',
+            message: 'Active after 9pm on 5 of the last 7 days',
+            priority: 95,
+            timestamp: now - 30 * 60 * 1000,
+            dateKey: today,
+            context: { activeDays: 5, windowDays: 7 }
+          }
+        ],
+        dismissedInsights: {},
+        uiSettings: {
+          personalInsightsEnabled: true,
+          insightNotificationsEnabled: true,
+          insightMaxNotificationsPerDay: 1,
+          insightSensitivity: 'normal'
+        }
+      },
+      async get(keys) {
+        const out = {};
+        for (const k of keys) out[k] = clone(this.data[k]);
+        return out;
+      },
+      async set(items) {
+        Object.assign(this.data, clone(items));
+        return items;
+      }
+    };
+
+    const origStorage = global.chrome.storage.local;
+    global.chrome.storage.local = storage;
+
+    const result = await generateInsights({ now, allowNotifications: false });
+
+    expect(result.success).toBe(true);
+    expect(storage.data.personalInsights).toHaveLength(1);
+    expect(storage.data.personalInsights[0]).toEqual(expect.objectContaining({
+      type: 'long_session',
+      domain: 'youtube.com'
+    }));
+    expect(storage.data.personalInsights.some((insight) => insight.domain === 'amazon.com')).toBe(false);
+    expect(storage.data.personalInsights.some((insight) => insight.domain === 'google.com')).toBe(false);
+
+    global.chrome.storage.local = origStorage;
+  });
+
+  test('insight titles preserve meaningful Google subdomain labels', () => {
+    const now = new Date(2026, 4, 10, 11, 0).getTime();
+    const dayForOffset = (offset) => {
+      const date = new Date(now);
+      date.setDate(date.getDate() - offset);
+      return localDayKey(date);
+    };
+    const domains = ['chrome.google.com', 'analytics.google.com', 'google.com'];
+    const statsForDomains = Object.fromEntries(
+      domains.map((domain) => [domain, { timeMs: 25 * 60 * 1000, visits: 3 }])
+    );
+
+    const insights = analyzeUsagePatterns({
+      now,
+      settings: { personalInsightsEnabled: true, insightSensitivity: 'normal' },
+      allStatsToday: statsForDomains,
+      statsHistory: {
+        [dayForOffset(1)]: statsForDomains,
+        [dayForOffset(2)]: statsForDomains
+      },
+      hourlyUsageHistory: {},
+      blockedDomains: {}
+    });
+
+    expect(insights).toEqual(expect.arrayContaining([
+      expect.objectContaining({ domain: 'chrome.google.com', title: expect.stringContaining('Chrome Web Store') }),
+      expect.objectContaining({ domain: 'analytics.google.com', title: expect.stringContaining('Google Analytics') }),
+      expect.objectContaining({ domain: 'google.com', title: expect.stringContaining('Google') })
+    ]));
+  });
+
+  test('insight titles keep full hosts when friendly labels collide', () => {
+    const now = new Date(2026, 4, 10, 11, 0).getTime();
+    const dayForOffset = (offset) => {
+      const date = new Date(now);
+      date.setDate(date.getDate() - offset);
+      return localDayKey(date);
+    };
+    const domains = ['app.example.com', 'docs.example.com', 'example.com'];
+    const statsForDomains = Object.fromEntries(
+      domains.map((domain) => [domain, { timeMs: 25 * 60 * 1000, visits: 3 }])
+    );
+
+    const insights = analyzeUsagePatterns({
+      now,
+      settings: { personalInsightsEnabled: true, insightSensitivity: 'normal' },
+      allStatsToday: statsForDomains,
+      statsHistory: {
+        [dayForOffset(1)]: statsForDomains,
+        [dayForOffset(2)]: statsForDomains
+      },
+      hourlyUsageHistory: {},
+      blockedDomains: {}
+    });
+
+    expect(insights).toEqual(expect.arrayContaining([
+      expect.objectContaining({ domain: 'app.example.com', title: expect.stringContaining('app.example.com') }),
+      expect.objectContaining({ domain: 'docs.example.com', title: expect.stringContaining('docs.example.com') }),
+      expect.objectContaining({ domain: 'example.com', title: expect.stringContaining('example.com') })
+    ]));
   });
 
   test('overnight scheduled blocks stay active after midnight', () => {

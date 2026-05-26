@@ -453,7 +453,7 @@ test('mock insight data populates real insights and insight Add Limit saves a li
     await page.goto(popupUrl());
 
     await expect(page.locator('#personalInsightsCard')).toBeVisible();
-    await expect(page.locator('#personalInsightsNav')).toContainText('1 / 4');
+    await expect(page.locator('#personalInsightsNav')).toContainText('1 / 3');
     await expect(page.locator('#personalInsightsList')).not.toContainText('Preview insight');
 
     const insightRow = page.locator('#personalInsightsList .insight-row').first();

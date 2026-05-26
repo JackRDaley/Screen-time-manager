@@ -1540,7 +1540,7 @@ async function generateInsights(options = {}) {
         now
     }).map(normalizeInsightRecord).filter(Boolean);
 
-    let personalInsights = data[KEYS.personalInsights] || [];
+    let personalInsights = [];
     generated.forEach((insight) => {
         personalInsights = mergeInsightList(personalInsights, insight, dismissed);
     });

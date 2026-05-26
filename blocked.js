@@ -41,6 +41,7 @@ const source = params.get("source") || "limit";
 const tier = (params.get("tier") || "lenient").toLowerCase();
 const eventId = params.get("eid") || "";
 const BLOCK_EVENT_TRACKER_KEY = "blockedAnalyticsEvent";
+const FIRST_BLOCK_REACHED_KEY = "activationFirstBlockReachedAt";
 const BLOCK_ANALYTICS_URL = "https://screen-time-manager.jackster0627.workers.dev/analytics/block-event";
 const TIER_LABELS = {
     lenient: "Lenient",
@@ -104,6 +105,22 @@ function trackBlockedPageAction(action) {
             ...blockAnalyticsParams()
         }
     }).catch(() => null);
+}
+
+async function trackFirstBlockReached() {
+    try {
+        const data = await chrome.storage.local.get([FIRST_BLOCK_REACHED_KEY]);
+        if (data[FIRST_BLOCK_REACHED_KEY]) return;
+
+        await chrome.storage.local.set({ [FIRST_BLOCK_REACHED_KEY]: Date.now() });
+        await chrome.runtime.sendMessage({
+            action: "trackAnalyticsEvent",
+            eventName: "first_block_reached",
+            params: blockAnalyticsParams()
+        });
+    } catch {
+        // Analytics should never interrupt the block page.
+    }
 }
 
 async function trackBlockedPageView() {
@@ -650,3 +667,4 @@ setDomainText();
 setBadgeText();
 renderTierActions();
 trackBlockedPageView();
+trackFirstBlockReached();

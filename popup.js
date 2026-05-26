@@ -15,6 +15,8 @@ const PREMIUM_KEY = "premiumState";
 const WHOP_ACTIVATION_NOTICE_KEY = "whopActivationNotice";
 const ONBOARDING_KEY = "onboardingState";
 const ONBOARDING_VERSION = 2;
+const FUNNEL_STATE_KEY = "activationFunnelState";
+const FUNNEL_VERSION = 1;
 const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/";
 const WHOP_CHECKOUT_START_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/start";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
@@ -101,6 +103,7 @@ const state = {
 
 let liveRefreshPromise = null;
 let rankingMotionRestoreTimer = null;
+const viewedInsightsThisSession = new Set();
 
 function normalizeDomain(input) {
     const raw = String(input || "").trim().toLowerCase();
@@ -126,6 +129,50 @@ function send(action, payload = {}) {
         success: false,
         error: error instanceof Error ? error.message : String(error)
     }));
+}
+
+function trackBlockRuleAdded(blockSource, tier) {
+    return send("trackAnalyticsEvent", {
+        eventName: "domain_added",
+        params: {
+            block_source: blockSource,
+            block_tier: tier || "unknown",
+            extension_version: chrome.runtime.getManifest?.().version || "unknown"
+        }
+    });
+}
+
+function trackFunnelEvent(eventName, params = {}) {
+    return send("trackAnalyticsEvent", {
+        eventName,
+        params: {
+            funnel_version: FUNNEL_VERSION,
+            extension_version: chrome.runtime.getManifest?.().version || "unknown",
+            ...params
+        }
+    });
+}
+
+async function trackFunnelEventOnce(flag, eventName, params = {}) {
+    const normalizedFlag = String(flag || "").trim();
+    if (!normalizedFlag) return;
+
+    try {
+        const data = await chrome.storage.local.get([FUNNEL_STATE_KEY]);
+        const state = data[FUNNEL_STATE_KEY] || {};
+        if (state[normalizedFlag]) return;
+
+        await chrome.storage.local.set({
+            [FUNNEL_STATE_KEY]: {
+                ...state,
+                [normalizedFlag]: Date.now(),
+                version: FUNNEL_VERSION
+            }
+        });
+        await trackFunnelEvent(eventName, params);
+    } catch {
+        // Funnel analytics should never interrupt extension behavior.
+    }
 }
 
 function setText(id, text) {
@@ -635,10 +682,31 @@ function personalInsightItems() {
     if (state.settings.personalInsightsEnabled === false) return [];
 
     const dismissed = state.data[DISMISSED_INSIGHTS_KEY] || {};
-    return (state.data[PERSONAL_INSIGHTS_KEY] || [])
+    const byDomain = new Map();
+
+    (state.data[PERSONAL_INSIGHTS_KEY] || [])
         .filter((insight) => insight?.id && !dismissed[insight.id])
+        .forEach((insight) => {
+            const domain = normalizeDomain(insight.domain);
+            if (!isValidDomain(domain)) return;
+
+            const existing = byDomain.get(domain);
+            const insightPriority = Number(insight.priority || 0);
+            const existingPriority = Number(existing?.priority || 0);
+            const insightTimestamp = Number(insight.timestamp || 0);
+            const existingTimestamp = Number(existing?.timestamp || 0);
+
+            if (!existing || insightPriority > existingPriority || (
+                insightPriority === existingPriority && insightTimestamp > existingTimestamp
+            )) {
+                byDomain.set(domain, { ...insight, domain });
+            }
+        });
+
+    const sorted = Array.from(byDomain.values())
         .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || Number(b.timestamp || 0) - Number(a.timestamp || 0))
         .slice(0, 4);
+    return withDisambiguatedInsightLabels(sorted);
 }
 
 function formatInsightMinutes(ms) {
@@ -671,7 +739,7 @@ function insightTitleCase(value) {
         .join(" ");
 }
 
-function insightDomainLabel(domain) {
+function insightDomainLabel(domain, options = {}) {
     const normalized = normalizeDomain(domain);
     const labels = {
         "youtube.com": "YouTube",
@@ -686,9 +754,24 @@ function insightDomainLabel(domain) {
         "netflix.com": "Netflix",
         "twitch.tv": "Twitch",
         "discord.com": "Discord",
-        "gmail.com": "Gmail"
+        "gmail.com": "Gmail",
+        "accounts.google.com": "Google Account",
+        "analytics.google.com": "Google Analytics",
+        "calendar.google.com": "Google Calendar",
+        "chat.google.com": "Google Chat",
+        "chrome.google.com": "Chrome Web Store",
+        "classroom.google.com": "Google Classroom",
+        "docs.google.com": "Google Docs",
+        "drive.google.com": "Google Drive",
+        "mail.google.com": "Gmail",
+        "maps.google.com": "Google Maps",
+        "meet.google.com": "Google Meet",
+        "news.google.com": "Google News",
+        "photos.google.com": "Google Photos",
+        "translate.google.com": "Google Translate"
     };
 
+    if (options.expanded) return normalized || "";
     if (labels[normalized]) return labels[normalized];
 
     const parts = normalized.split(".").filter(Boolean);
@@ -700,6 +783,24 @@ function insightDomainLabel(domain) {
         ? parts.length - 3
         : Math.max(0, parts.length - 2);
     return insightTitleCase(parts[rootIndex] || parts[0]);
+}
+
+function withDisambiguatedInsightLabels(insights = []) {
+    const labelCounts = insights.reduce((counts, insight) => {
+        const label = insightDomainLabel(insight.domain);
+        if (label) counts[label] = (counts[label] || 0) + 1;
+        return counts;
+    }, {});
+
+    return insights.map((insight) => {
+        const label = insightDomainLabel(insight.domain);
+        return {
+            ...insight,
+            displayDomainLabel: labelCounts[label] > 1
+                ? insightDomainLabel(insight.domain, { expanded: true })
+                : label
+        };
+    });
 }
 
 function insightDaypartForHour(hour) {
@@ -894,7 +995,7 @@ function insightUsageMetricText(context = {}) {
 
 function insightPersonalHeadlineHtml(insight = {}, domain = "") {
     const context = insightContextWithFallback(insight, domain);
-    const domainHtml = insightHeadlineEmphasis(insightDomainLabel(domain), "insight-domain-emphasis");
+    const domainHtml = insightHeadlineEmphasis(insight.displayDomainLabel || insightDomainLabel(domain), "insight-domain-emphasis");
 
     if (insight.type === "long_session" && context.durationMs) {
         return `${domainHtml} is holding your attention right now`;
@@ -1024,6 +1125,15 @@ function renderPersonalInsights() {
             ${insightSlideHtml(insights[state.selectedInsightIndex], state.selectedInsightIndex)}
         </div>
     `;
+
+    const visibleInsight = insights[state.selectedInsightIndex];
+    if (visibleInsight?.id && !viewedInsightsThisSession.has(visibleInsight.id)) {
+        viewedInsightsThisSession.add(visibleInsight.id);
+        trackFunnelEvent("insight_viewed", {
+            trigger: "dashboard",
+            action: visibleInsight.action || "view"
+        });
+    }
 }
 
 function moveInsightCarousel(direction) {
@@ -1470,6 +1580,7 @@ async function saveLimitForDomain(domain, minutes, tier = "standard") {
 
     const data = await chrome.storage.local.get(["blockedDomains", "alertsSent"]);
     const blockedDomains = data.blockedDomains || {};
+    const created = !entryForDomain(blockedDomains, normalized);
     deleteEntriesForDomain(blockedDomains, normalized);
     blockedDomains[normalized] = {
         enabled: true,
@@ -1480,7 +1591,14 @@ async function saveLimitForDomain(domain, minutes, tier = "standard") {
     const alertsSent = data.alertsSent || {};
     deleteEntriesForDomain(alertsSent, normalized);
     await chrome.storage.local.set({ blockedDomains, alertsSent });
-    return { success: true, domain: normalized };
+    if (created) {
+        await trackBlockRuleAdded("limit", tier);
+        await trackFunnelEventOnce("firstLimitCreatedAt", "first_limit_created", {
+            block_source: "limit",
+            block_tier: tier || "unknown"
+        });
+    }
+    return { success: true, domain: normalized, created };
 }
 
 async function removeDomain(domain) {
@@ -1547,6 +1665,7 @@ function prefillLimitForm(domain) {
     const normalized = normalizeDomain(domain);
     if (!isValidDomain(normalized)) return;
 
+    trackFunnelEvent("insight_add_limit_clicked", { trigger: "personal_insight" });
     const tab = $("tab2");
     const input = $("domainInput");
     if (tab) tab.checked = true;
@@ -1609,8 +1728,16 @@ async function saveSchedule(event) {
         return;
     }
 
-    const action = state.editingScheduleId ? "updateScheduledBlock" : "addScheduledBlock";
+    const isNewSchedule = !state.editingScheduleId;
+    const action = isNewSchedule ? "addScheduledBlock" : "updateScheduledBlock";
     const response = await send(action, { block });
+    if (response.success && isNewSchedule) {
+        await trackBlockRuleAdded("scheduled", block.tier);
+        await trackFunnelEventOnce("firstScheduleCreatedAt", "first_schedule_created", {
+            block_source: "scheduled",
+            block_tier: block.tier || "unknown"
+        });
+    }
     setFeedback("scheduledFormMsg", response.success ? "Schedule saved." : response.error, response.success);
     if (response.success) resetScheduleForm();
     await loadAll();
@@ -1749,7 +1876,8 @@ function whopCheckoutStartUrl() {
     }
 }
 
-function openWhopCheckout() {
+function openWhopCheckout(trigger = "unknown") {
+    trackFunnelEvent("upgrade_clicked", { trigger });
     chrome.tabs.create({ url: whopCheckoutStartUrl() });
 }
 
@@ -1804,6 +1932,10 @@ async function maybeShowReviewPromptToast() {
     if (nextPromptAt > now) return;
 
     showReviewPromptToast();
+    trackFunnelEvent("review_prompt_shown", {
+        trigger: "popup",
+        action: "shown"
+    });
     await persistReviewPromptState({
         lastShownAt: now,
         nextPromptAt: now + REVIEW_PROMPT_INTERVAL_MS,
@@ -1811,8 +1943,9 @@ async function maybeShowReviewPromptToast() {
     });
 }
 
-async function deferReviewPromptToast() {
+async function deferReviewPromptToast(action = "not_now") {
     const now = Date.now();
+    trackFunnelEvent("review_prompt_action", { action });
     await persistReviewPromptState({
         dismissedAt: now,
         nextPromptAt: now + REVIEW_PROMPT_INTERVAL_MS
@@ -1821,6 +1954,7 @@ async function deferReviewPromptToast() {
 }
 
 async function openChromeWebStoreReview() {
+    trackFunnelEvent("review_prompt_action", { action: "leave_review" });
     chrome.tabs.create({ url: CHROME_WEBSTORE_REVIEW_URL });
     await persistReviewPromptState({
         reviewedAt: Date.now(),
@@ -1957,6 +2091,9 @@ function showOnboardingIfNeeded() {
     if (!overlay || !onboardingShouldShow()) return false;
     overlay.style.display = "block";
     showOnboardingStep(selectedOnboardingStep());
+    trackFunnelEventOnce("onboardingStartedAt", "onboarding_started", {
+        onboarding_step: selectedOnboardingStep()
+    });
     return true;
 }
 
@@ -1971,6 +2108,11 @@ async function completeOnboarding(skipped = false) {
     await chrome.storage.local.set({ [ONBOARDING_KEY]: state.onboarding });
     const overlay = $("onboardingOverlay");
     if (overlay) overlay.style.display = "none";
+    await trackFunnelEventOnce(
+        skipped ? "onboardingSkippedAt" : "onboardingCompletedAt",
+        skipped ? "onboarding_skipped" : "onboarding_completed",
+        { onboarding_step: selectedOnboardingStep() }
+    );
 }
 
 async function skipOnboarding() {
@@ -2044,11 +2186,11 @@ function bindEvents() {
     $("immutableAdminOverrideBtn")?.addEventListener("click", useImmutableOverride);
     $("verifyWhopBtn")?.addEventListener("click", syncPremium);
     $("manageWhopBtn")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_MANAGE_URL }));
-    $("upgradeBtnFromLimits")?.addEventListener("click", openWhopCheckout);
-    $("upgradeBtnFromSchedule")?.addEventListener("click", openWhopCheckout);
+    $("upgradeBtnFromLimits")?.addEventListener("click", () => openWhopCheckout("limits_paywall"));
+    $("upgradeBtnFromSchedule")?.addEventListener("click", () => openWhopCheckout("schedule_paywall"));
     $("leaveReviewToastBtn")?.addEventListener("click", openChromeWebStoreReview);
-    $("dismissReviewToastBtn")?.addEventListener("click", deferReviewPromptToast);
-    $("notNowReviewToastBtn")?.addEventListener("click", deferReviewPromptToast);
+    $("dismissReviewToastBtn")?.addEventListener("click", () => deferReviewPromptToast("dismiss"));
+    $("notNowReviewToastBtn")?.addEventListener("click", () => deferReviewPromptToast("not_now"));
     $("linkWhopTokenBtn")?.addEventListener("click", linkWhopToken);
     $("manualWhopToken")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") linkWhopToken();
@@ -2099,6 +2241,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     bindEvents();
     renderScheduleDays();
     await loadAll({ flush: true, refreshInsights: true });
+    trackFunnelEvent("popup_opened", { trigger: "browser_action" });
     await handleActivationNotice();
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
     const onboardingShown = showOnboardingIfNeeded();

@@ -105,6 +105,17 @@ The main emitted GA4 events are:
 
 - `blocked_page_view`
 - `blocked_page_action`
+- `domain_added`
+- `popup_opened`
+- `onboarding_started`
+- `onboarding_completed`
+- `onboarding_skipped`
+- `first_limit_created`
+- `first_schedule_created`
+- `first_block_reached`
+- `insight_viewed`
+- `insight_add_limit_clicked`
+- `upgrade_clicked`
 - `post_install_redirect_shown`
 - `post_install_redirect_failed`
 
@@ -115,6 +126,9 @@ Recommended event-scoped custom dimensions:
 - `block_tier` (`lenient`, `standard`, `strict`, or `immutable`)
 - `action`
 - `install_reason`
+- `trigger`
+- `onboarding_step`
+- `funnel_version`
 - `error_name`
 
 Avoid registering unique or high-cardinality values such as redirect IDs, domains, raw URLs, or client IDs as custom dimensions.

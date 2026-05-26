@@ -31,8 +31,18 @@ const ANALYTICS_ALLOWED_EVENTS = new Set([
     "blocked_page_action",
     "post_install_redirect_shown",
     "post_install_redirect_failed",
-    "extension_install",
     "extension_update",
+    "popup_opened",
+    "onboarding_started",
+    "onboarding_completed",
+    "onboarding_skipped",
+    "first_limit_created",
+    "first_schedule_created",
+    "first_block_reached",
+    "insight_viewed",
+    "insight_add_limit_clicked",
+    "upgrade_clicked",
+    "domain_added",
     "review_prompt_shown",
     "review_prompt_action"
 ]);
@@ -43,6 +53,9 @@ const ANALYTICS_ALLOWED_PARAMS = new Set([
     "block_tier",
     "extension_version",
     "install_reason",
+    "trigger",
+    "onboarding_step",
+    "funnel_version",
     "error_name"
 ]);
 

@@ -191,7 +191,7 @@
             .join(" ");
     }
 
-    function domainLabel(domain) {
+    function domainLabel(domain, options = {}) {
         const normalized = normalizeDomain(domain);
         const labels = {
             "youtube.com": "YouTube",
@@ -206,9 +206,24 @@
             "netflix.com": "Netflix",
             "twitch.tv": "Twitch",
             "discord.com": "Discord",
-            "gmail.com": "Gmail"
+            "gmail.com": "Gmail",
+            "accounts.google.com": "Google Account",
+            "analytics.google.com": "Google Analytics",
+            "calendar.google.com": "Google Calendar",
+            "chat.google.com": "Google Chat",
+            "chrome.google.com": "Chrome Web Store",
+            "classroom.google.com": "Google Classroom",
+            "docs.google.com": "Google Docs",
+            "drive.google.com": "Google Drive",
+            "mail.google.com": "Gmail",
+            "maps.google.com": "Google Maps",
+            "meet.google.com": "Google Meet",
+            "news.google.com": "Google News",
+            "photos.google.com": "Google Photos",
+            "translate.google.com": "Google Translate"
         };
 
+        if (options.expanded) return normalized || "";
         if (labels[normalized]) return labels[normalized];
 
         const parts = normalized.split(".").filter(Boolean);
@@ -595,19 +610,40 @@
     }
 
     function dedupeInsights(insights) {
-        const byTypeDomain = new Map();
+        const byDomain = new Map();
 
         insights.forEach((insight) => {
             if (!insight || !isValidDomain(insight.domain)) return;
-            const key = `${insight.type}:${insight.domain}`;
-            const existing = byTypeDomain.get(key);
+            const existing = byDomain.get(insight.domain);
             if (!existing || Number(insight.priority || 0) > Number(existing.priority || 0)) {
-                byTypeDomain.set(key, insight);
+                byDomain.set(insight.domain, insight);
             }
         });
 
-        return Array.from(byTypeDomain.values())
+        return Array.from(byDomain.values())
             .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || Number(b.timestamp || 0) - Number(a.timestamp || 0));
+    }
+
+    function disambiguateInsightLabels(insights) {
+        const labelCounts = insights.reduce((counts, insight) => {
+            const label = domainLabel(insight.domain);
+            if (label) counts[label] = (counts[label] || 0) + 1;
+            return counts;
+        }, {});
+
+        return insights.map((insight) => {
+            const label = domainLabel(insight.domain);
+            if (labelCounts[label] <= 1) return insight;
+
+            const expanded = domainLabel(insight.domain, { expanded: true });
+            if (!expanded || expanded === label) return insight;
+
+            return {
+                ...insight,
+                title: String(insight.title || "").replace(label, expanded),
+                message: String(insight.message || "").replace(label, expanded)
+            };
+        });
     }
 
     function analyzeUsagePatterns(input = {}) {
@@ -624,7 +660,7 @@
         addUsageIncreaseInsights(insights, input, settings, now, dateKey);
         addLimitSuggestionInsights(insights, input, settings, now, dateKey);
 
-        return dedupeInsights(insights);
+        return disambiguateInsightLabels(dedupeInsights(insights));
     }
 
     global.StmInsights = {
