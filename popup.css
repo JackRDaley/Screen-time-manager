@@ -383,6 +383,103 @@ nav label:focus-visible {
 .card-body { padding: 8px 11px; }
 .card-head + .card-body { padding-top: 7px; }
 
+.preset-list {
+    display: grid;
+    gap: 6px;
+    padding: 7px 11px 2px;
+}
+
+.preset-option {
+    --preset-accent: var(--cyan);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    min-height: 72px;
+    padding: 8px 9px;
+    border-radius: 10px;
+    background:
+        linear-gradient(135deg, color-mix(in srgb, var(--preset-accent) 20%, transparent), transparent 54%),
+        linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.022));
+    box-shadow:
+        inset 3px 0 0 color-mix(in srgb, var(--preset-accent) 72%, transparent),
+        inset 0 1px 0 rgba(255,255,255,.05),
+        inset 0 0 0 1px rgba(255,255,255,.025);
+}
+
+.preset-option[data-preset-id="study"] {
+    --preset-accent: #22d9ff;
+}
+
+.preset-option[data-preset-id="deep-work"] {
+    --preset-accent: #ff8d53;
+}
+
+.preset-option[data-preset-id="sleep"] {
+    --preset-accent: #8b6fff;
+}
+
+.preset-option.is-applied {
+    background:
+        linear-gradient(135deg, color-mix(in srgb, var(--preset-accent) 24%, transparent), transparent 54%),
+        linear-gradient(180deg, rgba(48,209,88,.045), rgba(255,255,255,.02));
+}
+
+.preset-main {
+    min-width: 0;
+}
+
+.preset-title {
+    margin-top: 3px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.preset-meta {
+    color: rgba(237,242,255,.58);
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.preset-sites {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.preset-sites span {
+    max-width: 96px;
+    padding: 3px 6px;
+    border-radius: var(--r-pill);
+    background: rgba(237,242,255,.065);
+    color: rgba(237,242,255,.74);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.preset-apply-btn {
+    min-width: 66px;
+    min-height: 32px;
+    padding-inline: 10px;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--preset-accent) 20%, rgba(255,255,255,.08)), rgba(255,255,255,.045));
+    border-color: color-mix(in srgb, var(--preset-accent) 38%, rgba(255,255,255,.12));
+}
+
+.preset-feedback {
+    padding: 3px 11px 7px;
+}
+
 /* ── Badge / dot ─────────────────────────────────────────────── */
 .badge {
     display: flex;

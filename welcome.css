@@ -88,9 +88,11 @@ body {
 }
 
 h1 {
-    margin: 12px 0 10px;
+    display: inline-block;
+    margin: 12px 0 8px;
+    padding-bottom: 0.14em;
     font-size: clamp(30px, 4.5vw, 48px);
-    line-height: 1.05;
+    line-height: 1.28;
     letter-spacing: 0;
     background: linear-gradient(90deg, #ffffff 35%, var(--cyan));
     background-clip: text;

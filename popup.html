@@ -232,6 +232,14 @@
                 </div>
                 <div id="limitList" class="list muted">No limits set yet.</div>
             </div>
+
+            <div class="card" id="presetCard">
+                <div class="card-head">
+                    <div class="card-title">Limit Presets</div>
+                </div>
+                <div id="limitPresetList" class="preset-list"></div>
+                <div id="limitPresetMsg" class="form-feedback preset-feedback" role="status" aria-live="polite"></div>
+            </div>
         </div>
 
         <!-- ── Schedule ───────────────────────────────── -->
@@ -241,7 +249,7 @@
                     <div class="card-title">Premium Required</div>
                 </div>
                 <div class="card-body">
-                    <div class="muted" style="padding:0 0 8px 0">Scheduling is a premium feature.</div>
+                    <div class="muted" style="padding:0 0 8px 0">Free plan reached its scheduled block limit.</div>
                     <button class="btn" id="upgradeBtnFromSchedule" type="button" style="width:100%">Upgrade with Whop</button>
                 </div>
             </div>
@@ -294,6 +302,14 @@
                     <div class="card-title">Scheduled Sessions</div>
                 </div>
                 <div id="scheduledList" class="list muted">No scheduled sessions.</div>
+            </div>
+
+            <div class="card" id="schedulePresetCard">
+                <div class="card-head">
+                    <div class="card-title">Schedule Presets</div>
+                </div>
+                <div id="schedulePresetList" class="preset-list"></div>
+                <div id="schedulePresetMsg" class="form-feedback preset-feedback" role="status" aria-live="polite"></div>
             </div>
         </div>
 

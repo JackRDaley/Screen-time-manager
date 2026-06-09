@@ -1,0 +1,107 @@
+.update-layout {
+    max-width: 900px;
+    min-height: auto;
+    grid-template-columns: 1fr;
+    align-content: start;
+    padding-top: 42px;
+    padding-bottom: 42px;
+}
+
+.update-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: end;
+    padding: 24px;
+}
+
+.update-list {
+    display: grid;
+    gap: 12px;
+    padding: 18px;
+}
+
+.update-copy {
+    min-width: 0;
+}
+
+.update-actions {
+    margin-top: 0;
+    justify-content: flex-end;
+    align-items: center;
+}
+
+.update-hero .meta {
+    margin-top: 14px;
+}
+
+.update-hero .lede {
+    max-width: 62ch;
+}
+
+.release-card {
+    padding: 16px;
+    border-radius: var(--r-input);
+    background:
+        linear-gradient(135deg, rgba(34,217,255,.08), transparent 55%),
+        rgba(255,255,255,.035);
+    box-shadow: inset 3px 0 0 rgba(34,217,255,.56), inset 0 1px 0 rgba(255,255,255,.045);
+}
+
+.release-card:nth-child(2) {
+    background:
+        linear-gradient(135deg, rgba(139,111,255,.10), transparent 55%),
+        rgba(255,255,255,.035);
+    box-shadow: inset 3px 0 0 rgba(139,111,255,.62), inset 0 1px 0 rgba(255,255,255,.045);
+}
+
+.release-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.release-head h2 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.release-date {
+    padding: 4px 8px;
+    border-radius: var(--r-pill);
+    background: rgba(46,255,168,.10);
+    color: rgba(46,255,168,.96);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.release-items {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.release-items li + li {
+    margin-top: 7px;
+}
+
+@media (max-width: 920px) {
+    .update-layout {
+        grid-template-columns: 1fr;
+        padding-top: 18px;
+        padding-bottom: 18px;
+    }
+
+    .update-hero {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+    }
+
+    .update-actions {
+        justify-content: flex-start;
+    }
+}

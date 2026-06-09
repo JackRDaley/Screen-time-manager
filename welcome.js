@@ -12,7 +12,7 @@ function formatReason(reason) {
 
 function bindActions() {
     const openDashboardBtn = document.getElementById("openDashboardBtn");
-    const openGuideBtn = document.getElementById("openGuideBtn");
+    const openUpdateLogBtn = document.getElementById("openUpdateLogBtn");
 
     openDashboardBtn?.addEventListener("click", async () => {
         try {
@@ -27,9 +27,14 @@ function bindActions() {
         chrome.tabs.create({ url: chrome.runtime.getURL("popup.html"), active: true });
     });
 
-    openGuideBtn?.addEventListener("click", () => {
+    openUpdateLogBtn?.addEventListener("click", () => {
+        const params = new URLSearchParams(window.location.search);
+        const url = new URL(chrome.runtime.getURL("update-log.html"));
+        const version = params.get("version");
+        if (version) url.searchParams.set("version", version);
+
         chrome.tabs.create({
-            url: "https://screen-time-manager.jackster0627.workers.dev/",
+            url: url.toString(),
             active: true
         });
     });

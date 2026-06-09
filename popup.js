@@ -45,9 +45,42 @@ const DEFAULT_PREMIUM = Object.freeze({
 });
 
 const FREE_LIMITS = Object.freeze({
-    maxTrackedDomains: 3,
-    maxScheduledBlocks: 2
+    maxTrackedDomains: 5,
+    maxScheduledBlocks: 5
 });
+
+const PRESET_TEMPLATES = Object.freeze([
+    {
+        id: "study",
+        name: "Study Mode",
+        description: "Moderate daily limits for common student distractions so homework starts faster.",
+        recommendedFor: "Homework and evening study sessions",
+        ruleType: "Daily limits",
+        tier: "standard",
+        limitMinutes: 30,
+        sites: ["youtube.com", "reddit.com", "tiktok.com", "instagram.com", "netflix.com"]
+    },
+    {
+        id: "deep-work",
+        name: "Deep Work Mode",
+        description: "Stricter limits for social, video, news, and sports sites during serious work blocks.",
+        recommendedFor: "Focused 60-120 minute sessions",
+        ruleType: "Daily limits",
+        tier: "strict",
+        limitMinutes: 10,
+        sites: ["youtube.com", "reddit.com", "x.com", "espn.com", "cnn.com"]
+    },
+    {
+        id: "sleep",
+        name: "Sleep Schedule",
+        description: "Recurring late-night blocks for the sites most likely to pull you back in after bedtime.",
+        recommendedFor: "Late evening and night hours",
+        ruleType: "Scheduled blocks",
+        tier: "standard",
+        schedule: { startTime: "10:30 PM", endTime: "06:30 AM", days: [0, 1, 2, 3, 4, 5, 6] },
+        sites: ["youtube.com", "netflix.com", "reddit.com", "tiktok.com", "instagram.com"]
+    }
+]);
 
 const ONBOARDING_STEPS = Object.freeze([
     {
@@ -98,6 +131,7 @@ const state = {
     selectedHourlyHour: null,
     selectedInsightIndex: 0,
     editingScheduleId: null,
+    applyingPresetId: null,
     rankingSignature: ""
 };
 
@@ -436,6 +470,105 @@ function renderList(id, html, emptyText) {
     if (!el) return;
     el.classList.toggle("muted", !html);
     el.innerHTML = html || escapeHtml(emptyText);
+}
+
+function presetScheduleId(presetId, domain) {
+    return `preset_${presetId}_${normalizeDomain(domain).replace(/[^a-z0-9]+/g, "_")}`;
+}
+
+function premiumIsActive() {
+    return Boolean(state.premium?.active);
+}
+
+function countBlockedDomains(blockedDomains = {}) {
+    return Object.keys(blockedDomains || {}).filter((domain) => isValidDomain(domain)).length;
+}
+
+function countScheduledBlocks(scheduledBlocks = []) {
+    return Array.isArray(scheduledBlocks) ? scheduledBlocks.length : 0;
+}
+
+function presetAppliedCount(preset) {
+    if (preset.ruleType === "Scheduled blocks") {
+        const scheduled = state.data.scheduledBlocks || [];
+        return preset.sites.filter((domain) => (
+            scheduled.some((block) => normalizeDomain(block.domain) === normalizeDomain(domain))
+        )).length;
+    }
+
+    const blockedDomains = state.data.blockedDomains || {};
+    return preset.sites.filter((domain) => Boolean(entryForDomain(blockedDomains, domain))).length;
+}
+
+function presetListTarget(preset) {
+    return preset.ruleType === "Scheduled blocks"
+        ? { listId: "schedulePresetList", msgId: "schedulePresetMsg" }
+        : { listId: "limitPresetList", msgId: "limitPresetMsg" };
+}
+
+function renderPresetList(listId, presets) {
+    const container = $(listId);
+    if (!container) return;
+
+    const visiblePresets = presets.filter((preset) => presetAppliedCount(preset) < preset.sites.length);
+    const card = container.closest(".card");
+    if (card) card.hidden = visiblePresets.length === 0;
+
+    container.innerHTML = visiblePresets.map((preset) => {
+        const applying = state.applyingPresetId === preset.id;
+        const detail = preset.ruleType === "Scheduled blocks"
+            ? `${formatTimeForDisplay(preset.schedule.startTime)} - ${formatTimeForDisplay(preset.schedule.endTime)}`
+            : `${preset.limitMinutes} min daily`;
+
+        return `
+            <div class="preset-option" data-preset-id="${escapeHtml(preset.id)}">
+                <div class="preset-main">
+                    <div class="preset-meta">${escapeHtml(preset.recommendedFor)} &bull; ${escapeHtml(formatTierLabel(preset.tier))} &bull; ${escapeHtml(detail)}</div>
+                    <div class="preset-title">${escapeHtml(preset.name)}</div>
+                    <div class="preset-sites">
+                        ${preset.sites.slice(0, 4).map((site) => `<span>${escapeHtml(site)}</span>`).join("")}
+                        ${preset.sites.length > 4 ? `<span>+${preset.sites.length - 4}</span>` : ""}
+                    </div>
+                </div>
+                <button type="button" class="btn preset-apply-btn" data-action="apply-preset" data-preset-id="${escapeHtml(preset.id)}" ${state.applyingPresetId ? "disabled" : ""}>
+                    ${applying ? "Applying" : "Apply"}
+                </button>
+            </div>
+        `;
+    }).join("");
+}
+
+function renderPresets() {
+    renderPresetList(
+        "limitPresetList",
+        PRESET_TEMPLATES.filter((preset) => preset.ruleType !== "Scheduled blocks")
+    );
+    renderPresetList(
+        "schedulePresetList",
+        PRESET_TEMPLATES.filter((preset) => preset.ruleType === "Scheduled blocks")
+    );
+}
+
+function presetApplyMessage(preset, result) {
+    const limit = preset.ruleType === "Scheduled blocks" ? FREE_LIMITS.maxScheduledBlocks : FREE_LIMITS.maxTrackedDomains;
+    const unit = preset.ruleType === "Scheduled blocks" ? "scheduled blocks" : "limits";
+    const parts = [];
+
+    if (result.createdCount > 0) {
+        parts.push(`${preset.name} added ${result.createdCount} new ${result.createdCount === 1 ? "rule" : "rules"}.`);
+    } else {
+        parts.push(`No new rules added for ${preset.name}.`);
+    }
+
+    if (result.conflictCount > 0) {
+        parts.push(`${result.conflictCount} overlapping ${result.conflictCount === 1 ? "domain was" : "domains were"} left unchanged. Remove conflicting domains to apply the full preset.`);
+    }
+
+    if (result.cappedCount > 0) {
+        parts.push(`Free plan allows ${limit} ${unit}.`);
+    }
+
+    return parts.join(" ");
 }
 
 function renderStats() {
@@ -1386,9 +1519,9 @@ function renderSchedulesStyled() {
 }
 
 function renderPaywalls() {
-    const isPremium = Boolean(state.premium.active);
-    const blockedCount = Object.keys(state.data.blockedDomains || {}).length;
-    const scheduleCount = (state.data.scheduledBlocks || []).length;
+    const isPremium = premiumIsActive();
+    const blockedCount = countBlockedDomains(state.data.blockedDomains || {});
+    const scheduleCount = countScheduledBlocks(state.data.scheduledBlocks || []);
 
     const limitsPaywall = $("limitsPaywallCard");
     if (limitsPaywall) {
@@ -1499,6 +1632,7 @@ function renderAll(options = {}) {
         else renderRankingStyled();
         renderPersonalInsights();
         renderHourlyStyled();
+        renderPresets();
         renderLimitsStyled();
         renderScheduleDays();
         renderSchedulesStyled();
@@ -1581,6 +1715,13 @@ async function saveLimitForDomain(domain, minutes, tier = "standard") {
     const data = await chrome.storage.local.get(["blockedDomains", "alertsSent"]);
     const blockedDomains = data.blockedDomains || {};
     const created = !entryForDomain(blockedDomains, normalized);
+    if (created && !premiumIsActive() && countBlockedDomains(blockedDomains) >= FREE_LIMITS.maxTrackedDomains) {
+        return {
+            success: false,
+            error: `Free plan includes ${FREE_LIMITS.maxTrackedDomains} limits. Remove one or upgrade to add more.`
+        };
+    }
+
     deleteEntriesForDomain(blockedDomains, normalized);
     blockedDomains[normalized] = {
         enabled: true,
@@ -1599,6 +1740,162 @@ async function saveLimitForDomain(domain, minutes, tier = "standard") {
         });
     }
     return { success: true, domain: normalized, created };
+}
+
+async function applyLimitPreset(preset) {
+    const data = await chrome.storage.local.get(["blockedDomains", "alertsSent"]);
+    const blockedDomains = data.blockedDomains || {};
+    const alertsSent = data.alertsSent || {};
+    const isPremium = premiumIsActive();
+    let availableSlots = isPremium
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, FREE_LIMITS.maxTrackedDomains - countBlockedDomains(blockedDomains));
+    let createdCount = 0;
+    let cappedCount = 0;
+    let conflictCount = 0;
+
+    preset.sites.forEach((site) => {
+        const domain = normalizeDomain(site);
+        if (!isValidDomain(domain)) return;
+        const existing = entryForDomain(blockedDomains, domain);
+        if (existing) {
+            conflictCount += 1;
+            return;
+        }
+
+        if (!existing && availableSlots <= 0) {
+            cappedCount += 1;
+            return;
+        }
+
+        deleteEntriesForDomain(alertsSent, domain);
+        blockedDomains[domain] = {
+            enabled: true,
+            limitSeconds: Math.round(Number(preset.limitMinutes || 30) * 60),
+            tier: preset.tier || "standard",
+            presetId: preset.id,
+            presetName: preset.name,
+            updatedAt: Date.now()
+        };
+        createdCount += 1;
+        availableSlots -= 1;
+    });
+
+    if (createdCount > 0) {
+        await chrome.storage.local.set({ blockedDomains, alertsSent });
+    }
+    if (createdCount > 0) {
+        await trackBlockRuleAdded("limit", preset.tier);
+        await trackFunnelEventOnce("firstLimitCreatedAt", "first_limit_created", {
+            block_source: "limit",
+            block_tier: preset.tier || "unknown",
+            trigger: "preset"
+        });
+    }
+    return {
+        createdCount,
+        conflictCount,
+        cappedCount,
+        skippedCount: conflictCount + cappedCount,
+        capped: cappedCount > 0,
+        conflicted: conflictCount > 0
+    };
+}
+
+async function applyScheduledPreset(preset) {
+    const data = await chrome.storage.local.get(["scheduledBlocks"]);
+    const scheduled = data.scheduledBlocks || [];
+    const isPremium = premiumIsActive();
+    let availableSlots = isPremium
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, FREE_LIMITS.maxScheduledBlocks - countScheduledBlocks(scheduled));
+    let createdCount = 0;
+    let cappedCount = 0;
+    let conflictCount = 0;
+
+    for (const site of preset.sites) {
+        const domain = normalizeDomain(site);
+        if (!isValidDomain(domain)) continue;
+        const exists = scheduled.some((item) => normalizeDomain(item.domain) === domain);
+        if (exists) {
+            conflictCount += 1;
+            continue;
+        }
+
+        const block = {
+            id: presetScheduleId(preset.id, domain),
+            domain,
+            startTime: preset.schedule.startTime,
+            endTime: preset.schedule.endTime,
+            days: preset.schedule.days,
+            tier: preset.tier || "standard",
+            enabled: true
+        };
+        if (availableSlots <= 0) {
+            cappedCount += 1;
+            continue;
+        }
+
+        const response = await send("addScheduledBlock", { block });
+        if (!response?.success) {
+            throw new Error(response?.error || `Could not apply ${preset.name}.`);
+        }
+        scheduled.push(block);
+        createdCount += 1;
+        availableSlots -= 1;
+    }
+
+    if (createdCount > 0) {
+        await trackBlockRuleAdded("scheduled", preset.tier);
+        await trackFunnelEventOnce("firstScheduleCreatedAt", "first_schedule_created", {
+            block_source: "scheduled",
+            block_tier: preset.tier || "unknown",
+            trigger: "preset"
+        });
+    }
+    return {
+        createdCount,
+        conflictCount,
+        cappedCount,
+        skippedCount: conflictCount + cappedCount,
+        capped: cappedCount > 0,
+        conflicted: conflictCount > 0
+    };
+}
+
+async function applyPreset(presetId) {
+    const preset = PRESET_TEMPLATES.find((item) => item.id === presetId);
+    if (!preset || state.applyingPresetId) return;
+    const { msgId } = presetListTarget(preset);
+
+    state.applyingPresetId = preset.id;
+    renderPresets();
+    setFeedback(msgId, `Applying ${preset.name}...`);
+    try {
+        const result = preset.ruleType === "Scheduled blocks"
+            ? await applyScheduledPreset(preset)
+            : await applyLimitPreset(preset);
+        await send("refreshActionBadge");
+        await loadAll();
+        setFeedback(
+            msgId,
+            presetApplyMessage(preset, result),
+            result.createdCount > 0 && !result.capped && !result.conflicted
+        );
+        await trackFunnelEvent("preset_applied", {
+            preset_id: preset.id,
+            rule_type: preset.ruleType,
+            created_count: result.createdCount,
+            skipped_count: result.skippedCount,
+            conflict_count: result.conflictCount,
+            capped_count: result.cappedCount
+        });
+    } catch (error) {
+        setFeedback(msgId, error instanceof Error ? error.message : "Could not apply preset.", false);
+    } finally {
+        state.applyingPresetId = null;
+        renderPresets();
+    }
 }
 
 async function removeDomain(domain) {
@@ -1729,6 +2026,11 @@ async function saveSchedule(event) {
     }
 
     const isNewSchedule = !state.editingScheduleId;
+    if (isNewSchedule && !premiumIsActive() && countScheduledBlocks(state.data.scheduledBlocks || []) >= FREE_LIMITS.maxScheduledBlocks) {
+        setFeedback("scheduledFormMsg", `Free plan includes ${FREE_LIMITS.maxScheduledBlocks} scheduled blocks. Remove one or upgrade to add more.`, false);
+        return;
+    }
+
     const action = isNewSchedule ? "addScheduledBlock" : "updateScheduledBlock";
     const response = await send(action, { block });
     if (response.success && isNewSchedule) {
@@ -2121,7 +2423,10 @@ async function skipOnboarding() {
 
 function bindDelegatedActions() {
     document.addEventListener("change", async (event) => {
-        const target = event.target.closest(".switch-input[data-action]");
+        const origin = event.target;
+        if (!(origin instanceof Element)) return;
+
+        const target = origin.closest(".switch-input[data-action]");
         if (!target) return;
 
         const action = target.dataset.action;
@@ -2130,13 +2435,16 @@ function bindDelegatedActions() {
     });
 
     document.addEventListener("click", async (event) => {
-        const slot = event.target.closest(".hourly-slot[data-hour]");
+        const origin = event.target;
+        if (!(origin instanceof Element)) return;
+
+        const slot = origin.closest(".hourly-slot[data-hour]");
         if (slot) {
             selectHourlySlot(slot);
             return;
         }
 
-        const target = event.target.closest("[data-action]");
+        const target = origin.closest("[data-action]");
         if (!target) return;
         if (target.classList.contains("switch-input")) return;
 
@@ -2147,6 +2455,7 @@ function bindDelegatedActions() {
         if (action === "remove-domain") await removeDomain(domain);
         if (action === "clear-snooze") await clearSnooze(domain);
         if (action === "stop-active") await stopActiveBlock(domain);
+        if (action === "apply-preset") await applyPreset(target.dataset.presetId);
         if (action === "edit-schedule") editSchedule(id);
         if (action === "remove-schedule") await removeSchedule(id);
         if (action === "quick-limit" || action === "hour-limit") await quickAddLimit(domain);
@@ -2193,7 +2502,9 @@ function bindEvents() {
     $("notNowReviewToastBtn")?.addEventListener("click", () => deferReviewPromptToast("not_now"));
     $("linkWhopTokenBtn")?.addEventListener("click", linkWhopToken);
     $("manualWhopToken")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") linkWhopToken();
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        linkWhopToken();
     });
 
     $("onboardingNextBtn")?.addEventListener("click", () => showOnboardingStep(selectedOnboardingStep() + 1));

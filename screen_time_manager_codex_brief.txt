@@ -1,0 +1,180 @@
+SCREEN TIME MANAGER - CODEX IMPLEMENTATION BRIEF
+
+Objective
+Build a growth-focused improvement pass for Screen Time Manager. The goal is to make the extension more appealing to new users, increase installs, improve retention, and eventually earn more Chrome Web Store reviews.
+
+Core Product Positioning
+Screen Time Manager should be positioned around this idea:
+
+"Stop opening distracting sites on autopilot."
+
+The extension should not feel like just another website blocker. It should feel like a tool that helps users notice and break unconscious browsing habits, especially repeated visits to the same distracting websites.
+
+Primary Target User
+Build first for college students.
+
+The product should feel useful for students who are trying to study, work on assignments, or stay focused but keep reopening YouTube, Reddit, TikTok, Instagram, Netflix, or other distracting sites without thinking.
+
+Primary Growth Goals
+Prioritize the following:
+1. More installs
+2. Better retention
+3. More reviews
+
+This means the product changes should make the extension easier to understand immediately, more useful during repeat use, and more review-worthy after the user experiences value.
+
+Current Implementation Priority
+Focus first on preset templates.
+
+The user selected preset templates as the first priority. Do not start by building strict mode, a major dashboard redesign, notifications, or a marketing folder unless those are needed to support the preset system.
+
+Preset Templates to Build
+Create three built-in preset modes:
+
+1. Study Mode
+2. Deep Work Mode
+3. Sleep Mode
+
+These presets should help new users avoid a blank setup screen. They should give users quick, opinionated starting points that can be applied in one or two clicks.
+
+Suggested Preset Behavior
+The exact implementation should fit the current codebase, but the intended behavior is:
+
+Study Mode
+Purpose: Help students reduce common distractions while doing homework or studying.
+Suggested defaults:
+- Limit or block common distractions such as YouTube, Reddit, TikTok, Instagram, X/Twitter, Netflix, and other entertainment/social sites.
+- Use moderate restrictions rather than extreme restrictions.
+- Good for daytime or evening study sessions.
+
+Deep Work Mode
+Purpose: Help users enter a stricter work block with fewer distractions.
+Suggested defaults:
+- More aggressive blocking of entertainment, social, news, sports, and video sites.
+- Better for focused 60-120 minute work sessions.
+- Should feel serious, not playful.
+
+Sleep Mode
+Purpose: Help users stop late-night browsing.
+Suggested defaults:
+- Block or limit distracting sites during late evening and night hours.
+- Focus on YouTube, Netflix, social media, Reddit, and other time-sink websites.
+- Should support scheduled behavior if the codebase already has scheduled blocks.
+
+Important UX Requirements
+The preset system should be simple and not overwhelming.
+
+Recommended user flow:
+1. User opens the extension or dashboard.
+2. User sees a clear section called something like "Quick Start Presets" or "Start with a preset."
+3. User can choose Study Mode, Deep Work Mode, or Sleep Mode.
+4. User sees a short explanation of what the preset does.
+5. User clicks an apply button.
+6. The extension creates the needed rules/limits/blocks automatically.
+7. User can edit the created rules afterward.
+
+Do not make the preset flow feel like a long setup wizard unless it is already easy to add.
+
+Visual / Design Direction
+Use a clean, professional, startup/productivity style.
+
+The selected design direction is:
+- Clean/professional
+- Startup/productivity style
+- Serious and minimal blocked-page vibe
+
+Avoid making the app overly funny, gimmicky, or childish. It should feel polished enough for a Chrome Web Store listing and useful enough for students and productivity users.
+
+Blocked Page Direction
+The blocked page should eventually feel serious and minimal.
+
+The user selected:
+- Serious and firm
+- Minimal and clean
+
+For this current pass, only update the blocked page if it is directly useful for supporting preset-created rules. Do not overhaul the whole blocked page unless the codebase makes it simple.
+
+Important Stats to Emphasize
+The most important stats are:
+1. Time spent today
+2. Visit count today
+3. Blocked attempts
+4. Time saved
+
+These stats are useful because the product positioning is about unconscious repeated browsing. Visit count and blocked attempts are especially important because they prove the user is reopening distracting sites on autopilot.
+
+If adding any dashboard or preset-related stats, prefer these over less important analytics.
+
+Privacy Priority
+Privacy messaging is not the current priority.
+
+Do not spend this pass building a privacy card, privacy onboarding, or major privacy-focused marketing language unless it is simple and already fits naturally into the UI.
+
+Marketing Tone
+Use a clean, professional, startup/productivity tone.
+
+Potential tone examples:
+- "Stop opening distracting sites on autopilot."
+- "Choose a focus preset and let Screen Time Manager handle the rules."
+- "Start studying faster with ready-made limits for common distractions."
+- "Use Study Mode, Deep Work Mode, or Sleep Mode to reduce distraction without building every rule manually."
+
+Avoid overly casual or joke-heavy copy.
+
+Concrete Codex Tasks
+1. Inspect the current extension codebase and identify where limits, scheduled blocks, blocklists, and dashboard UI are implemented.
+2. Add a preset templates system with three presets: Study Mode, Deep Work Mode, and Sleep Mode.
+3. Each preset should have a name, short description, list of affected websites/categories if supported, and rule configuration.
+4. Add UI for users to view and apply presets.
+5. When a preset is applied, create the corresponding rules using the existing storage/rule system.
+6. Make sure preset-created rules can still be edited by the user afterward.
+7. Avoid duplicating the same preset rules repeatedly if the user clicks apply more than once. Either update existing preset-created rules or warn/confirm before adding duplicates.
+8. Keep the UI clean, minimal, and professional.
+9. Avoid major rewrites unless necessary.
+10. Do not change premium/payment logic unless required for presets to function.
+
+Acceptance Criteria
+The task is complete when:
+- The extension includes visible preset options for Study Mode, Deep Work Mode, and Sleep Mode.
+- A user can apply a preset without manually creating every rule.
+- The preset creates usable rules/limits/blocks in the existing system.
+- Preset-created rules are editable afterward.
+- The UI clearly explains what each preset does before applying it.
+- The preset feature does not break existing limits, scheduled blocks, dashboard stats, or blocking behavior.
+- The design feels clean, professional, and aligned with a productivity app.
+- No unnecessary new libraries are added.
+- The code is organized so more presets can be added later.
+
+Suggested Data Model
+If the codebase needs a preset model, consider something like this conceptually:
+
+Preset:
+- id
+- name
+- description
+- recommendedFor
+- sites
+- ruleType
+- timeLimitMinutes, if applicable
+- schedule, if applicable
+- strictness, if applicable
+- createdRuleTag or metadata so preset-created rules can be identified later
+
+Do not force this exact model if the existing codebase already has a better structure.
+
+Future Ideas - Do Not Build Unless Easy
+These are useful later but not the priority for this pass:
+- Strict / Immutable Mode
+- Weekly recap card
+- Full onboarding wizard
+- Notification system
+- Chrome Web Store marketing folder
+- Privacy messaging overhaul
+- Dashboard redesign
+- YouTube Shorts-specific blocker
+
+Key Product Principle
+The preset feature should reduce friction. A new user should be able to install the extension, choose a preset, and feel like the product is useful within the first minute.
+
+The main emotional promise is:
+"I keep opening distracting sites without thinking. This extension gives me a quick structure to stop doing that."
