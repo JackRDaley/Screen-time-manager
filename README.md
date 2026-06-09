@@ -34,6 +34,23 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 
 ---
 
+## Vercel Website Mockup
+
+This repo includes a static landing-page mockup for Screen Time Manager:
+
+- `index.html`
+- `landing.css`
+- `landing.js`
+- `vercel.json`
+
+To deploy it on Vercel, import the repository and use the default static settings:
+
+- Framework Preset: Other
+- Build Command: None
+- Output Directory: `./`
+
+---
+
 ## Installation
 
 ### Option 1: Load Locally (Recommended for Development)

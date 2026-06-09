@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Screen Time Manager | Stop Autopilot Browsing</title>
+  <meta
+    name="description"
+    content="Screen Time Manager helps students and focused workers block distracting sites with quick presets, daily limits, visit counts, and time-saved insights."
+  />
+  <meta property="og:title" content="Screen Time Manager" />
+  <meta property="og:description" content="Stop opening distracting sites on autopilot." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="/new_logo.png" />
+  <link rel="icon" href="/new_logo.png" />
+  <link rel="preload" href="/new_logo.png" as="image" />
+  <link rel="stylesheet" href="/landing.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Screen Time Manager home">
+      <img src="/new_logo.png" alt="" class="brand-mark" />
+      <span>Screen Time Manager</span>
+    </a>
+
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="#presets">Presets</a>
+      <a href="#insights">Insights</a>
+      <a href="#students">Students</a>
+    </nav>
+
+    <a class="button button-small button-quiet" href="#launch">
+      <img src="/assets/icons/arrow-pointer-solid-full.svg" alt="" />
+      <span>Preview</span>
+    </a>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-scene" aria-hidden="true">
+        <div class="domain-stream stream-one">
+          <span>youtube.com blocked</span>
+          <span>reddit.com limited</span>
+          <span>tiktok.com paused</span>
+          <span>netflix.com blocked</span>
+        </div>
+        <div class="domain-stream stream-two">
+          <span>instagram.com paused</span>
+          <span>x.com limited</span>
+          <span>twitch.tv blocked</span>
+          <span>espn.com paused</span>
+        </div>
+
+        <div class="browser-frame browser-frame-main">
+          <div class="browser-bar">
+            <span></span><span></span><span></span>
+            <div class="address-pill">study-session.local</div>
+          </div>
+          <div class="browser-content">
+            <div class="block-banner">
+              <img src="/assets/icons/circle-pause-regular-full.svg" alt="" />
+              <div>
+                <strong>youtube.com paused</strong>
+                <span>Deep Work Mode has 47 minutes left.</span>
+              </div>
+            </div>
+            <div class="mock-grid">
+              <div class="mock-tile">
+                <span>Time saved</span>
+                <strong>1h 45m</strong>
+              </div>
+              <div class="mock-tile">
+                <span>Blocked attempts</span>
+                <strong>11</strong>
+              </div>
+              <div class="mock-tile wide">
+                <span>Top autopilot site</span>
+                <strong>reddit.com</strong>
+              </div>
+            </div>
+            <div class="timeline">
+              <span class="timeline-hit"></span>
+              <span class="timeline-hit active"></span>
+              <span class="timeline-hit"></span>
+              <span class="timeline-hit quiet"></span>
+              <span class="timeline-hit active"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="browser-frame browser-frame-side">
+          <div class="mini-header">
+            <img src="/new_logo.png" alt="" />
+            <span>Study Mode</span>
+          </div>
+          <div class="site-row blocked">TikTok <span>Blocked</span></div>
+          <div class="site-row limited">YouTube <span>25m</span></div>
+          <div class="site-row limited">Reddit <span>15m</span></div>
+          <div class="site-row open">Canvas <span>Open</span></div>
+        </div>
+      </div>
+
+      <div class="hero-copy">
+        <p class="eyebrow">Chrome focus extension</p>
+        <h1 id="hero-title">Screen Time Manager</h1>
+        <p class="hero-lede">
+          Stop opening distracting sites on autopilot. Pick a focus preset, set useful limits,
+          and see the visits you avoided before they become another lost hour.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#presets">
+            <img src="/assets/icons/clock-regular-full.svg" alt="" />
+            <span>View Presets</span>
+          </a>
+          <a class="button button-secondary" href="#insights">
+            <img src="/assets/icons/arrow-pointer-solid-full.svg" alt="" />
+            <span>See Metrics</span>
+          </a>
+        </div>
+        <dl class="proof-strip" aria-label="Product highlights">
+          <div>
+            <dt>3</dt>
+            <dd>ready-made modes</dd>
+          </div>
+          <div>
+            <dt>4</dt>
+            <dd>core stats</dd>
+          </div>
+          <div>
+            <dt>0</dt>
+            <dd>setup drag</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section section-presets reveal" id="presets" aria-labelledby="presets-title" data-reveal>
+      <div class="section-heading reveal" data-reveal>
+        <p class="eyebrow">Quick start</p>
+        <h2 id="presets-title">Start with a preset.</h2>
+        <p>
+          Give new users an immediate structure for common focus moments without asking them
+          to build every rule from scratch.
+        </p>
+      </div>
+
+      <div class="preset-layout">
+        <div class="preset-list" role="list" aria-label="Preset options">
+          <button class="preset-card selected reveal" type="button" data-preset="study" aria-pressed="true" data-reveal>
+            <span class="preset-kicker">Homework block</span>
+            <strong>Study Mode</strong>
+            <span>Moderate limits for YouTube, Reddit, TikTok, Instagram, Netflix, and X.</span>
+          </button>
+
+          <button class="preset-card reveal" type="button" data-preset="deep" aria-pressed="false" data-reveal>
+            <span class="preset-kicker">60 to 120 minutes</span>
+            <strong>Deep Work Mode</strong>
+            <span>Stricter blocks for social, video, news, sports, and entertainment sites.</span>
+          </button>
+
+          <button class="preset-card reveal" type="button" data-preset="sleep" aria-pressed="false" data-reveal>
+            <span class="preset-kicker">Late night guardrail</span>
+            <strong>Sleep Mode</strong>
+            <span>Evening blocks for the sites that usually stretch bedtime by accident.</span>
+          </button>
+        </div>
+
+        <aside class="preset-preview reveal" aria-live="polite" data-reveal>
+          <div class="preview-topline">
+            <span id="preset-label">Study Mode</span>
+            <span id="preset-status">Moderate</span>
+          </div>
+          <h3 id="preset-title">Ready for a study session</h3>
+          <p id="preset-description">
+            Adds focused limits for the distracting sites students reopen during homework.
+          </p>
+          <div class="chip-row" id="preset-sites" aria-label="Included sites">
+            <span>YouTube</span>
+            <span>Reddit</span>
+            <span>TikTok</span>
+            <span>Instagram</span>
+          </div>
+          <div class="rule-preview">
+            <div>
+              <span>Rule type</span>
+              <strong id="preset-rule">Daily limits</strong>
+            </div>
+            <div>
+              <span>Suggested window</span>
+              <strong id="preset-window">After class and evenings</strong>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section section-insights reveal" id="insights" aria-labelledby="insights-title" data-reveal>
+      <div class="section-heading compact reveal" data-reveal>
+        <p class="eyebrow">Daily feedback</p>
+        <h2 id="insights-title">Show the behavior that usually stays invisible.</h2>
+      </div>
+
+      <div class="metric-grid">
+        <article class="metric-card reveal" data-reveal>
+          <img src="/assets/icons/clock-regular-full.svg" alt="" />
+          <span>Time spent today</span>
+          <strong data-count="138" data-format="time">0m</strong>
+        </article>
+        <article class="metric-card reveal" data-reveal>
+          <img src="/assets/icons/arrow-pointer-solid-full.svg" alt="" />
+          <span>Visit count today</span>
+          <strong data-count="37">0</strong>
+        </article>
+        <article class="metric-card reveal" data-reveal>
+          <img src="/assets/icons/circle-pause-regular-full.svg" alt="" />
+          <span>Blocked attempts</span>
+          <strong data-count="11">0</strong>
+        </article>
+        <article class="metric-card reveal" data-reveal>
+          <img src="/assets/icons/streak_icon.png" alt="" />
+          <span>Time saved</span>
+          <strong data-count="105" data-format="time">0m</strong>
+        </article>
+      </div>
+    </section>
+
+    <section class="section student-band reveal" id="students" aria-labelledby="students-title" data-reveal>
+      <div class="student-copy reveal" data-reveal>
+        <p class="eyebrow">Built for student focus</p>
+        <h2 id="students-title">A cleaner path from impulse to intention.</h2>
+        <p>
+          Screen Time Manager is shaped for the moments when a student opens a tab without
+          thinking, catches the redirect, and gets back to the assignment.
+        </p>
+      </div>
+
+      <div class="flow-list" aria-label="Focus flow">
+        <div class="reveal" data-reveal>
+          <span>01</span>
+          <strong>Notice the loop</strong>
+          <p>Visit counts make repeated checks obvious.</p>
+        </div>
+        <div class="reveal" data-reveal>
+          <span>02</span>
+          <strong>Apply structure</strong>
+          <p>Presets create editable rules in seconds.</p>
+        </div>
+        <div class="reveal" data-reveal>
+          <span>03</span>
+          <strong>Stay with the work</strong>
+          <p>Blocked attempts become measurable progress.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section launch-section reveal" id="launch" aria-labelledby="launch-title" data-reveal>
+      <div>
+        <p class="eyebrow">Vercel ready</p>
+        <h2 id="launch-title">Static, fast, and ready to publish.</h2>
+        <p>
+          This mockup ships as plain HTML, CSS, and JavaScript from the repo root, so Vercel
+          can deploy it without a build pipeline.
+        </p>
+      </div>
+      <a class="button button-primary" href="https://vercel.com/new" target="_blank" rel="noreferrer">
+        <img src="/assets/icons/pin_icon.svg" alt="" />
+        <span>Open Vercel</span>
+      </a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>Screen Time Manager</span>
+    <span>Focus presets, daily limits, and blocked-attempt insight.</span>
+  </footer>
+
+  <script src="/landing.js"></script>
+</body>
+</html>
