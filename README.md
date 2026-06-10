@@ -34,11 +34,14 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 
 ---
 
-## Vercel Website Mockup
+## Vercel Website
 
-This repo includes a static landing-page mockup for Screen Time Manager:
+This repo includes a static marketing website for Screen Time Manager:
 
 - `index.html`
+- `privacy.html`
+- `changelog.html`
+- `feedback.html`
 - `landing.css`
 - `landing.js`
 - `vercel.json`
@@ -48,6 +51,15 @@ To deploy it on Vercel, import the repository and use the default static setting
 - Framework Preset: Other
 - Build Command: None
 - Output Directory: `./`
+
+Speed Insights is installed with the Vercel script tag in `index.html`:
+
+```html
+<script defer src="/_vercel/speed-insights/script.js"></script>
+```
+
+After importing the project, enable Speed Insights from the project dashboard so
+Vercel provisions the `/_vercel/speed-insights/*` routes on the next deployment.
 
 ---
 
