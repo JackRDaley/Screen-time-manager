@@ -2092,6 +2092,33 @@ img.planet-current {
     box-shadow:
         inset 0 0 0 4px rgba(255,177,138,.04),
         0 0 22px rgba(255,126,86,.20);
+    animation: journey-next-ring-pulse 3.6s ease-in-out infinite;
+    transform-origin: center;
+}
+
+@keyframes journey-next-ring-pulse {
+    0%,
+    100% {
+        opacity: .86;
+        transform: scale(1);
+        box-shadow:
+            inset 0 0 0 4px rgba(255,177,138,.04),
+            0 0 18px rgba(255,126,86,.16);
+    }
+
+    50% {
+        opacity: 1;
+        transform: scale(1.035);
+        box-shadow:
+            inset 0 0 0 4px rgba(255,177,138,.055),
+            0 0 26px rgba(255,126,86,.25);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .journey-stop-next::before {
+        animation: none;
+    }
 }
 
 .journey-stop-planet {
