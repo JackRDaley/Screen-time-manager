@@ -2088,17 +2088,59 @@ img.planet-current {
 }
 
 .journey-stop-next::before {
-    border-color: rgba(255,177,138,.46);
+    border-color: rgba(255,177,138,.56);
     box-shadow:
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
         inset 0 0 0 4px rgba(255,177,138,.04),
         0 0 22px rgba(255,126,86,.20);
     animation: journey-next-ring-pulse 3.6s ease-in-out infinite;
     transform-origin: center;
+=======
+        inset 0 0 0 4px rgba(255,177,138,.05),
+        0 0 24px rgba(255,126,86,.24);
+    animation: journey-next-ring-pulse 2.8s ease-in-out infinite;
+>>>>>>> theirs
+=======
+        inset 0 0 0 4px rgba(255,177,138,.05),
+        0 0 24px rgba(255,126,86,.24);
+    animation: journey-next-ring-pulse 2.8s ease-in-out infinite;
+>>>>>>> theirs
+=======
+        inset 0 0 0 4px rgba(255,177,138,.05),
+        0 0 24px rgba(255,126,86,.24);
+    animation: journey-next-ring-pulse 2.8s ease-in-out infinite;
+>>>>>>> theirs
+=======
+        inset 0 0 0 4px rgba(255,177,138,.05),
+        0 0 24px rgba(255,126,86,.24);
+    animation: journey-next-ring-pulse 2.8s ease-in-out infinite;
+>>>>>>> theirs
+=======
+        inset 0 0 0 4px rgba(255,177,138,.05),
+        0 0 24px rgba(255,126,86,.24);
+    animation: journey-next-ring-pulse 2.8s ease-in-out infinite;
+>>>>>>> theirs
+=======
+        inset 0 0 0 4px rgba(255,177,138,.05),
+        0 0 24px rgba(255,126,86,.24);
+    animation: journey-next-ring-pulse 2.8s ease-in-out infinite;
+>>>>>>> theirs
 }
 
 @keyframes journey-next-ring-pulse {
     0%,
     100% {
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
         opacity: .86;
         transform: scale(1);
         box-shadow:
@@ -2112,6 +2154,44 @@ img.planet-current {
         box-shadow:
             inset 0 0 0 4px rgba(255,177,138,.055),
             0 0 26px rgba(255,126,86,.25);
+=======
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+        opacity: .78;
+        box-shadow:
+            inset 0 0 0 4px rgba(255,177,138,.04),
+            0 0 16px rgba(255,126,86,.16);
+    }
+
+    45% {
+        opacity: 1;
+        box-shadow:
+            inset 0 0 0 4px rgba(255,177,138,.07),
+            0 0 34px rgba(255,126,86,.36);
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
     }
 }
 
