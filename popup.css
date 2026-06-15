@@ -2096,10 +2096,16 @@ img.planet-current {
 <<<<<<< ours
 <<<<<<< ours
 <<<<<<< ours
+<<<<<<< ours
         inset 0 0 0 4px rgba(255,177,138,.04),
         0 0 22px rgba(255,126,86,.20);
     animation: journey-next-ring-pulse 3.6s ease-in-out infinite;
     transform-origin: center;
+=======
+        inset 0 0 0 4px rgba(255,177,138,.05),
+        0 0 24px rgba(255,126,86,.24);
+    animation: journey-next-ring-pulse 2.8s ease-in-out infinite;
+>>>>>>> theirs
 =======
         inset 0 0 0 4px rgba(255,177,138,.05),
         0 0 24px rgba(255,126,86,.24);
@@ -2141,6 +2147,7 @@ img.planet-current {
 <<<<<<< ours
 <<<<<<< ours
 <<<<<<< ours
+<<<<<<< ours
         opacity: .86;
         transform: scale(1);
         box-shadow:
@@ -2155,6 +2162,8 @@ img.planet-current {
             inset 0 0 0 4px rgba(255,177,138,.055),
             0 0 26px rgba(255,126,86,.25);
 =======
+=======
+>>>>>>> theirs
 =======
 >>>>>>> theirs
 =======
@@ -2181,6 +2190,9 @@ img.planet-current {
 <<<<<<< ours
 <<<<<<< ours
 <<<<<<< ours
+<<<<<<< ours
+>>>>>>> theirs
+=======
 >>>>>>> theirs
 =======
 >>>>>>> theirs
