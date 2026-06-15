@@ -22,12 +22,42 @@ const WHOP_CHECKOUT_START_URL = "https://screen-time-manager.jackster0627.worker
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
 const CHROME_WEBSTORE_REVIEW_URL = "https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo/reviews";
 const REVIEW_PROMPT_STATE_KEY = "reviewPromptState";
+const BLOCK_RECLAIM_KEY = "saturnBlockReclaimStats";
+const RECLAIM_MS_PER_BLOCK = 5 * 60 * 1000;
 const REVIEW_PROMPT_FIRST_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
 const REVIEW_PROMPT_INTERVAL_MS = 14 * 24 * 60 * 60 * 1000;
 const LIVE_REFRESH_INTERVAL_MS = 1000;
 const LIVE_REFRESH_MOTION_SUPPRESSION_MS = 120;
 const HOURLY_BAR_MIN_ACTIVE_HEIGHT_PCT = 6;
 const HOURLY_BAR_DAILY_SHARE_SCALE = 0.25;
+
+const HOUR_MS = 60 * 60 * 1000;
+const PLANET_STOPS = Object.freeze([
+    { id: "earth", label: "Earth", shortLabel: "Earth", thresholdMs: 0, distanceKm: 0 },
+    { id: "moon", label: "Moon", shortLabel: "Moon", thresholdMs: 2 * HOUR_MS, distanceKm: 384400 },
+    { id: "mars", label: "Mars Orbit", shortLabel: "Mars", thresholdMs: 10 * HOUR_MS, distanceKm: 78000000 },
+    { id: "jupiter", label: "Jupiter", shortLabel: "Jupiter", thresholdMs: 25 * HOUR_MS, distanceKm: 628000000 },
+    { id: "saturn", label: "Saturn", shortLabel: "Saturn", thresholdMs: 50 * HOUR_MS, distanceKm: 1275000000 },
+    { id: "uranus", label: "Uranus", shortLabel: "Uranus", thresholdMs: 100 * HOUR_MS, distanceKm: 2723000000 },
+    { id: "neptune", label: "Neptune", shortLabel: "Neptune", thresholdMs: 200 * HOUR_MS, distanceKm: 4351000000 },
+    { id: "interstellar", label: "Interstellar Space", shortLabel: "Deep", thresholdMs: 500 * HOUR_MS, distanceKm: 7500000000 }
+]);
+
+const PLANET_ICON_PATHS = Object.freeze({
+    earth: "assets/planets/earth.png",
+    moon: "assets/planets/moon.png",
+    mars: "assets/planets/mars.png",
+    jupiter: "assets/planets/jupiter.png",
+    saturn: "assets/planets/saturn.png",
+    uranus: "assets/planets/uranus.png",
+    neptune: "assets/planets/neptune.png",
+    interstellar: "assets/planets/interstellar.png"
+});
+
+const TIMELINE_PLANET_ICON_PATHS = Object.freeze({
+    ...PLANET_ICON_PATHS,
+    saturn: "assets/planets/saturn-timeline.png"
+});
 
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 30,
@@ -86,8 +116,8 @@ const ONBOARDING_STEPS = Object.freeze([
     {
         tabId: "tab1",
         target: ".stat-strip",
-        title: "Start on your dashboard",
-        copy: "The top cards summarize today, while the lists and hourly chart help you spot where your time is going."
+        title: "Start on your journey",
+        copy: "The top cards summarize reclaimed time, while the journey, lists, and orbit pattern show where your focus is going."
     },
     {
         tabId: "tab2",
@@ -137,6 +167,7 @@ const state = {
 
 let liveRefreshPromise = null;
 let rankingMotionRestoreTimer = null;
+let settingsOverlayCloseTimer = null;
 const viewedInsightsThisSession = new Set();
 
 function normalizeDomain(input) {
@@ -280,8 +311,8 @@ function formatHourRangeTooltip(hour) {
 
 function getColorGradientForIntensity(value) {
     const ratio = Math.max(0, Math.min(1, Number(value) || 0));
-    const start = [34, 217, 255];
-    const end = [255, 141, 83];
+    const start = [143, 210, 216];
+    const end = [212, 106, 68];
     const r = Math.round(start[0] + (end[0] - start[0]) * ratio);
     const g = Math.round(start[1] + (end[1] - start[1]) * ratio);
     const b = Math.round(start[2] + (end[2] - start[2]) * ratio);
@@ -416,6 +447,203 @@ function previousOffsets(offsets = []) {
 function snoozesForOffsets(offsets = []) {
     const history = state.data.snoozeHistory || {};
     return offsets.reduce((sum, offset) => sum + Number(history[dayKeyOffset(offset)] || 0), 0);
+}
+
+function emptyReclaimSummary() {
+    return { count: 0, estimatedMs: 0, bySource: {}, byTier: {} };
+}
+
+function normalizeBlockSourceKey(source) {
+    return source === "scheduled" ? "scheduled" : "limit";
+}
+
+function mergeCountMap(target, source = {}, normalizeKey = (key) => key) {
+    Object.entries(source || {}).forEach(([rawKey, value]) => {
+        const key = normalizeKey(rawKey);
+        target[key] = Number(target[key] || 0) + Math.max(0, Number(value || 0));
+    });
+}
+
+function addReclaimDay(summary, day = {}) {
+    const count = Math.max(0, Number(day.count || day.blockedCount || 0));
+    const estimatedMs = Math.max(0, Number(day.estimatedMs || count * RECLAIM_MS_PER_BLOCK || 0));
+    summary.count += count;
+    summary.estimatedMs += estimatedMs;
+
+    const sourceTotal = Object.values(day.bySource || {}).reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
+    if (sourceTotal > 0) {
+        mergeCountMap(summary.bySource, day.bySource, normalizeBlockSourceKey);
+    } else if (count > 0) {
+        summary.bySource.limit = Number(summary.bySource.limit || 0) + count;
+    }
+
+    mergeCountMap(summary.byTier, day.byTier);
+    return summary;
+}
+
+function reclaimStatsForOffsets(offsets = []) {
+    const history = state.data[BLOCK_RECLAIM_KEY] || {};
+    return offsets.reduce((summary, offset) => {
+        return addReclaimDay(summary, history[dayKeyOffset(offset)] || {});
+    }, emptyReclaimSummary());
+}
+
+function reclaimStatsForHistory() {
+    const history = state.data[BLOCK_RECLAIM_KEY] || {};
+    return Object.values(history).reduce((summary, day) => addReclaimDay(summary, day), emptyReclaimSummary());
+}
+
+function sourceCount(summary, source) {
+    return Math.max(0, Number(summary?.bySource?.[source] || 0));
+}
+
+function formatBlockCount(count) {
+    const total = Math.max(0, Number(count) || 0);
+    return `${total.toLocaleString()} ${total === 1 ? "block" : "blocks"}`;
+}
+
+function planetIconPath(id) {
+    return PLANET_ICON_PATHS[id] || PLANET_ICON_PATHS.earth;
+}
+
+function timelinePlanetIconPath(id) {
+    return TIMELINE_PLANET_ICON_PATHS[id] || PLANET_ICON_PATHS.earth;
+}
+
+function formatDistanceKm(value) {
+    const distance = Math.max(0, Number(value) || 0);
+    if (distance >= 1000000000) {
+        const billions = distance / 1000000000;
+        return `${billions >= 10 ? Math.round(billions) : billions.toFixed(1)}B km`;
+    }
+    if (distance >= 1000000) return `${Math.round(distance / 1000000)}M km`;
+    if (distance >= 1000) return `${Math.round(distance / 1000)}k km`;
+    return `${Math.round(distance)} km`;
+}
+
+function formatJourneyThreshold(ms) {
+    const hours = Math.max(0, Number(ms) || 0) / HOUR_MS;
+    return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
+}
+
+function journeyDestinationLabel(stop = {}) {
+    if (stop.id === "moon") return "The Moon";
+    return stop.shortLabel || stop.label || "destination";
+}
+
+function journeyForTime(estimatedMs = 0) {
+    const savedMs = Math.max(0, Number(estimatedMs) || 0);
+    let currentIndex = 0;
+    PLANET_STOPS.forEach((stop, index) => {
+        if (savedMs >= stop.thresholdMs) currentIndex = index;
+    });
+
+    const current = PLANET_STOPS[currentIndex];
+    const next = PLANET_STOPS[currentIndex + 1] || null;
+    const start = current.thresholdMs;
+    const end = next?.thresholdMs || Math.max(current.thresholdMs, savedMs);
+    const span = Math.max(1, end - start);
+    const progress = next ? Math.max(0, Math.min(100, Math.round(((savedMs - start) / span) * 100))) : 100;
+
+    return {
+        current,
+        currentIndex,
+        next,
+        progress,
+        remainingMs: next ? Math.max(0, next.thresholdMs - savedMs) : 0
+    };
+}
+
+function renderJourney(reclaimSummary = { count: 0, estimatedMs: 0 }) {
+    const card = $("journeyCard");
+    if (!card) return;
+
+    const journey = journeyForTime(reclaimSummary.estimatedMs);
+    const planet = $("journeyPlanet");
+    if (planet) {
+        planet.className = `journey-stop-planet planet-${journey.current.id}`;
+        planet.src = planetIconPath(journey.current.id);
+    }
+
+    setText("journeyLocation", journey.current.label);
+    setText("journeyNext", journey.next ? journey.next.label : "Mission complete");
+    setText("journeyCurrentThreshold", formatJourneyThreshold(journey.current.thresholdMs));
+
+    const fill = $("journeyProgressFill");
+    if (fill) fill.style.width = `${journey.progress}%`;
+    setText("journeyProgressPct", `${journey.progress}%`);
+    setText(
+        "journeyProgressCopy",
+        journey.next ? `Next destination: ${journeyDestinationLabel(journey.next)}` : "Journey complete"
+    );
+
+    const nextPlanet = $("journeyNextPlanet");
+    const nextTarget = journey.next || journey.current;
+    if (nextPlanet) {
+        nextPlanet.className = `journey-stop-planet planet-${nextTarget.id}`;
+        nextPlanet.src = planetIconPath(nextTarget.id);
+    }
+    setText("journeyNextThreshold", formatJourneyThreshold(nextTarget.thresholdMs));
+
+    const routeTrack = $("journeyRouteTrack");
+    if (routeTrack) {
+        const markerLeft = Math.max(0, Math.min(100, journey.progress));
+        routeTrack.style.setProperty("--journey-marker-left", `${markerLeft}%`);
+    }
+}
+
+function renderProfile() {
+    const reclaim = reclaimStatsForHistory();
+    const journey = journeyForTime(reclaim.estimatedMs);
+    const limitBlocks = sourceCount(reclaim, "limit");
+    const scheduledBlocks = sourceCount(reclaim, "scheduled");
+    const topSource = limitBlocks || scheduledBlocks
+        ? (scheduledBlocks > limitBlocks ? "Schedules" : "Limits")
+        : "--";
+    const limitPct = reclaim.count ? Math.round((limitBlocks / reclaim.count) * 100) : 0;
+    const scheduledPct = reclaim.count ? Math.round((scheduledBlocks / reclaim.count) * 100) : 0;
+
+    setText("profileTotalReclaimed", formatShortTime(reclaim.estimatedMs));
+    setText("profileBlockedCount", reclaim.count.toLocaleString());
+    setText("profileCurrentLocation", journey.current.label);
+    setText("profileNextDestination", journey.next ? journey.next.label : "Complete");
+    setText("profileTopSource", topSource);
+    setText("profileJourneySummary", `${formatDistanceKm(journey.current.distanceKm)} traveled`);
+    setText("profileSourceTotal", formatBlockCount(reclaim.count));
+    setText("profileLimitBlocks", formatBlockCount(limitBlocks));
+    setText("profileScheduleBlocks", formatBlockCount(scheduledBlocks));
+    setText("profileJourneyPhrase", `${journey.current.label} orbit`);
+    setText(
+        "profileJourneyDetail",
+        journey.next
+            ? `${journey.next.label} is ${formatShortTime(journey.remainingMs)} away`
+            : "Interstellar course complete"
+    );
+
+    const limitFill = $("profileLimitSourceFill");
+    if (limitFill) limitFill.style.width = `${limitPct}%`;
+    const scheduledFill = $("profileScheduleSourceFill");
+    if (scheduledFill) scheduledFill.style.width = `${scheduledPct}%`;
+
+    const milestones = $("profileJourneyMilestones");
+    if (!milestones) return;
+    milestones.innerHTML = PLANET_STOPS.map((stop, index) => {
+        const stateClass = index < journey.currentIndex
+            ? " is-reached"
+            : index === journey.currentIndex
+            ? " is-current"
+            : " is-locked";
+        const meta = index <= journey.currentIndex ? "reached" : "";
+        return `
+            <div class="profile-map-stop profile-map-stop-${escapeHtml(stop.id)}${stateClass}">
+                <span class="profile-map-connector" aria-hidden="true"></span>
+                <img class="profile-map-icon" src="${escapeHtml(timelinePlanetIconPath(stop.id))}" alt="" aria-hidden="true" />
+                <span class="profile-map-dot" aria-hidden="true"></span>
+                <div class="profile-map-label">${escapeHtml(stop.shortLabel || stop.label)}</div>
+                <div class="profile-map-meta">${escapeHtml(meta)}</div>
+            </div>
+        `;
+    }).join("");
 }
 
 function hourlyUsageForOffsets(offsets = []) {
@@ -575,19 +803,18 @@ function renderStats() {
     const range = $("statRange")?.value || "Today";
     const currentOffsets = offsetsForRange(range);
     const previousPeriodOffsets = previousOffsets(currentOffsets);
-    const current = statsForOffsets(currentOffsets);
-    const previous = statsForOffsets(previousPeriodOffsets);
-    const total = totals(current);
-    const previousTotal = totals(previous);
+    const reclaim = reclaimStatsForOffsets(currentOffsets);
+    const previousReclaim = reclaimStatsForOffsets(previousPeriodOffsets);
     const snoozes = snoozesForOffsets(currentOffsets);
     const previousSnoozes = snoozesForOffsets(previousPeriodOffsets);
 
-    setText("statScreenTime", formatShortTime(total.timeMs));
-    setText("statVisits", String(total.visits));
+    setText("statScreenTime", formatShortTime(reclaim.estimatedMs));
+    setText("statVisits", String(reclaim.count));
     setText("statSnoozes", String(snoozes));
-    setText("statScreenTimeDelta", formatPercentDelta(total.timeMs, previousTotal.timeMs));
-    setText("statVisitsDelta", formatPercentDelta(total.visits, previousTotal.visits));
+    setText("statScreenTimeDelta", formatPercentDelta(reclaim.estimatedMs, previousReclaim.estimatedMs));
+    setText("statVisitsDelta", formatPercentDelta(reclaim.count, previousReclaim.count));
     setText("statSnoozesDelta", formatPercentDelta(snoozes, previousSnoozes));
+    renderJourney(reclaim);
 }
 
 function renderActive() {
@@ -751,8 +978,8 @@ function renderRankingStyled() {
 
     const timeTitle = $("ranking")?.parentElement?.querySelector(".card-title");
     const visitsTitle = $("rankingByVisits")?.parentElement?.querySelector(".card-title");
-    if (timeTitle) timeTitle.textContent = `Time Spent · ${range}`;
-    if (visitsTitle) visitsTitle.textContent = `Most Visited · ${range}`;
+    if (timeTitle) timeTitle.textContent = `Time in Orbit - ${range}`;
+    if (visitsTitle) visitsTitle.textContent = `Frequent Pulls - ${range}`;
     state.rankingSignature = rankingSignature(range);
     renderList("ranking", makeRows(false), "No data yet.");
     renderList("rankingByVisits", makeRows(true), "No data yet.");
@@ -1283,7 +1510,7 @@ function renderHourlyStyled() {
     const title = $("usageCardTitle");
     if (!list) return;
     const range = $("statRange")?.value || "Today";
-    if (title) title.textContent = `Usage Distribution · ${range}`;
+    if (title) title.textContent = `Orbit Pattern - ${range}`;
 
     const bucketsByHour = hourlyUsageForOffsets(offsetsForRange(range));
     const buckets = Array.from({ length: 24 }, (_, hour) => {
@@ -1399,8 +1626,8 @@ function renderHourInsightStyled(slot) {
     insight.classList.remove("muted");
     insight.innerHTML = `
         <div class="hourly-tip-header">
-            <div class="hourly-tip-time">${formatHourRangeTooltip(hour)}${isPeak ? ' · <span class="hourly-tip-inline-peak">Peak</span>' : ""}</div>
-            <div class="hourly-tip-time-spent">${formatShortTime(time)} spent</div>
+            <div class="hourly-tip-time">${formatHourRangeTooltip(hour)}${isPeak ? ' - <span class="hourly-tip-inline-peak">Peak</span>' : ""}</div>
+            <div class="hourly-tip-time-spent">${formatShortTime(time)} in orbit</div>
         </div>
         ${domains.length > 0
             ? `<div class="hourly-tip-sites">${domains.map((entry) => `
@@ -1627,6 +1854,7 @@ function renderAll(options = {}) {
 
     try {
         renderStats();
+        renderProfile();
         renderActive();
         if (updateRankingInPlace) updateRankingMetricsInPlace();
         else renderRankingStyled();
@@ -1665,6 +1893,7 @@ async function loadAll(options = {}) {
         PREMIUM_KEY,
         REVIEW_PROMPT_STATE_KEY,
         ONBOARDING_KEY,
+        BLOCK_RECLAIM_KEY,
         "immutableAdminOverrideEnabled"
     ]);
 
@@ -2269,7 +2498,7 @@ async function handleActivationNotice() {
     const data = await chrome.storage.local.get([WHOP_ACTIVATION_NOTICE_KEY]);
     if (!data[WHOP_ACTIVATION_NOTICE_KEY]) return;
 
-    setActiveTab("tab4");
+    openSettingsOverlay({ focus: false });
     setFeedback("premiumStatusMsg", "Premium activated.", true);
     await chrome.storage.local.remove(WHOP_ACTIVATION_NOTICE_KEY);
 }
@@ -2284,6 +2513,40 @@ function selectedOnboardingStep() {
 function setActiveTab(tabId) {
     const tab = $(tabId);
     if (tab) tab.checked = true;
+}
+
+function openSettingsOverlay(options = {}) {
+    const overlay = $("settingsOverlay");
+    if (!overlay) return;
+    if (settingsOverlayCloseTimer) {
+        window.clearTimeout(settingsOverlayCloseTimer);
+        settingsOverlayCloseTimer = null;
+    }
+    overlay.hidden = false;
+    overlay.setAttribute("aria-hidden", "false");
+    $("settingsCogBtn")?.setAttribute("aria-expanded", "true");
+    window.requestAnimationFrame(() => overlay.classList.add("is-visible"));
+
+    if (options.focus !== false) {
+        window.setTimeout(() => $("settingsCloseBtn")?.focus({ preventScroll: true }), 0);
+    }
+}
+
+function closeSettingsOverlay(options = {}) {
+    const overlay = $("settingsOverlay");
+    if (!overlay || overlay.hidden) return;
+    overlay.classList.remove("is-visible");
+    overlay.setAttribute("aria-hidden", "true");
+    $("settingsCogBtn")?.setAttribute("aria-expanded", "false");
+    if (settingsOverlayCloseTimer) window.clearTimeout(settingsOverlayCloseTimer);
+    settingsOverlayCloseTimer = window.setTimeout(() => {
+        overlay.hidden = true;
+        settingsOverlayCloseTimer = null;
+    }, 180);
+
+    if (options.focus !== false) {
+        $("settingsCogBtn")?.focus({ preventScroll: true });
+    }
 }
 
 function onboardingShouldShow() {
@@ -2486,6 +2749,11 @@ function bindEvents() {
     $("scheduledForm")?.addEventListener("submit", saveSchedule);
     $("cancelScheduledEditBtn")?.addEventListener("click", resetScheduleForm);
     $("settingsForm")?.addEventListener("submit", saveSettings);
+    $("settingsCogBtn")?.addEventListener("click", () => openSettingsOverlay());
+    $("settingsCloseBtn")?.addEventListener("click", () => closeSettingsOverlay());
+    $("settingsOverlay")?.addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) closeSettingsOverlay();
+    });
     $("use24HourTime")?.addEventListener("change", persistSettings);
     $("limitNotificationsEnabled")?.addEventListener("change", persistSettings);
     $("personalInsightsEnabled")?.addEventListener("change", persistSettings);
@@ -2515,8 +2783,13 @@ function bindEvents() {
         const marker = event.target.closest("[data-step]");
         if (marker) showOnboardingStep(Number(marker.dataset.step));
     });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !$("settingsOverlay")?.hidden) {
+            closeSettingsOverlay();
+        }
+    });
 
-    chrome.storage.onChanged?.addListener((changes, area) => {
+    chrome.storage?.onChanged?.addListener((changes, area) => {
         if (area !== "local") return;
         const watched = [
             "blockedDomains",
@@ -2531,6 +2804,7 @@ function bindEvents() {
             "scheduledBlocks",
             SETTINGS_KEY,
             PREMIUM_KEY,
+            BLOCK_RECLAIM_KEY,
             REVIEW_PROMPT_STATE_KEY
         ];
         const changedWatchedKeys = watched.filter((key) => Object.prototype.hasOwnProperty.call(changes, key));

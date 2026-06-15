@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Screen Time Manager</title>
+    <title>Saturn</title>
     <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
@@ -16,7 +16,7 @@
                 <div id="onboardingStepCount" class="onboarding-step-count">1 of 4</div>
                 <div id="onboardingStepMarkers" class="onboarding-step-markers" aria-label="Tour steps"></div>
             </div>
-            <h2 id="onboardingTitle" class="onboarding-title">Dashboard overview</h2>
+            <h2 id="onboardingTitle" class="onboarding-title">Journey overview</h2>
             <p id="onboardingCopy" class="onboarding-copy">Your daily activity appears here first.</p>
             <div id="onboardingRedirectPreview" class="onboarding-redirect-preview" hidden>
                 <div class="preview-badge">Limit reached</div>
@@ -40,8 +40,8 @@
 
     <section id="reviewPromptToast" class="review-toast" role="dialog" aria-modal="false" aria-labelledby="reviewToastTitle" hidden>
         <button id="dismissReviewToastBtn" class="review-toast-close" type="button" aria-label="Dismiss review prompt">&times;</button>
-        <div id="reviewToastTitle" class="review-toast-title">Enjoying Screen Time Manager?</div>
-        <div class="review-toast-text">A quick review helps others discover it and lets us know what to improve.</div>
+        <div id="reviewToastTitle" class="review-toast-title">Enjoying Saturn?</div>
+        <div class="review-toast-text">A quick review helps other explorers discover it and lets us know what to improve.</div>
         <div class="review-toast-actions">
             <button class="btn btn-gradient" id="leaveReviewToastBtn" type="button">Leave Review</button>
             <button class="btn-ghost review-toast-secondary" id="notNowReviewToastBtn" type="button">Not now</button>
@@ -55,10 +55,10 @@
 
     <header>
         <div class="logo">
-            <img class="logo-mark" src="new_logo.png" alt="" aria-hidden="true" />
+            <img class="logo-mark" src="assets/planets/saturn-app-icon-128.png" alt="" aria-hidden="true" />
             <div>
-                <div class="logo-name">Screen Time Manager</div>
-                <div class="logo-sub">Focus &amp; Limits Manager</div>
+                <div class="logo-name">SATURN</div>
+                <div class="logo-sub">Your time. Your universe.</div>
             </div>
         </div>
         <div class="streak-header" id="streakHeader" aria-live="polite">
@@ -69,13 +69,14 @@
             <span class="pulse"></span>
             <span id="activeCount">0</span>&nbsp;active
         </div>
+        <button class="settings-cog-btn" id="settingsCogBtn" type="button" aria-label="Open settings" aria-controls="settingsOverlay" aria-expanded="false" title="Settings"></button>
     </header>
 
     <nav>
-        <label for="tab1">Dashboard</label>
+        <label for="tab1">Journey</label>
         <label for="tab2">Limits</label>
         <label for="tab3">Schedule</label>
-        <label for="tab4">Settings</label>
+        <label for="tab4">Profile</label>
     </nav>
 
     <div class="panels">
@@ -89,7 +90,7 @@
                             <img class="stat-icon" src="assets/icons/clock-regular-full.svg" alt="" />
                         </div>
                         <div class="stat-content">
-                            <div class="stat-lbl">Screen time</div>
+                            <div class="stat-lbl">Time reclaimed</div>
                             <div class="stat-value-row">
                                 <div class="stat-val" id="statScreenTime">—</div>
                             </div>
@@ -103,7 +104,7 @@
                             <img class="stat-icon" src="assets/icons/arrow-pointer-solid-full.svg" alt="" />
                         </div>
                         <div class="stat-content">
-                            <div class="stat-lbl">Visits</div>
+                            <div class="stat-lbl">Blocked</div>
                             <div class="stat-value-row">
                                 <div class="stat-val" id="statVisits">—</div>
                             </div>
@@ -136,6 +137,33 @@
                 </div>
             </div>
 
+            <div class="card journey-card" id="journeyCard">
+                <div class="journey-stop journey-stop-current">
+                    <img class="journey-stop-planet planet-earth" id="journeyPlanet" src="assets/planets/earth.png" alt="" aria-hidden="true" />
+                    <div class="journey-stop-threshold" id="journeyCurrentThreshold">0h</div>
+                </div>
+
+                <div class="journey-route" id="journeyRouteTrack" aria-label="Journey progress">
+                    <div class="journey-route-percent" id="journeyProgressPct">0%</div>
+                    <div class="journey-line">
+                        <span class="journey-line-fill" id="journeyProgressFill"></span>
+                        <span class="journey-line-glow"></span>
+                        <span class="journey-line-node journey-line-node-0" aria-hidden="true"></span>
+                        <span class="journey-line-node journey-line-node-25" aria-hidden="true"></span>
+                        <span class="journey-line-node journey-line-node-50" aria-hidden="true"></span>
+                        <span class="journey-line-node journey-line-node-75" aria-hidden="true"></span>
+                        <span class="journey-line-node journey-line-node-100" aria-hidden="true"></span>
+                        <img class="journey-route-rocket" src="assets/planets/rocket-cutout.png" alt="" aria-hidden="true" />
+                    </div>
+                    <div class="journey-progress-copy" id="journeyProgressCopy">Next destination: Moon</div>
+                </div>
+
+                <div class="journey-stop journey-stop-next">
+                    <img class="journey-stop-planet planet-moon" id="journeyNextPlanet" src="assets/planets/moon.png" alt="" aria-hidden="true" />
+                    <div class="journey-stop-threshold" id="journeyNextThreshold">2h</div>
+                </div>
+            </div>
+
             <div class="card dashboard-card-hidden" id="personalInsightsCard" hidden>
                 <div class="card-head">
                     <div class="card-title card-title-with-icon">
@@ -149,21 +177,21 @@
 
             <div class="card" id="activeCard" data-hide-if-empty="true">
                 <div class="card-head">
-                    <div class="card-title">Active Blocks</div>
+                    <div class="card-title">Active Shields</div>
                 </div>
                 <div id="activeList" class="list muted">No active blocks.</div>
             </div>
 
             <div class="card" id="rankingCard">
                 <div class="card-head">
-                    <div class="card-title">Time Spent</div>
+                    <div class="card-title">Time in Orbit</div>
                 </div>
                 <div id="ranking" class="list muted">No data yet.</div>
             </div>
 
             <div class="card" id="rankingByVisitsCard">
                 <div class="card-head">
-                    <div class="card-title">Most Visited</div>
+                    <div class="card-title">Frequent Pulls</div>
                 </div>
                 <div id="rankingByVisits" class="list muted">No data yet.</div>
             </div>
@@ -171,7 +199,7 @@
             <div class="usage-row">
                 <div class="card" id="usageCard">
                     <div class="card-head">
-                        <div class="card-title" id="usageCardTitle">Hourly Usage</div>
+                        <div class="card-title" id="usageCardTitle">Orbit Pattern</div>
                     </div>
                     <div class="hourly-chart-section">
                         <div id="hourlyDistribution" class="hourly-distribution muted">No data yet.</div>
@@ -313,103 +341,249 @@
             </div>
         </div>
 
-        <!-- ── Settings ───────────────────────────────── -->
-        <div class="panel" id="p4">
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title">Preferences</div>
+        <!-- ── Profile ───────────────────────────────── -->
+        <div class="panel panel-profile" id="p4">
+            <div class="profile-hero card">
+                <div class="profile-brand">
+                    <img class="profile-brand-icon" src="assets/planets/saturn-app-icon-128.png" alt="" aria-hidden="true" />
+                    <div class="profile-brand-copy">
+                        <div class="profile-brand-name">SATURN</div>
+                        <div class="profile-brand-sub">Your time. Your universe.</div>
+                    </div>
                 </div>
-                <div class="card-body">
-                    <form id="settingsForm">
-                        <div class="settings-list">
-                            <div class="settings-row">
-                                <label class="settings-label" for="defaultLimitMinutes">Default limit (minutes)</label>
-                                <input id="defaultLimitMinutes" class="input input-min settings-number" type="number" min="1" max="1440" />
-                            </div>
-
-                            <div class="settings-row">
-                                <label class="settings-label" for="use24HourTime">Use 24-hour schedule inputs</label>
-                                <input id="use24HourTime" class="settings-toggle" type="checkbox" />
-                            </div>
-
-                            <div class="settings-row">
-                                <label class="settings-label" for="limitNotificationsEnabled">Limit notifications</label>
-                                <input id="limitNotificationsEnabled" class="settings-toggle" type="checkbox" />
-                            </div>
-
-                            <div class="settings-row">
-                                <label class="settings-label" for="personalInsightsEnabled">Personal insights</label>
-                                <input id="personalInsightsEnabled" class="settings-toggle" type="checkbox" />
-                            </div>
-
-                            <div class="settings-row">
-                                <label class="settings-label" for="insightNotificationsEnabled">Insight notifications</label>
-                                <input id="insightNotificationsEnabled" class="settings-toggle" type="checkbox" />
-                            </div>
-
-                            <div class="settings-row">
-                                <label class="settings-label" for="insightMaxNotificationsPerDay">Max insight notifications per day</label>
-                                <input id="insightMaxNotificationsPerDay" class="input input-min settings-number" type="number" min="0" max="5" />
-                            </div>
-
-                            <div class="settings-row">
-                                <label class="settings-label" for="insightSensitivity">Insight sensitivity</label>
-                                <select id="insightSensitivity" class="input settings-select">
-                                    <option value="low">Low</option>
-                                    <option value="normal">Normal</option>
-                                    <option value="high">High</option>
-                                </select>
-                            </div>
-
-                        </div>
-
-                        <div class="settings-actions">
-                            <button class="btn" type="submit" style="width:100%">Save Settings</button>
-                            <div id="settingsSavedMsg" class="settings-saved" role="status" aria-live="polite">Settings saved</div>
-                        </div>
-                    </form>
+                <div class="profile-total">
+                    <span class="profile-total-label">Time reclaimed</span>
+                    <strong id="profileTotalReclaimed">0s</strong>
                 </div>
             </div>
 
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title">Emergency Override</div>
+            <div class="profile-stats-grid" aria-label="Profile metrics">
+                <div class="profile-stat-card">
+                    <span>Blocked</span>
+                    <strong id="profileBlockedCount">0</strong>
                 </div>
-                <div class="card-body">
-                    <div class="emergency-override-card" role="group" aria-label="Emergency Override">
-                        <div id="immutableOverrideCopy" class="emergency-override-copy">Available only while this tab is blocked by an immutable rule.</div>
-                        <button id="immutableAdminOverrideBtn" class="emergency-override-btn" type="button" disabled>No Active Immutable Block</button>
-                        <div id="immutableOverrideMsg" class="form-feedback" role="status" aria-live="polite"></div>
+                <div class="profile-stat-card">
+                    <span>Current</span>
+                    <strong id="profileCurrentLocation">Earth</strong>
+                </div>
+                <div class="profile-stat-card">
+                    <span>Next</span>
+                    <strong id="profileNextDestination">Moon</strong>
+                </div>
+                <div class="profile-stat-card">
+                    <span>Top source</span>
+                    <strong id="profileTopSource">Limits</strong>
+                </div>
+            </div>
+
+            <div class="card profile-map-card">
+                <div class="card-head">
+                    <div class="card-title">Journey Map</div>
+                    <div class="profile-map-summary" id="profileJourneySummary">0 km traveled</div>
+                </div>
+                <div class="profile-planet-map" id="profileJourneyMilestones" aria-label="Planet journey milestones">
+                    <div class="profile-map-stop is-current">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/earth.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Earth</div>
+                        <div class="profile-map-meta">reached</div>
+                    </div>
+                    <div class="profile-map-stop is-locked">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/moon.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Moon</div>
+                        <div class="profile-map-meta"></div>
+                    </div>
+                    <div class="profile-map-stop is-locked">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/mars.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Mars</div>
+                        <div class="profile-map-meta"></div>
+                    </div>
+                    <div class="profile-map-stop is-locked">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/jupiter.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Jupiter</div>
+                        <div class="profile-map-meta"></div>
+                    </div>
+                    <div class="profile-map-stop is-locked profile-map-stop-saturn">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/saturn-timeline.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Saturn</div>
+                        <div class="profile-map-meta"></div>
+                    </div>
+                    <div class="profile-map-stop is-locked">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/uranus.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Uranus</div>
+                        <div class="profile-map-meta"></div>
+                    </div>
+                    <div class="profile-map-stop is-locked">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/neptune.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Neptune</div>
+                        <div class="profile-map-meta"></div>
+                    </div>
+                    <div class="profile-map-stop is-locked profile-map-stop-interstellar">
+                        <span class="profile-map-connector" aria-hidden="true"></span>
+                        <img class="profile-map-icon" src="assets/planets/interstellar.png" alt="" aria-hidden="true" />
+                        <span class="profile-map-dot" aria-hidden="true"></span>
+                        <div class="profile-map-label">Interstellar</div>
+                        <div class="profile-map-meta"></div>
                     </div>
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card profile-source-card">
                 <div class="card-head">
-                    <div class="card-title">Whop Billing</div>
+                    <div class="card-title">Reclaim Sources</div>
+                    <div class="profile-source-total" id="profileSourceTotal">0 blocks</div>
                 </div>
-                <div class="card-body">
-                    <div class="billing-note muted">
-                        Checkout should link automatically. If activation lags, click Sync Premium Status or paste your Whop token below.
+                <div class="profile-source-list">
+                    <div class="profile-source-row">
+                        <div class="profile-source-copy">
+                            <span>Limits</span>
+                            <strong id="profileLimitBlocks">0 blocks</strong>
+                        </div>
+                        <div class="prog-wrap profile-source-progress" aria-hidden="true">
+                            <div class="prog-fill" id="profileLimitSourceFill"></div>
+                        </div>
                     </div>
+                    <div class="profile-source-row">
+                        <div class="profile-source-copy">
+                            <span>Schedules</span>
+                            <strong id="profileScheduleBlocks">0 blocks</strong>
+                        </div>
+                        <div class="prog-wrap profile-source-progress" aria-hidden="true">
+                            <div class="prog-fill" id="profileScheduleSourceFill"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                    <div class="settings-actions billing-actions">
-                        <button class="btn" id="verifyWhopBtn" type="button">Sync Premium Status</button>
-                        <button class="btn" id="manageWhopBtn" type="button">Manage / Cancel Membership</button>
-                        <details class="billing-troubleshoot">
-                            <summary>Troubleshooting: Link token manually</summary>
-                            <div class="billing-troubleshoot-body">
-                                <input id="manualWhopToken" class="input" type="text" placeholder="Paste Whop token (user_, mem_, mber_)" autocomplete="off" />
-                                <button class="btn" id="linkWhopTokenBtn" type="button">Link Existing Whop Token</button>
-                            </div>
-                        </details>
-                        <div id="premiumStatusMsg" class="settings-saved" role="status" aria-live="polite">Premium inactive</div>
-                    </div>
+            <div class="card profile-orbit-card">
+                <img class="profile-rocket-icon" src="assets/planets/rocket.png" alt="" aria-hidden="true" />
+                <div class="profile-orbit-copy">
+                    <div class="profile-orbit-title" id="profileJourneyPhrase">Earth orbit established</div>
+                    <div class="profile-orbit-meta" id="profileJourneyDetail">Moon is 2h away</div>
                 </div>
             </div>
         </div>
 
     </div><!-- /panels -->
+
+    <section class="settings-overlay" id="settingsOverlay" role="dialog" aria-modal="true" aria-labelledby="settingsDialogTitle" aria-hidden="true" hidden>
+        <div class="settings-sheet">
+            <div class="settings-sheet-head">
+                <div>
+                    <div class="settings-sheet-kicker">Saturn</div>
+                    <h2 id="settingsDialogTitle">Settings</h2>
+                </div>
+                <button class="settings-close-btn" id="settingsCloseBtn" type="button" aria-label="Close settings"></button>
+            </div>
+            <div class="settings-sheet-scroll">
+                <div class="card">
+                    <div class="card-head">
+                        <div class="card-title">Preferences</div>
+                    </div>
+                    <div class="card-body">
+                        <form id="settingsForm">
+                            <div class="settings-list">
+                                <div class="settings-row">
+                                    <label class="settings-label" for="defaultLimitMinutes">Default limit (minutes)</label>
+                                    <input id="defaultLimitMinutes" class="input input-min settings-number" type="number" min="1" max="1440" />
+                                </div>
+
+                                <div class="settings-row">
+                                    <label class="settings-label" for="use24HourTime">Use 24-hour schedule inputs</label>
+                                    <input id="use24HourTime" class="settings-toggle" type="checkbox" />
+                                </div>
+
+                                <div class="settings-row">
+                                    <label class="settings-label" for="limitNotificationsEnabled">Limit notifications</label>
+                                    <input id="limitNotificationsEnabled" class="settings-toggle" type="checkbox" />
+                                </div>
+
+                                <div class="settings-row">
+                                    <label class="settings-label" for="personalInsightsEnabled">Personal insights</label>
+                                    <input id="personalInsightsEnabled" class="settings-toggle" type="checkbox" />
+                                </div>
+
+                                <div class="settings-row">
+                                    <label class="settings-label" for="insightNotificationsEnabled">Insight notifications</label>
+                                    <input id="insightNotificationsEnabled" class="settings-toggle" type="checkbox" />
+                                </div>
+
+                                <div class="settings-row">
+                                    <label class="settings-label" for="insightMaxNotificationsPerDay">Max insight notifications per day</label>
+                                    <input id="insightMaxNotificationsPerDay" class="input input-min settings-number" type="number" min="0" max="5" />
+                                </div>
+
+                                <div class="settings-row">
+                                    <label class="settings-label" for="insightSensitivity">Insight sensitivity</label>
+                                    <select id="insightSensitivity" class="input settings-select">
+                                        <option value="low">Low</option>
+                                        <option value="normal">Normal</option>
+                                        <option value="high">High</option>
+                                    </select>
+                                </div>
+
+                            </div>
+
+                            <div class="settings-actions">
+                                <button class="btn" type="submit" style="width:100%">Save Settings</button>
+                                <div id="settingsSavedMsg" class="settings-saved" role="status" aria-live="polite">Settings saved</div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head">
+                        <div class="card-title">Emergency Override</div>
+                    </div>
+                    <div class="card-body">
+                        <div class="emergency-override-card" role="group" aria-label="Emergency Override">
+                            <div id="immutableOverrideCopy" class="emergency-override-copy">Available only while this tab is blocked by an immutable rule.</div>
+                            <button id="immutableAdminOverrideBtn" class="emergency-override-btn" type="button" disabled>No Active Immutable Block</button>
+                            <div id="immutableOverrideMsg" class="form-feedback" role="status" aria-live="polite"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head">
+                        <div class="card-title">Whop Billing</div>
+                    </div>
+                    <div class="card-body">
+                        <div class="billing-note muted">
+                            Checkout should link automatically. If activation lags, click Sync Premium Status or paste your Whop token below.
+                        </div>
+
+                        <div class="settings-actions billing-actions">
+                            <button class="btn" id="verifyWhopBtn" type="button">Sync Premium Status</button>
+                            <button class="btn" id="manageWhopBtn" type="button">Manage / Cancel Membership</button>
+                            <details class="billing-troubleshoot">
+                                <summary>Troubleshooting: Link token manually</summary>
+                                <div class="billing-troubleshoot-body">
+                                    <input id="manualWhopToken" class="input" type="text" placeholder="Paste Whop token (user_, mem_, mber_)" autocomplete="off" />
+                                    <button class="btn" id="linkWhopTokenBtn" type="button">Link Existing Whop Token</button>
+                                </div>
+                            </details>
+                            <div id="premiumStatusMsg" class="settings-saved" role="status" aria-live="polite">Premium inactive</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
 </div><!-- /scene -->
 <script src="shared-extension-utils.js"></script>
 <script src="popup.js"></script>

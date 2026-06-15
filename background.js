@@ -1341,7 +1341,7 @@ async function checkAndSendAlerts(domain, blockedDomains, statsToday) {
 
         await chrome.notifications?.create?.(`stmalert:${normalized}:${threshold}`, {
             type: "basic",
-            iconUrl: "new_logo.png",
+            iconUrl: "assets/planets/saturn-app-icon-128.png",
             title: `${threshold}% of ${normalized} limit used`,
             message: `${formatTimeSec(Math.round(usedMs / 1000))} used today.`
         });
@@ -1476,7 +1476,7 @@ async function sendPatternNotification(insight, options = {}) {
         try {
             await chrome.notifications.create(`stminsight:${record.id}:${now}`, {
                 type: "basic",
-                iconUrl: "new_logo.png",
+                iconUrl: "assets/planets/saturn-app-icon-128.png",
                 title: record.title,
                 message: record.message
             });

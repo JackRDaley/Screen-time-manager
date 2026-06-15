@@ -1,5 +1,5 @@
 const params = new URLSearchParams(location.search);
-const { getOrCreateAnalyticsClientId } = globalThis.StmSharedUtils || {};
+const { getOrCreateAnalyticsClientId, getDayKey } = globalThis.StmSharedUtils || {};
 
 // Domain validation to prevent open redirect vulnerability
 function validateDomainParam(raw) {
@@ -41,8 +41,11 @@ const source = params.get("source") || "limit";
 const tier = (params.get("tier") || "lenient").toLowerCase();
 const eventId = params.get("eid") || "";
 const BLOCK_EVENT_TRACKER_KEY = "blockedAnalyticsEvent";
+const BLOCK_RECLAIM_TRACKER_KEY = "saturnBlockReclaimEvent";
+const BLOCK_RECLAIM_STATS_KEY = "saturnBlockReclaimStats";
 const FIRST_BLOCK_REACHED_KEY = "activationFirstBlockReachedAt";
 const BLOCK_ANALYTICS_URL = "https://screen-time-manager.jackster0627.workers.dev/analytics/block-event";
+const RECLAIM_MS_PER_BLOCK = 5 * 60 * 1000;
 const TIER_LABELS = {
     lenient: "Lenient",
     standard: "Standard",
@@ -148,6 +151,48 @@ async function trackBlockedPageView() {
         });
     } catch {
         // Analytics should never interrupt extension behavior.
+    }
+}
+
+async function trackLocalBlockReclaim() {
+    const trackerKey = `${BLOCK_RECLAIM_TRACKER_KEY}:${eventId || location.href}`;
+    try {
+        if (sessionStorage.getItem(trackerKey)) return;
+        sessionStorage.setItem(trackerKey, "1");
+    } catch {
+        // Best effort only; local metrics should never affect the block page.
+    }
+
+    try {
+        const day = typeof getDayKey === "function"
+            ? getDayKey()
+            : new Date().toISOString().slice(0, 10);
+        const data = await chrome.storage.local.get([BLOCK_RECLAIM_STATS_KEY]);
+        const history = data[BLOCK_RECLAIM_STATS_KEY] || {};
+        const current = history[day] || { count: 0, estimatedMs: 0, bySource: {}, byTier: {} };
+        const sourceKey = normalizedBlockSource();
+        const tierKey = normalizedTierName();
+
+        await chrome.storage.local.set({
+            [BLOCK_RECLAIM_STATS_KEY]: {
+                ...history,
+                [day]: {
+                    ...current,
+                    count: Number(current.count || 0) + 1,
+                    estimatedMs: Number(current.estimatedMs || 0) + RECLAIM_MS_PER_BLOCK,
+                    bySource: {
+                        ...(current.bySource || {}),
+                        [sourceKey]: Number(current.bySource?.[sourceKey] || 0) + 1
+                    },
+                    byTier: {
+                        ...(current.byTier || {}),
+                        [tierKey]: Number(current.byTier?.[tierKey] || 0) + 1
+                    }
+                }
+            }
+        });
+    } catch {
+        // Best effort only; local metrics should never affect the block page.
     }
 }
 
@@ -667,4 +712,5 @@ setDomainText();
 setBadgeText();
 renderTierActions();
 trackBlockedPageView();
+trackLocalBlockReclaim();
 trackFirstBlockReached();
