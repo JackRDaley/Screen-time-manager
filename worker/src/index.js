@@ -39,10 +39,12 @@ const ANALYTICS_ALLOWED_EVENTS = new Set([
     "first_limit_created",
     "first_schedule_created",
     "first_block_reached",
+    "insight_presented",
     "insight_viewed",
     "insight_add_limit_clicked",
     "upgrade_clicked",
     "domain_added",
+    "preset_applied",
     "review_prompt_shown",
     "review_prompt_action"
 ]);
@@ -56,7 +58,13 @@ const ANALYTICS_ALLOWED_PARAMS = new Set([
     "trigger",
     "onboarding_step",
     "funnel_version",
-    "error_name"
+    "error_name",
+    "preset_id",
+    "rule_type",
+    "created_count",
+    "skipped_count",
+    "conflict_count",
+    "capped_count"
 ]);
 
 const ANALYTICS_BLOCK_SOURCES = new Set(["limit", "scheduled", "unknown"]);

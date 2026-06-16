@@ -137,7 +137,8 @@ const state = {
 
 let liveRefreshPromise = null;
 let rankingMotionRestoreTimer = null;
-const viewedInsightsThisSession = new Set();
+const presentedInsightsThisSession = new Set();
+const interactedInsightsThisSession = new Set();
 
 function normalizeDomain(input) {
     const raw = String(input || "").trim().toLowerCase();
@@ -1260,13 +1261,22 @@ function renderPersonalInsights() {
     `;
 
     const visibleInsight = insights[state.selectedInsightIndex];
-    if (visibleInsight?.id && !viewedInsightsThisSession.has(visibleInsight.id)) {
-        viewedInsightsThisSession.add(visibleInsight.id);
-        trackFunnelEvent("insight_viewed", {
+    if (visibleInsight?.id && !presentedInsightsThisSession.has(visibleInsight.id)) {
+        presentedInsightsThisSession.add(visibleInsight.id);
+        trackFunnelEvent("insight_presented", {
             trigger: "dashboard",
             action: visibleInsight.action || "view"
         });
     }
+}
+
+function trackInsightInteraction(trigger, insight = personalInsightItems()[state.selectedInsightIndex]) {
+    if (!insight?.id || interactedInsightsThisSession.has(insight.id)) return;
+    interactedInsightsThisSession.add(insight.id);
+    trackFunnelEvent("insight_viewed", {
+        trigger,
+        action: insight.action || "view"
+    });
 }
 
 function moveInsightCarousel(direction) {
@@ -1275,6 +1285,7 @@ function moveInsightCarousel(direction) {
     const nextIndex = (state.selectedInsightIndex + direction + insights.length) % insights.length;
     state.selectedInsightIndex = nextIndex;
     renderPersonalInsights();
+    trackInsightInteraction(direction > 0 ? "insight_next" : "insight_previous", insights[nextIndex]);
 }
 
 function renderHourlyStyled() {
@@ -1962,6 +1973,7 @@ function prefillLimitForm(domain) {
     const normalized = normalizeDomain(domain);
     if (!isValidDomain(normalized)) return;
 
+    trackInsightInteraction("insight_add_limit");
     trackFunnelEvent("insight_add_limit_clicked", { trigger: "personal_insight" });
     const tab = $("tab2");
     const input = $("domainInput");
@@ -1976,6 +1988,7 @@ function viewInsightUsage(domain) {
     const normalized = normalizeDomain(domain);
     if (!isValidDomain(normalized)) return;
 
+    trackInsightInteraction("insight_view_usage");
     if ($("tab1")) $("tab1").checked = true;
     if ($("statRange")) $("statRange").value = "Today";
     state.selectedHourlyHour = null;
@@ -1990,6 +2003,8 @@ function viewInsightUsage(domain) {
 }
 
 async function dismissPersonalInsight(id) {
+    const insight = personalInsightItems().find((item) => item.id === id);
+    trackInsightInteraction("insight_dismiss", insight);
     const response = await send("dismissInsight", { id });
     if (!response?.success) {
         console.error("Dismiss insight failed:", response?.error || "Unknown error");

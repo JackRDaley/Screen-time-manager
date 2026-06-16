@@ -142,9 +142,13 @@ The main emitted GA4 events are:
 - `first_limit_created`
 - `first_schedule_created`
 - `first_block_reached`
+- `insight_presented`
 - `insight_viewed`
 - `insight_add_limit_clicked`
 - `upgrade_clicked`
+- `preset_applied`
+- `review_prompt_shown`
+- `review_prompt_action`
 - `post_install_redirect_shown`
 - `post_install_redirect_failed`
 
@@ -159,6 +163,12 @@ Recommended event-scoped custom dimensions:
 - `onboarding_step`
 - `funnel_version`
 - `error_name`
+- `preset_id`
+- `rule_type`
+- `created_count`
+- `skipped_count`
+- `conflict_count`
+- `capped_count`
 
 Avoid registering unique or high-cardinality values such as redirect IDs, domains, raw URLs, or client IDs as custom dimensions.
 
