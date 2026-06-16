@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Screen Time Manager - Website Blocker and Focus Tool",
-    "version": "2.2.11",
+    "version": "2.2.12",
     "description": "Understand browsing habits, limit distracting sites, and stay focused with daily limits and scheduled blocks.",
     "icons": {
         "16": "new_logo.png",
