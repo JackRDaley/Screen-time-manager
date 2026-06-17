@@ -2189,6 +2189,60 @@ body.is-live-refresh-render #rankingByVisits .row-ranking .ranking-limit-chip {
     cursor: pointer;
 }
 
+.dev-menu-card {
+    border: 1px solid rgba(34,217,255,.18);
+    background:
+        linear-gradient(180deg, rgba(34,217,255,.07), rgba(255,255,255,.02)),
+        var(--surface0);
+}
+
+.dev-menu-badge {
+    padding: 3px 7px;
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(34,217,255,.25);
+    background: rgba(34,217,255,.10);
+    color: rgba(237,242,255,.72);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.dev-menu-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+}
+
+.dev-menu-action {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px;
+}
+
+.dev-menu-block {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin-top: 8px;
+}
+
+.dev-menu-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px 112px;
+    gap: 7px;
+}
+
+.dev-menu-fields .settings-select {
+    max-width: none;
+    flex: 1 1 auto;
+}
+
+.dev-menu-wide {
+    width: 100%;
+    margin-top: 8px;
+}
+
 .switch {
     position: relative;
     width: 34px;

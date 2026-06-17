@@ -24,6 +24,7 @@ const CHROME_WEBSTORE_REVIEW_URL = "https://chromewebstore.google.com/detail/scr
 const REVIEW_PROMPT_STATE_KEY = "reviewPromptState";
 const REVIEW_PROMPT_FIRST_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
 const REVIEW_PROMPT_INTERVAL_MS = 14 * 24 * 60 * 60 * 1000;
+const DEV_FIXTURE_KEY = "stmDevFixture";
 const LIVE_REFRESH_INTERVAL_MS = 1000;
 const LIVE_REFRESH_MOTION_SUPPRESSION_MS = 120;
 const HOURLY_BAR_MIN_ACTIVE_HEIGHT_PCT = 6;
@@ -2436,6 +2437,71 @@ async function skipOnboarding() {
     await completeOnboarding(true);
 }
 
+function devMenuEnabled() {
+    const manifest = chrome.runtime.getManifest?.() || {};
+    return !manifest.update_url;
+}
+
+function devBlockOptions() {
+    return {
+        domain: normalizeDomain($("devBlockDomain")?.value || "youtube.com"),
+        tier: $("devBlockTier")?.value || "standard",
+        source: $("devBlockSource")?.value || "limit"
+    };
+}
+
+function showDevMenu() {
+    const card = $("devMenuCard");
+    if (card) card.hidden = !devMenuEnabled();
+}
+
+async function devShowOnboarding() {
+    hideReviewPromptToast();
+    state.onboarding = { step: 0, completed: false, completedAt: null, skipped: false, version: ONBOARDING_VERSION };
+    await chrome.storage.local.set({ [ONBOARDING_KEY]: state.onboarding });
+    showOnboardingStep(0);
+    setFeedback("devMenuMsg", "Onboarding opened.");
+}
+
+function devOpenWelcome() {
+    const url = new URL(chrome.runtime.getURL("welcome.html"));
+    url.searchParams.set("reason", "dev_menu");
+    url.searchParams.set("version", chrome.runtime.getManifest?.().version || "local");
+    chrome.tabs.create({ url: url.toString() });
+    setFeedback("devMenuMsg", "Welcome page opened.");
+}
+
+async function devOpenBlockedPage(redirectActiveTab = false) {
+    const options = devBlockOptions();
+    if (!isValidDomain(options.domain)) {
+        setFeedback("devMenuMsg", "Enter a valid domain.", false);
+        return;
+    }
+
+    const response = await send("openDevBlockedPage", {
+        ...options,
+        redirectActiveTab,
+        fixtureKey: DEV_FIXTURE_KEY
+    });
+    if (!response?.success) {
+        setFeedback("devMenuMsg", response?.error || "Could not open block page.", false);
+        return;
+    }
+
+    setFeedback("devMenuMsg", redirectActiveTab ? "Active tab redirected." : "Block page opened.");
+    await loadAll();
+}
+
+async function devClearFixtures() {
+    const response = await send("clearDevFixtures", { fixtureKey: DEV_FIXTURE_KEY });
+    if (!response?.success) {
+        setFeedback("devMenuMsg", response?.error || "Could not clear fixtures.", false);
+        return;
+    }
+    setFeedback("devMenuMsg", "Dev fixtures cleared.");
+    await loadAll();
+}
+
 function bindDelegatedActions() {
     document.addEventListener("change", async (event) => {
         const origin = event.target;
@@ -2521,6 +2587,11 @@ function bindEvents() {
         event.preventDefault();
         linkWhopToken();
     });
+    $("devShowOnboardingBtn")?.addEventListener("click", devShowOnboarding);
+    $("devOpenWelcomeBtn")?.addEventListener("click", devOpenWelcome);
+    $("devOpenBlockedBtn")?.addEventListener("click", () => devOpenBlockedPage(false));
+    $("devRedirectBlockedBtn")?.addEventListener("click", () => devOpenBlockedPage(true));
+    $("devClearFixturesBtn")?.addEventListener("click", devClearFixtures);
 
     $("onboardingNextBtn")?.addEventListener("click", () => showOnboardingStep(selectedOnboardingStep() + 1));
     $("onboardingPrevBtn")?.addEventListener("click", () => showOnboardingStep(selectedOnboardingStep() - 1));
@@ -2565,6 +2636,7 @@ function bindEvents() {
 
 document.addEventListener("DOMContentLoaded", async () => {
     bindEvents();
+    showDevMenu();
     renderScheduleDays();
     await loadAll({ flush: true, refreshInsights: true });
     trackFunnelEvent("popup_opened", { trigger: "browser_action" });

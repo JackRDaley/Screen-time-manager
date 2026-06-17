@@ -384,6 +384,42 @@
                 </div>
             </div>
 
+            <div class="card dev-menu-card" id="devMenuCard" hidden>
+                <div class="card-head">
+                    <div class="card-title">Dev Menu</div>
+                    <span class="dev-menu-badge">Local only</span>
+                </div>
+                <div class="card-body">
+                    <div class="dev-menu-grid">
+                        <button class="btn dev-menu-action" id="devShowOnboardingBtn" type="button">Show Onboarding</button>
+                        <button class="btn dev-menu-action" id="devOpenWelcomeBtn" type="button">Open Welcome</button>
+                    </div>
+
+                    <div class="dev-menu-block">
+                        <div class="dev-menu-fields">
+                            <input id="devBlockDomain" class="input" type="text" value="youtube.com" aria-label="Dev block domain" />
+                            <select id="devBlockTier" class="input settings-select" aria-label="Dev block strictness">
+                                <option value="lenient">Lenient</option>
+                                <option value="standard" selected>Standard</option>
+                                <option value="strict">Strict</option>
+                                <option value="immutable">Immutable</option>
+                            </select>
+                            <select id="devBlockSource" class="input settings-select" aria-label="Dev block source">
+                                <option value="limit" selected>Limit</option>
+                                <option value="scheduled">Scheduled</option>
+                            </select>
+                        </div>
+                        <div class="dev-menu-grid">
+                            <button class="btn dev-menu-action" id="devOpenBlockedBtn" type="button">Open Block Page</button>
+                            <button class="btn dev-menu-action" id="devRedirectBlockedBtn" type="button">Redirect Active Tab</button>
+                        </div>
+                    </div>
+
+                    <button class="btn-ghost dev-menu-wide" id="devClearFixturesBtn" type="button">Clear dev fixtures</button>
+                    <div id="devMenuMsg" class="form-feedback" role="status" aria-live="polite"></div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-head">
                     <div class="card-title">Whop Billing</div>

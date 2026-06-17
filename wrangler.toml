@@ -17,6 +17,7 @@ WHOP_EXTENSION_ID = "oflgdecdopjpkpbnncendjoeohoeomnf"
 # WHOP_PLAN_ID is optional. If omitted, the Worker resolves a plan_x... from WHOP_PRODUCT_ID.
 GA4_MEASUREMENT_ID = "G-E0X1Q14TFL"
 ANALYTICS_DEBUG_LOGS = "false"
+# Configure INTERNAL_ANALYTICS_IPS as a Worker secret/var.
 
 [[kv_namespaces]]
 binding = "PREMIUM_STATUS"

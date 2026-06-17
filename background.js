@@ -296,6 +296,151 @@ function blockedUrl(domain, source = "limit", tier = "lenient", originalUrl = ""
     return chrome.runtime.getURL(`blocked.html?${params.toString()}`);
 }
 
+function localDevBuild() {
+    const manifest = chrome.runtime.getManifest?.() || {};
+    return !manifest.update_url;
+}
+
+async function openDevBlockedPage(request = {}) {
+    if (!localDevBuild()) return { success: false, error: "Dev menu actions are only available in local builds." };
+
+    const domain = normalizeDomain(request.domain || "youtube.com");
+    if (!isValidDomain(domain)) return { success: false, error: "Invalid dev block domain." };
+
+    const source = request.source === "scheduled" ? "scheduled" : "limit";
+    const tier = normalizeTier(request.tier, "standard");
+    const fixtureKey = String(request.fixtureKey || "stmDevFixture");
+    const now = Date.now();
+    const endAt = now + 15 * 60 * 1000;
+    const original = `https://${domain}/`;
+
+    const data = await get([
+        KEYS.blockedDomains,
+        KEYS.statsToday,
+        KEYS.allStatsToday,
+        KEYS.activeBlocks,
+        KEYS.snoozedDomains,
+        KEYS.recentlyReset,
+        KEYS.alertsSent
+    ]);
+
+    const blockedDomains = data[KEYS.blockedDomains] || {};
+    const statsToday = data[KEYS.statsToday] || {};
+    const allStatsToday = data[KEYS.allStatsToday] || {};
+    const activeBlocks = (data[KEYS.activeBlocks] || []).filter((block) => !block?.[fixtureKey] && normalizeDomain(block.domain) !== domain);
+    const snoozedDomains = data[KEYS.snoozedDomains] || {};
+    const recentlyReset = data[KEYS.recentlyReset] || {};
+    const alertsSent = data[KEYS.alertsSent] || {};
+
+    deleteSnoozeEntriesForDomain(snoozedDomains, domain);
+    delete recentlyReset[domain];
+    delete alertsSent[domain];
+
+    blockedDomains[domain] = {
+        enabled: true,
+        limitSeconds: 60,
+        tier,
+        [fixtureKey]: true,
+        updatedAt: now
+    };
+    statsToday[domain] = { timeMs: 75 * 1000, visits: Math.max(1, Number(statsToday[domain]?.visits || 0)) };
+    allStatsToday[domain] = { timeMs: 75 * 1000, visits: Math.max(1, Number(allStatsToday[domain]?.visits || 0)) };
+
+    if (source === "scheduled") {
+        activeBlocks.push({
+            id: `dev_${domain}_${now}`,
+            domain,
+            startTime: "00:00",
+            days: ALL_DAYS,
+            enabled: true,
+            tier,
+            startedAt: now,
+            endTime: new Date(endAt).toISOString(),
+            [fixtureKey]: true
+        });
+    }
+
+    await set({
+        [KEYS.blockedDomains]: blockedDomains,
+        [KEYS.statsToday]: statsToday,
+        [KEYS.allStatsToday]: allStatsToday,
+        [KEYS.activeBlocks]: activeBlocks,
+        [KEYS.snoozedDomains]: snoozedDomains,
+        [KEYS.recentlyReset]: recentlyReset,
+        [KEYS.alertsSent]: alertsSent
+    });
+    await queueDnrRulesSync();
+    await scheduleActiveLimitWakeups(domain);
+    await syncActionBadge();
+
+    const url = blockedUrl(domain, source, tier, original);
+    let redirected = false;
+    if (request.redirectActiveTab) {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+        if (tab?.id != null) {
+            redirected = Boolean(await chrome.tabs.update(tab.id, { url }).then(() => true).catch(() => false));
+        }
+    }
+    if (!redirected) await chrome.tabs.create({ url });
+
+    return { success: true, url, domain, source, tier, redirected };
+}
+
+async function clearDevFixtures(request = {}) {
+    if (!localDevBuild()) return { success: false, error: "Dev menu actions are only available in local builds." };
+
+    const fixtureKey = String(request.fixtureKey || "stmDevFixture");
+    const data = await get([
+        KEYS.blockedDomains,
+        KEYS.statsToday,
+        KEYS.allStatsToday,
+        KEYS.activeBlocks,
+        KEYS.snoozedDomains,
+        KEYS.recentlyReset,
+        KEYS.alertsSent
+    ]);
+
+    const blockedDomains = data[KEYS.blockedDomains] || {};
+    const statsToday = data[KEYS.statsToday] || {};
+    const allStatsToday = data[KEYS.allStatsToday] || {};
+    const snoozedDomains = data[KEYS.snoozedDomains] || {};
+    const recentlyReset = data[KEYS.recentlyReset] || {};
+    const alertsSent = data[KEYS.alertsSent] || {};
+    const fixtureDomains = new Set();
+
+    Object.entries(blockedDomains).forEach(([domain, config]) => {
+        if (config?.[fixtureKey]) {
+            fixtureDomains.add(normalizeDomain(domain));
+            delete blockedDomains[domain];
+        }
+    });
+
+    for (const domain of fixtureDomains) {
+        delete statsToday[domain];
+        delete allStatsToday[domain];
+        delete recentlyReset[domain];
+        delete alertsSent[domain];
+        deleteSnoozeEntriesForDomain(snoozedDomains, domain);
+    }
+
+    const activeBlocks = (data[KEYS.activeBlocks] || []).filter((block) => !block?.[fixtureKey]);
+
+    await set({
+        [KEYS.blockedDomains]: blockedDomains,
+        [KEYS.statsToday]: statsToday,
+        [KEYS.allStatsToday]: allStatsToday,
+        [KEYS.activeBlocks]: activeBlocks,
+        [KEYS.snoozedDomains]: snoozedDomains,
+        [KEYS.recentlyReset]: recentlyReset,
+        [KEYS.alertsSent]: alertsSent
+    });
+    await queueDnrRulesSync();
+    await scheduleActiveLimitWakeups(activeDomain);
+    await syncActionBadge();
+
+    return { success: true, clearedDomains: Array.from(fixtureDomains) };
+}
+
 function blockedPageInfoFromUrl(url) {
     try {
         const parsed = new URL(String(url || ""));
@@ -2063,6 +2208,8 @@ const handlers = {
             })
         };
     },
+    openDevBlockedPage: async (request) => openDevBlockedPage(request),
+    clearDevFixtures: async (request) => clearDevFixtures(request),
     getImmutableOverrideState: async () => ({
         success: true,
         ...(await getImmutableOverrideState())

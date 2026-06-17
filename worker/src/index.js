@@ -22,6 +22,15 @@ function getRequestOrigin(request) {
     return String(request.headers.get("Origin") || request.headers.get("origin") || "");
 }
 
+function getClientIp(request) {
+    const cfIp = String(request.headers.get("CF-Connecting-IP") || "").trim();
+    if (cfIp) return cfIp;
+
+    return String(request.headers.get("X-Forwarded-For") || "")
+        .split(",")[0]
+        .trim();
+}
+
 function isTrustedExtensionOrigin(origin) {
     return /^chrome-extension:\/\/[a-p]{32}$/i.test(String(origin || ""));
 }
@@ -658,6 +667,61 @@ function logAnalyticsDebug(env, message, payload) {
     }
 }
 
+function normalizeIpv4(value) {
+    const parts = String(value || "").trim().split(".");
+    if (parts.length !== 4) return null;
+
+    let result = 0;
+    for (const part of parts) {
+        if (!/^\d{1,3}$/.test(part)) return null;
+        const octet = Number(part);
+        if (octet < 0 || octet > 255) return null;
+        result = (result << 8) + octet;
+    }
+
+    return result >>> 0;
+}
+
+function ipv4MatchesCidr(ip, cidr) {
+    const [rangeIp, prefixText] = String(cidr || "").split("/");
+    const ipValue = normalizeIpv4(ip);
+    const rangeValue = normalizeIpv4(rangeIp);
+    const prefix = Number(prefixText);
+
+    if (ipValue == null || rangeValue == null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+        return false;
+    }
+
+    if (prefix === 0) return true;
+    const mask = (0xffffffff << (32 - prefix)) >>> 0;
+    return (ipValue & mask) === (rangeValue & mask);
+}
+
+function isInternalAnalyticsIp(env, ipAddress) {
+    const normalizedIp = String(ipAddress || "").trim().toLowerCase();
+    if (!normalizedIp) return false;
+
+    return String(env.INTERNAL_ANALYTICS_IPS || "")
+        .split(",")
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+        .some((entry) => {
+            if (entry === normalizedIp) return true;
+            if (entry.includes("/") && normalizedIp.includes(".")) {
+                return ipv4MatchesCidr(normalizedIp, entry);
+            }
+            return false;
+        });
+}
+
+function analyticsTrafficParams(env, request) {
+    if (!isInternalAnalyticsIp(env, getClientIp(request))) {
+        return {};
+    }
+
+    return { traffic_type: "internal" };
+}
+
 function buildGa4CollectUrl(env) {
     const measurementId = String(env.GA4_MEASUREMENT_ID || "").trim();
     const apiSecret = String(env.GA4_API_SECRET || "").trim();
@@ -1208,7 +1272,8 @@ export default {
             params: {
                 block_source: sanitizeAnalyticsEnum(body?.source, ANALYTICS_BLOCK_SOURCES),
                 block_tier: sanitizeAnalyticsEnum(body?.tier, ANALYTICS_BLOCK_TIERS),
-                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32)
+                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
+                ...analyticsTrafficParams(env, request)
             }
         };
         logAnalyticsDebug(env, "[analytics/block-event] forwarding", blockEventPayload);
@@ -1260,7 +1325,8 @@ export default {
         const params = {
             engagement_time_msec: 1,
             extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32),
-            ...sanitizeAnalyticsParams(body?.params)
+            ...sanitizeAnalyticsParams(body?.params),
+            ...analyticsTrafficParams(env, request)
         };
         logAnalyticsDebug(env, "[analytics/event] forwarding", {
             eventName,

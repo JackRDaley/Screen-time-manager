@@ -9,3 +9,6 @@ WHOP_EXTENSION_ID=abcdefghijklmnopqrstuvwxyzabcdef
 WHOP_ACTIVE_STATUSES=active,trialing
 DEV_PREMIUM_TOKEN=local-premium-token
 TOKEN_TTL_DAYS=7
+GA4_MEASUREMENT_ID=G-XXXXXXXXXX
+GA4_API_SECRET=your_ga4_measurement_protocol_secret
+INTERNAL_ANALYTICS_IPS=203.0.113.10,198.51.100.0/24
