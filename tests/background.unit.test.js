@@ -1501,7 +1501,7 @@ describe('Background helper functions (unit)', () => {
     global.fetch = origFetch;
   });
 
-  test('heartbeat delta is capped so delayed intervals cannot jump the badge', async () => {
+  test('delayed focused heartbeat records the foreground interval', async () => {
     const startedAt = 1700000000000;
     const storage = {
       data: {
@@ -1567,8 +1567,8 @@ describe('Background helper functions (unit)', () => {
       visibilityState: 'visible'
     });
 
-    expect(response).toEqual(expect.objectContaining({ success: true, domain: 'alpha.com', countedMs: 2000 }));
-    expect(storage.data.statsToday['alpha.com'].timeMs).toBe(22000);
+    expect(response).toEqual(expect.objectContaining({ success: true, domain: 'alpha.com', countedMs: 15000 }));
+    expect(storage.data.statsToday['alpha.com'].timeMs).toBe(35000);
     expect(storage.data.activeSession).toEqual(expect.objectContaining({
       domain: 'alpha.com',
       lastHeartbeatAt: startedAt + 15000

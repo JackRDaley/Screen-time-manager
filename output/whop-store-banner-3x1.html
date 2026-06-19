@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 1800px;
+        height: 600px;
+        overflow: hidden;
+        background: #050711;
+        color: #edf2ff;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        position: relative;
+        display: grid;
+        place-items: center;
+        background:
+          linear-gradient(118deg, #050711 0%, #080b18 42%, #071424 100%),
+          #050711;
+      }
+
+      .backdrop {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(90deg, rgba(139, 111, 255, 0.20), transparent 34%, rgba(34, 217, 255, 0.13)),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 44%, rgba(0, 0, 0, 0.20));
+      }
+
+      .linework {
+        position: absolute;
+        inset: 0;
+        opacity: 0.28;
+        background-image:
+          linear-gradient(rgba(237, 242, 255, 0.055) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(237, 242, 255, 0.045) 1px, transparent 1px);
+        background-size: 72px 72px;
+        mask-image: linear-gradient(90deg, transparent 0%, black 18%, black 82%, transparent 100%);
+      }
+
+      .beam {
+        position: absolute;
+        inset: auto -120px -180px;
+        height: 310px;
+        transform: rotate(-3deg);
+        background:
+          linear-gradient(90deg, rgba(139, 111, 255, 0.13), rgba(34, 217, 255, 0.12), rgba(46, 255, 168, 0.08));
+        border-top: 1px solid rgba(237, 242, 255, 0.08);
+      }
+
+      .content {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 56px;
+        width: 1420px;
+        height: 360px;
+      }
+
+      .icon-wrap {
+        position: relative;
+        flex: 0 0 auto;
+        width: 178px;
+        height: 178px;
+        border-radius: 42px;
+        box-shadow:
+          0 32px 72px rgba(0, 0, 0, 0.34),
+          0 0 46px rgba(34, 217, 255, 0.20),
+          0 0 78px rgba(139, 111, 255, 0.18);
+      }
+
+      .icon-wrap::before {
+        content: "";
+        position: absolute;
+        inset: -1px;
+        border-radius: 43px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        pointer-events: none;
+      }
+
+      .icon {
+        width: 178px;
+        height: 178px;
+        border-radius: 42px;
+        display: block;
+      }
+
+      .tagline {
+        color: #f6f9ff;
+        font-size: 82px;
+        font-weight: 850;
+        line-height: 1.06;
+        letter-spacing: 0;
+        text-wrap: balance;
+        text-shadow: 0 24px 50px rgba(0, 0, 0, 0.38);
+      }
+
+      .tagline span {
+        color: #22d9ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <div class="linework"></div>
+    <div class="beam"></div>
+    <main class="content" aria-label="Screen Time Manager store banner">
+      <div class="icon-wrap">
+        <img class="icon" src="../new_logo.png" alt="" />
+      </div>
+      <div class="tagline">Block distractions.<br /><span>Stay focused.</span></div>
+    </main>
+  </body>
+</html>

@@ -232,7 +232,7 @@ async function verifyWithWhopOrFallback(token, env) {
                 membership?.product?.title ||
                 membership?.plan?.id ||
                 membership?.company?.title ||
-                "Premium";
+                defaultPremiumPlanName(env);
 
             return {
                 active,
@@ -421,6 +421,15 @@ function whopApiBaseUrl(env) {
     return String(env.WHOP_API_BASE_URL || "https://api.whop.com/api/v1").replace(/\/$/, "");
 }
 
+function defaultPremiumPlanName(env) {
+    return String(env.WHOP_PLAN_NAME || "Lifetime Premium").trim() || "Lifetime Premium";
+}
+
+function whopCheckoutPriceCents(env) {
+    const cents = Number(env.WHOP_CHECKOUT_PRICE_CENTS || 500);
+    return Number.isFinite(cents) && cents > 0 ? Math.round(cents) : 500;
+}
+
 function normalizeWhopPurchaseUrl(value) {
     const raw = String(value || "").trim();
     if (!raw) return "";
@@ -468,8 +477,23 @@ async function resolveWhopCheckoutPlanId(env) {
         const planProductId = plan?.product?.id || plan?.product_id;
         return planProductId === productId && String(plan?.visibility || "").toLowerCase() !== "archived";
     });
-    const renewalPlan = matchingPlans.find((plan) => String(plan?.plan_type || "").toLowerCase() === "renewal");
-    const selectedPlan = renewalPlan || matchingPlans[0];
+    const oneTimePlan = matchingPlans.find((plan) => {
+        const planType = String(plan?.plan_type || plan?.type || plan?.billing_period || "").toLowerCase();
+        const renewalPeriod = String(plan?.renewal_period || plan?.interval || "").toLowerCase();
+        const priceCents = Number(plan?.price || plan?.price_cents || plan?.amount || plan?.amount_cents);
+        const priceMatches = !Number.isFinite(priceCents) || priceCents === whopCheckoutPriceCents(env);
+        return priceMatches && (
+            planType.includes("one") ||
+            planType.includes("once") ||
+            planType.includes("single") ||
+            planType.includes("lifetime") ||
+            planType.includes("payment") ||
+            renewalPeriod === "one_time" ||
+            renewalPeriod === "lifetime" ||
+            renewalPeriod === "none"
+        );
+    });
+    const selectedPlan = oneTimePlan || matchingPlans[0];
     return String(selectedPlan?.id || "");
 }
 
@@ -992,6 +1016,25 @@ function extractWebhookPaymentId(payload) {
     );
 }
 
+function extractWebhookProductId(payload) {
+    return (
+        payload?.data?.product?.id ||
+        payload?.data?.membership?.product?.id ||
+        payload?.data?.payment?.product?.id ||
+        payload?.data?.receipt?.product?.id ||
+        payload?.data?.plan?.product?.id ||
+        payload?.data?.plan?.product_id ||
+        payload?.data?.product_id ||
+        null
+    );
+}
+
+function webhookMatchesConfiguredProduct(payload, env) {
+    const configuredProductId = String(env.WHOP_PRODUCT_ID || "").trim();
+    const webhookProductId = String(extractWebhookProductId(payload) || "").trim();
+    return !configuredProductId || !webhookProductId || webhookProductId === configuredProductId;
+}
+
 async function verifyWhopWebhookSignature(request, rawBody, secret) {
     const secretBytes = parseWebhookSecret(secret);
     const key = await crypto.subtle.importKey(
@@ -1425,21 +1468,23 @@ export default {
         const eventType = typeof payload?.type === "string" ? payload.type : null;
         const userId = extractWebhookUserId(payload);
         const paymentId = extractWebhookPaymentId(payload);
+        const productId = extractWebhookProductId(payload);
+        const productMatches = webhookMatchesConfiguredProduct(payload, env);
 
-        if (userId && paymentId) {
+        if (productMatches && userId && paymentId) {
             await kvSetPaymentToUser(env, paymentId, userId);
         }
 
         // Update KV premium status based on event type
-        if (userId) {
+        if (productMatches && userId) {
             if (WEBHOOK_ACTIVATE_EVENTS.has(eventType)) {
                 await kvSetPremiumStatus(env, userId, {
                     active: true,
-                    planName: payload?.data?.membership?.product?.title || "Premium",
+                    planName: payload?.data?.membership?.product?.title || defaultPremiumPlanName(env),
                     updatedAt: new Date().toISOString(),
                     source: eventType
                 });
-            } else if (WEBHOOK_DEACTIVATE_EVENTS.has(eventType)) {
+            } else if (WEBHOOK_DEACTIVATE_EVENTS.has(eventType) && String(env.WHOP_LIFETIME_ACCESS || "true") !== "true") {
                 await kvSetPremiumStatus(env, userId, {
                     active: false,
                     planName: "Free",
@@ -1453,11 +1498,13 @@ export default {
         console.log(JSON.stringify({
             source: "whop-webhook",
             eventType,
+            productId,
+            productMatches,
             userId,
-            kvUpdated: userId !== null
+            kvUpdated: Boolean(productMatches && userId)
         }));
 
-        return json({ ok: true, eventType, userId });
+        return json({ ok: true, eventType, productId, productMatches, userId });
         }
 
         if (request.method === "POST" && url.pathname === "/whop/issue-token") {

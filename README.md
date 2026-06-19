@@ -178,7 +178,7 @@ Use GA4's Active Users metric against `blocked_page_view` if you want a rough me
 
 ## Whop Premium Handoff
 
-The popup opens `/whop/start` on the Cloudflare Worker instead of linking directly to Whop. The Worker receives the current `chrome.runtime.id`, creates a Whop checkout configuration when `WHOP_PLAN_ID` is set, and uses a return URL that lets the post-payment page message this exact extension install.
+The popup opens `/whop/start` on the Cloudflare Worker instead of linking directly to Whop. The Worker receives the current `chrome.runtime.id`, creates a Whop checkout configuration for the one-time $5 Lifetime Premium plan when `WHOP_PLAN_ID` is set, and uses a return URL that lets the post-payment page message this exact extension install.
 
 Required Worker values:
 
@@ -187,8 +187,11 @@ Required Worker values:
 - `WHOP_PRODUCT_ID` (`prod_...`) or `WHOP_PLAN_ID` (`plan_...`)
 - `WHOP_CHECKOUT_URL` as a fallback direct checkout link
 - `WHOP_EXTENSION_ID` as a production fallback for Chrome Web Store installs
+- `WHOP_PLAN_NAME=Lifetime Premium`
+- `WHOP_CHECKOUT_PRICE_CENTS=500`
+- `WHOP_LIFETIME_ACCESS=true`
 
-If only `WHOP_PRODUCT_ID` is configured, the Worker looks up the first non-archived buy-now plan for that product before creating checkout. The Whop API key needs checkout configuration create/read permissions, plan read permission, plus the membership/payment read permissions already used by verification.
+If only `WHOP_PRODUCT_ID` is configured, the Worker looks up a non-archived buy-now one-time/lifetime plan for that product, preferring a $5 plan, before creating checkout. The Whop API key needs checkout configuration create/read permissions, plan read permission, plus the membership/payment read permissions already used by verification.
 
 ---
 

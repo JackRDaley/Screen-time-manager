@@ -96,7 +96,7 @@ const DNR_DEFAULT_MAX_RULES = 1000;
 const ACTIVE_LIMIT_ALARM_PREFIX = "activeLimitThreshold:";
 const ACTIVE_LIMIT_BADGE_ALARM = "activeLimitBadgeTick";
 const ACTIVE_LIMIT_WAKE_THRESHOLDS = Object.freeze([75, 90, 100]);
-const ACTIVE_HEARTBEAT_MAX_DELTA_MS = 2 * 1000;
+const ACTIVE_HEARTBEAT_MAX_DELTA_MS = 2 * 60 * 1000;
 const INSIGHT_ANALYSIS_THROTTLE_MS = 5 * 60 * 1000;
 const INSIGHT_NOTIFICATION_DEDUPE_MS = 7 * 24 * 60 * 60 * 1000;
 const INSIGHT_MAX_STORED = 24;
@@ -589,6 +589,10 @@ function activeLimitUsedMs(domain, statsToday = {}) {
     return entryTimeMs(entryForDomain(statsToday, domain) || {});
 }
 
+function activeHeartbeatDeltaMs(now, previousHeartbeatAt) {
+    return Math.min(ACTIVE_HEARTBEAT_MAX_DELTA_MS, Math.max(0, now - previousHeartbeatAt));
+}
+
 async function scheduleActiveLimitWakeups(domain = activeDomain) {
     const api = chrome.alarms;
     if (!api?.create || !api?.clear) return false;
@@ -689,7 +693,7 @@ async function handleActivePageHeartbeat(sender = {}, request = {}) {
 
     let countedMs = 0;
     if (!baselineOnly) {
-        countedMs = Math.min(ACTIVE_HEARTBEAT_MAX_DELTA_MS, Math.max(0, now - previousHeartbeatAt));
+        countedMs = activeHeartbeatDeltaMs(now, previousHeartbeatAt);
         if (countedMs > 0) {
             await updateDomainActivity(domain, { deltaMs: countedMs, startMs: now - countedMs, endMs: now });
         }
@@ -883,7 +887,7 @@ async function flushPopupActiveTick() {
 
     if (!previousHeartbeatAt) return 0;
 
-    const deltaMs = Math.min(ACTIVE_HEARTBEAT_MAX_DELTA_MS, Math.max(0, now - previousHeartbeatAt));
+    const deltaMs = activeHeartbeatDeltaMs(now, previousHeartbeatAt);
     if (deltaMs > 0) {
         await updateDomainActivity(activeDomain, {
             deltaMs,
@@ -1855,7 +1859,7 @@ async function refreshStoredPremiumStatus(source = "manual") {
         const result = await response.json();
         const premium = {
             active: Boolean(result.active),
-            planName: result.planName || (result.active ? "Pro" : "Free"),
+            planName: result.planName || (result.active ? "Lifetime Premium" : "Free"),
             checkedAt: Date.now(),
             source
         };
