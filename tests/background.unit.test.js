@@ -748,6 +748,103 @@ describe('Background helper functions (unit)', () => {
     global.chrome.tabs.update = origUpdate;
   });
 
+  test('ending a scheduled block credits the active session duration as reclaimed time', async () => {
+    const base = new Date('2026-06-17T14:00:00Z').getTime();
+    jest.spyOn(Date, 'now').mockReturnValue(base + 60 * 60 * 1000);
+
+    const storage = {
+      data: {
+        activeBlocks: [
+          { id: 'deep-work', domain: 'focus.com', startedAt: base, tier: 'standard', breakMs: 5 * 60 * 1000 }
+        ],
+        blockedDomains: {},
+        statsToday: {},
+        snoozedDomains: {},
+        recentlyReset: {},
+        saturnBlockReclaimStats: {}
+      },
+      async get(keys) {
+        const out = {};
+        for (const key of keys) out[key] = this.data[key];
+        return out;
+      },
+      async set(items) {
+        Object.assign(this.data, items);
+        return items;
+      }
+    };
+
+    const origStorage = global.chrome.storage.local;
+    global.chrome.storage.local = storage;
+
+    const response = await sendBackgroundMessage({ action: 'endScheduledBlock', domain: 'focus.com' });
+    const dayStats = Object.values(storage.data.saturnBlockReclaimStats)[0];
+
+    expect(response.success).toBe(true);
+    expect(storage.data.activeBlocks).toEqual([]);
+    expect(dayStats).toEqual(expect.objectContaining({
+      count: 1,
+      estimatedMs: 55 * 60 * 1000,
+      bySource: { scheduled: 1 },
+      byTier: { standard: 1 }
+    }));
+
+    global.chrome.storage.local = origStorage;
+    Date.now.mockRestore();
+  });
+
+  test('scheduled block snoozes subtract the actual break taken from reclaimed time', async () => {
+    const base = new Date('2026-06-17T14:00:00Z').getTime();
+    const storage = {
+      data: {
+        activeBlocks: [
+          { id: 'deep-work', domain: 'focus.com', startedAt: base, tier: 'standard', breakMs: 0 }
+        ],
+        blockedDomains: {},
+        statsToday: {},
+        snoozedDomains: {},
+        snoozeHistory: {},
+        recentlyReset: {},
+        saturnBlockReclaimStats: {}
+      },
+      async get(keys) {
+        const out = {};
+        for (const key of keys) out[key] = this.data[key];
+        return out;
+      },
+      async set(items) {
+        Object.assign(this.data, items);
+        return items;
+      }
+    };
+
+    const origStorage = global.chrome.storage.local;
+    global.chrome.storage.local = storage;
+    const nowSpy = jest.spyOn(Date, 'now');
+
+    nowSpy.mockReturnValue(base + 10 * 60 * 1000);
+    await sendBackgroundMessage({ action: 'snoozeBlock', domain: 'focus.com', minutes: 5 });
+    expect(storage.data.activeBlocks[0]).toEqual(expect.objectContaining({
+      breakStartedAt: base + 10 * 60 * 1000,
+      breakUntil: base + 15 * 60 * 1000
+    }));
+
+    nowSpy.mockReturnValue(base + 12 * 60 * 1000);
+    await clearDomainSnooze('focus.com');
+    expect(storage.data.activeBlocks[0]).toEqual(expect.objectContaining({
+      breakMs: 2 * 60 * 1000
+    }));
+    expect(storage.data.activeBlocks[0].breakStartedAt).toBeUndefined();
+
+    nowSpy.mockReturnValue(base + 60 * 60 * 1000);
+    await sendBackgroundMessage({ action: 'endScheduledBlock', domain: 'focus.com' });
+    const dayStats = Object.values(storage.data.saturnBlockReclaimStats)[0];
+    expect(dayStats.estimatedMs).toBe(58 * 60 * 1000);
+
+    global.chrome.storage.local = origStorage;
+    nowSpy.mockRestore();
+  });
+
   test('buildDnrBlockEntries mirrors current blocking state', () => {
     const now = Date.now();
     const entries = buildDnrBlockEntries({

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Journey Animation Demo</title>
+    <link rel="stylesheet" href="popup.css" />
+    <style>
+        body {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            margin: 0;
+            background: #08070a;
+            color: #f7e7d6;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .demo-shell {
+            width: min(720px, calc(100vw - 32px));
+            display: grid;
+            gap: 16px;
+        }
+
+        .demo-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .demo-btn {
+            min-height: 36px;
+            border: 1px solid rgba(255, 177, 138, .34);
+            border-radius: 8px;
+            padding: 0 12px;
+            background: rgba(255, 126, 86, .13);
+            color: #ffe2cd;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        .demo-btn:hover {
+            background: rgba(255, 126, 86, .22);
+        }
+
+        .journey-card {
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <main class="demo-shell">
+        <div class="card journey-card" id="journeyCard">
+            <div class="journey-stop journey-stop-current">
+                <img class="journey-stop-planet planet-earth" id="journeyPlanet" src="assets/planets/earth.png" alt="" aria-hidden="true" />
+                <div class="journey-stop-threshold" id="journeyCurrentThreshold">0h</div>
+            </div>
+
+            <div class="journey-route" id="journeyRouteTrack" aria-label="Journey progress">
+                <div class="journey-route-percent" id="journeyProgressPct">42%</div>
+                <div class="journey-line">
+                    <img class="journey-line-image journey-line-image-base" src="assets/planets/mission-path.png" alt="" aria-hidden="true" />
+                    <span class="journey-line-fill" id="journeyProgressFill">
+                        <img class="journey-line-image" src="assets/planets/mission-path.png" alt="" aria-hidden="true" />
+                    </span>
+                    <span class="journey-line-glow"></span>
+                    <img class="journey-route-rocket" src="assets/planets/rocket-cutout.png" alt="" aria-hidden="true" />
+                </div>
+                <div class="journey-progress-copy" id="journeyProgressCopy">Next destination: The Moon</div>
+            </div>
+
+            <div class="journey-stop journey-stop-next">
+                <img class="journey-stop-planet planet-moon" id="journeyNextPlanet" src="assets/planets/moon.png" alt="" aria-hidden="true" />
+                <div class="journey-stop-threshold" id="journeyNextThreshold">2h</div>
+            </div>
+        </div>
+
+        <div class="demo-controls">
+            <button class="demo-btn" id="moveBtn" type="button">Preview shuttle move</button>
+            <button class="demo-btn" id="arrivalBtn" type="button">Preview planet reached</button>
+            <button class="demo-btn" id="resetBtn" type="button">Reset</button>
+        </div>
+
+        <section class="planet-unlock-modal" id="planetUnlockModal" role="dialog" aria-modal="true" aria-labelledby="planetUnlockTitle" aria-hidden="true" hidden>
+            <div class="planet-unlock-sheet">
+                <img class="planet-unlock-image" id="planetUnlockImage" src="assets/planets/moon.png" alt="" aria-hidden="true" />
+                <div class="planet-unlock-copy">
+                    <div class="planet-unlock-kicker">New planet reached</div>
+                    <div class="planet-unlock-title" id="planetUnlockTitle">Moon unlocked</div>
+                    <div class="planet-unlock-stat">
+                        <span id="planetUnlockTime">2h</span>
+                        <span>time reclaimed</span>
+                    </div>
+                </div>
+                <button class="planet-unlock-close" id="planetUnlockCloseBtn" type="button">Continue</button>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const route = document.getElementById("journeyRouteTrack");
+        const card = document.getElementById("journeyCard");
+        const pct = document.getElementById("journeyProgressPct");
+        const copy = document.getElementById("journeyProgressCopy");
+        const planet = document.getElementById("journeyPlanet");
+        const nextPlanet = document.getElementById("journeyNextPlanet");
+
+        function digitSequence(fromDigit, toDigit) {
+            if (fromDigit === "" || toDigit === "") return [fromDigit, toDigit];
+            const sequence = [fromDigit];
+            let current = Number(fromDigit);
+            const target = Number(toDigit);
+            while (current !== target && sequence.length < 11) {
+                current = (current + 1) % 10;
+                sequence.push(String(current));
+            }
+            return sequence;
+        }
+
+        function odometerHtml(previous, next) {
+            const from = String(Math.max(0, Math.min(100, Math.round(previous))));
+            const to = String(Math.max(0, Math.min(100, Math.round(next))));
+            const width = Math.max(from.length, to.length);
+            const fromPadded = from.padStart(width, " ");
+            const toPadded = to.padStart(width, " ");
+            const digits = Array.from({ length: width }, (_, index) => {
+                const fromDigit = fromPadded[index] === " " ? "" : fromPadded[index];
+                const toDigit = toPadded[index] === " " ? "" : toPadded[index];
+                const sequence = digitSequence(fromDigit, toDigit);
+                const cells = sequence.map((digit) => `<span>${digit || "&nbsp;"}</span>`).join("");
+                return `
+                    <span class="journey-percent-digit" style="--digit-steps:${sequence.length - 1}; --digit-delay:${index * 0.055}s;">
+                        <span class="journey-percent-wheel">${cells}</span>
+                    </span>
+                `;
+            }).join("");
+            return `<span class="journey-percent-odometer" aria-hidden="true">${digits}<span class="journey-percent-symbol">%</span></span>`;
+        }
+
+        function setPercent(next, animate = false) {
+            const previous = Number.parseInt(pct.dataset.value || pct.textContent, 10);
+            const safePrevious = Number.isFinite(previous) ? previous : next;
+            pct.dataset.value = String(next);
+            pct.setAttribute("aria-label", `${next}%`);
+            if (!animate || safePrevious === next) {
+                pct.innerHTML = odometerHtml(next, next);
+                return;
+            }
+            pct.classList.remove("is-scrolling");
+            pct.innerHTML = odometerHtml(safePrevious, next);
+            void pct.offsetWidth;
+            pct.classList.add("is-scrolling");
+        }
+
+        function setProgress(previous, next, animatePercent = false) {
+            const left = 7.75;
+            const right = 92.12;
+            const toLeft = (value) => left + ((right - left) * value / 100);
+            route.style.setProperty("--journey-progress-left", `${left}%`);
+            route.style.setProperty("--journey-previous-right", `${toLeft(previous)}%`);
+            route.style.setProperty("--journey-progress-right", `${toLeft(next)}%`);
+            route.style.setProperty("--journey-marker-left", `${toLeft(next)}%`);
+            setPercent(next, animatePercent);
+        }
+
+        function replay({ arrival = false } = {}) {
+            route.classList.remove("is-journey-moving", "is-planet-reached");
+            card.classList.remove("is-journey-moving", "is-planet-reached");
+            void route.offsetWidth;
+            route.classList.add("is-journey-moving");
+            card.classList.add("is-journey-moving");
+            if (arrival) {
+                route.classList.add("is-planet-reached");
+                card.classList.add("is-planet-reached");
+                setTimeout(showUnlockModal, 650);
+            }
+            setTimeout(() => {
+                route.classList.remove("is-journey-moving", "is-planet-reached");
+                card.classList.remove("is-journey-moving", "is-planet-reached");
+            }, 1450);
+        }
+
+        function showUnlockModal() {
+            const modal = document.getElementById("planetUnlockModal");
+            modal.hidden = false;
+            modal.setAttribute("aria-hidden", "false");
+            requestAnimationFrame(() => modal.classList.add("is-visible"));
+        }
+
+        function closeUnlockModal() {
+            const modal = document.getElementById("planetUnlockModal");
+            modal.classList.remove("is-visible");
+            modal.setAttribute("aria-hidden", "true");
+            setTimeout(() => {
+                modal.hidden = true;
+            }, 160);
+        }
+
+        document.getElementById("moveBtn").addEventListener("click", () => {
+            planet.src = "assets/planets/earth.png";
+            nextPlanet.src = "assets/planets/moon.png";
+            copy.textContent = "Next destination: The Moon";
+            setProgress(14, 68, true);
+            replay();
+        });
+
+        document.getElementById("arrivalBtn").addEventListener("click", () => {
+            planet.src = "assets/planets/earth.png";
+            nextPlanet.src = "assets/planets/moon.png";
+            copy.textContent = "The Moon unlocked";
+            setProgress(84, 100, true);
+            replay({ arrival: true });
+        });
+
+        document.getElementById("resetBtn").addEventListener("click", () => {
+            closeUnlockModal();
+            planet.src = "assets/planets/earth.png";
+            nextPlanet.src = "assets/planets/moon.png";
+            copy.textContent = "Next destination: The Moon";
+            setProgress(42, 42);
+            route.classList.remove("is-journey-moving", "is-planet-reached");
+            card.classList.remove("is-journey-moving", "is-planet-reached");
+        });
+
+        document.getElementById("planetUnlockCloseBtn").addEventListener("click", closeUnlockModal);
+        document.getElementById("planetUnlockModal").addEventListener("click", (event) => {
+            if (event.target === event.currentTarget) closeUnlockModal();
+        });
+        setProgress(42, 42);
+    </script>
+</body>
+</html>

@@ -155,6 +155,8 @@ async function trackBlockedPageView() {
 }
 
 async function trackLocalBlockReclaim() {
+    if (normalizedBlockSource() === "scheduled") return;
+
     const trackerKey = `${BLOCK_RECLAIM_TRACKER_KEY}:${eventId || location.href}`;
     try {
         if (sessionStorage.getItem(trackerKey)) return;

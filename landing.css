@@ -161,13 +161,13 @@ a {
   border-radius: 12px;
   font-weight: 800;
   line-height: 1;
-  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
 }
 
 .button:hover,
 .button:focus-visible {
-  transform: translateY(-1px);
-  outline: 3px solid rgba(37, 99, 235, 0.16);
+  opacity: 0.94;
+  outline: 2px solid rgba(37, 99, 235, 0.12);
   outline-offset: 2px;
 }
 
@@ -179,7 +179,7 @@ a {
 
 .button-primary:hover,
 .button-primary:focus-visible {
-  background: var(--primary-dark);
+  background: #6aaaf8;
 }
 
 .button-secondary {
@@ -190,8 +190,8 @@ a {
 
 .button-secondary:hover,
 .button-secondary:focus-visible {
-  border-color: rgba(96, 165, 250, 0.48);
-  background: var(--blue-soft);
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(37, 99, 235, 0.11);
 }
 
 .section-shell,
@@ -285,7 +285,7 @@ h3 {
 
 .trust-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin: 0;
 }
@@ -325,7 +325,7 @@ h3 {
     linear-gradient(145deg, rgba(96, 165, 250, 0.18), rgba(34, 211, 238, 0.06) 42%, rgba(15, 23, 42, 0.82)),
     var(--card);
   box-shadow: 0 28px 70px rgba(2, 6, 23, 0.56), 0 0 48px rgba(96, 165, 250, 0.16);
-  transition: transform 260ms ease, box-shadow 260ms ease;
+  transition: opacity 180ms ease, border-color 180ms ease;
 }
 
 .extension-render::after {
@@ -340,8 +340,8 @@ h3 {
 
 .extension-render:hover,
 .extension-render:focus-within {
-  transform: translateY(-4px);
-  box-shadow: 0 32px 82px rgba(2, 6, 23, 0.64), 0 0 56px rgba(96, 165, 250, 0.2);
+  border-color: rgba(148, 163, 184, 0.30);
+  opacity: 0.96;
 }
 
 .extension-render img {
@@ -392,6 +392,8 @@ h3 {
 .feature-card,
 .update-grid article,
 .steps article,
+.screenshot-card,
+.testimonial-grid article,
 .page-content article {
   padding: 22px;
   border: 1px solid var(--border-light);
@@ -423,6 +425,8 @@ h3 {
 .feature-card p,
 .update-grid p,
 .steps p,
+.screenshot-card p,
+.testimonial-grid p,
 .page-content p {
   margin-bottom: 0;
 }
@@ -466,6 +470,65 @@ h3 {
 
 .step-heading h3 {
   margin-bottom: 0;
+}
+
+.screenshots-section {
+  padding-top: 82px;
+}
+
+.screenshot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.screenshot-card {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+}
+
+.screenshot-card img {
+  width: 150px;
+  aspect-ratio: 7 / 10;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+  background: #020617;
+}
+
+.screenshot-card h3,
+.testimonial-grid h3 {
+  margin-bottom: 8px;
+}
+
+.testimonial-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.testimonial-grid article {
+  display: flex;
+  min-height: 178px;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.testimonial-grid p {
+  color: var(--text-primary);
+  font-size: 1.04rem;
+  line-height: 1.5;
+}
+
+.testimonial-grid span {
+  display: block;
+  margin-top: 18px;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 800;
 }
 
 .privacy-band {
@@ -690,7 +753,13 @@ h3 {
   }
 
   .feature-grid,
-  .update-grid {
+  .update-grid,
+  .testimonial-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trust-strip,
+  .screenshot-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -756,8 +825,19 @@ h3 {
 
   .trust-strip,
   .feature-grid,
-  .update-grid {
+  .update-grid,
+  .screenshot-grid,
+  .testimonial-grid {
     grid-template-columns: 1fr;
+  }
+
+  .screenshot-card {
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .screenshot-card img {
+    width: 96px;
   }
 
   .extension-render,

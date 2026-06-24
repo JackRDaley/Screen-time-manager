@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "Saturn - Time Reclaimed and Focus Blocks",
+    "name": "Saturn - Screen Time Manager",
     "version": "2.2.11",
     "description": "Reclaim time from distracting sites, track your focus journey, and stay on course with daily limits and scheduled blocks.",
     "icons": {
@@ -46,6 +46,7 @@
                 "assets/planets/interstellar.png",
                 "assets/planets/rocket.png",
                 "assets/planets/rocket-cutout.png",
+                "assets/planets/mission-path.png",
                 "assets/planets/saturn-app-icon-16.png",
                 "assets/planets/saturn-app-icon-32.png",
                 "assets/planets/saturn-app-icon-48.png",
@@ -69,6 +70,7 @@
                 "assets/planets/interstellar.png",
                 "assets/planets/rocket.png",
                 "assets/planets/rocket-cutout.png",
+                "assets/planets/mission-path.png",
                 "assets/planets/saturn-app-icon-16.png",
                 "assets/planets/saturn-app-icon-32.png",
                 "assets/planets/saturn-app-icon-48.png",

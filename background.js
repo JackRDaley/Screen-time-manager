@@ -70,6 +70,7 @@ const KEYS = Object.freeze({
     uiSettings: "uiSettings",
     onboarding: "onboardingState",
     onboardingMetrics: "onboardingMetrics",
+    blockReclaimStats: "saturnBlockReclaimStats",
     postInstallRedirectMeta: "postInstallRedirectMeta",
     enforceIntervalSec: "enforceIntervalSec"
 });
@@ -1205,6 +1206,69 @@ function activeScheduledBlockFor(domain, activeBlocks = []) {
     return activeBlocks.find((block) => normalizeDomain(block.domain) === domain);
 }
 
+function dayKeyForTimestamp(timestamp = Date.now()) {
+    if (typeof getDayKey === "function") return getDayKey(new Date(timestamp));
+    return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+function scheduledBreakMs(block = {}, now = Date.now()) {
+    const accumulated = Math.max(0, Number(block.breakMs || 0));
+    const startedAt = Number(block.breakStartedAt || 0);
+    if (!Number.isFinite(startedAt) || startedAt <= 0) return accumulated;
+
+    const plannedUntil = Number(block.breakUntil || now);
+    const effectiveEnd = Math.min(now, Number.isFinite(plannedUntil) && plannedUntil > 0 ? plannedUntil : now);
+    return accumulated + Math.max(0, effectiveEnd - startedAt);
+}
+
+function closeScheduledBreak(block = {}, now = Date.now()) {
+    const next = {
+        ...block,
+        breakMs: scheduledBreakMs(block, now)
+    };
+    delete next.breakStartedAt;
+    delete next.breakUntil;
+    return next;
+}
+
+function scheduledContributionMs(block = {}, endedAt = Date.now()) {
+    const startedAt = Number(block.startedAt || 0);
+    if (!Number.isFinite(startedAt) || startedAt <= 0) return 0;
+    return Math.max(0, endedAt - startedAt - scheduledBreakMs(block, endedAt));
+}
+
+async function addScheduledReclaimForBlock(block = {}, endedAt = Date.now()) {
+    const estimatedMs = scheduledContributionMs(block, endedAt);
+    if (estimatedMs <= 0) return false;
+
+    const day = dayKeyForTimestamp(endedAt);
+    const sourceKey = "scheduled";
+    const tierKey = normalizeTier(block.tier, "standard");
+    const data = await get([KEYS.blockReclaimStats]);
+    const history = data[KEYS.blockReclaimStats] || {};
+    const current = history[day] || { count: 0, estimatedMs: 0, bySource: {}, byTier: {} };
+
+    await set({
+        [KEYS.blockReclaimStats]: {
+            ...history,
+            [day]: {
+                ...current,
+                count: Number(current.count || 0) + 1,
+                estimatedMs: Number(current.estimatedMs || 0) + estimatedMs,
+                bySource: {
+                    ...(current.bySource || {}),
+                    [sourceKey]: Number(current.bySource?.[sourceKey] || 0) + 1
+                },
+                byTier: {
+                    ...(current.byTier || {}),
+                    [tierKey]: Number(current.byTier?.[tierKey] || 0) + 1
+                }
+            }
+        }
+    });
+    return true;
+}
+
 async function enforceIfNeeded(tabId = activeTabId) {
     if (tabId == null) return false;
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -1733,7 +1797,7 @@ async function activateScheduledBlock(id) {
     if (!block || !block.enabled) return;
 
     const activeBlocks = (data[KEYS.activeBlocks] || []).filter((item) => item.id !== id);
-    activeBlocks.push({ ...block, startedAt: Date.now() });
+    activeBlocks.push({ ...block, startedAt: Date.now(), breakMs: 0 });
     await set({ [KEYS.activeBlocks]: activeBlocks });
     await queueDnrRulesSync();
     await redirectOpenTabsForDomain(block.domain, "scheduled", block.tier);
@@ -1741,7 +1805,12 @@ async function activateScheduledBlock(id) {
 }
 
 async function deactivateScheduledBlock(id) {
+    const endedAt = Date.now();
     const data = await get([KEYS.scheduledBlocks, KEYS.activeBlocks]);
+    const endingBlocks = (data[KEYS.activeBlocks] || []).filter((item) => item.id === id);
+    for (const block of endingBlocks) {
+        await addScheduledReclaimForBlock(block, endedAt);
+    }
     const activeBlocks = (data[KEYS.activeBlocks] || []).filter((item) => item.id !== id);
     await set({ [KEYS.activeBlocks]: activeBlocks });
     await queueDnrRulesSync();
@@ -1756,7 +1825,7 @@ async function reconcileSchedules() {
     const active = [];
 
     for (const block of scheduled) {
-        if (block.enabled && isScheduleActive(block)) active.push({ ...block, startedAt: Date.now() });
+        if (block.enabled && isScheduleActive(block)) active.push({ ...block, startedAt: Date.now(), breakMs: 0 });
         await scheduleBlockAlarms(block);
     }
 
@@ -1768,8 +1837,12 @@ async function snoozeDomain(domain, minutes, challengeToken = null) {
     const normalized = normalizeDomain(domain);
     if (!isValidDomain(normalized)) throw new Error("Invalid domain");
 
-    const data = await get([KEYS.blockedDomains, KEYS.snoozedDomains, KEYS.snoozeHistory]);
-    const tier = normalizeLimitConfig(data[KEYS.blockedDomains]?.[normalized]).tier;
+    const data = await get([KEYS.blockedDomains, KEYS.snoozedDomains, KEYS.snoozeHistory, KEYS.activeBlocks]);
+    const activeBlocks = data[KEYS.activeBlocks] || [];
+    const scheduled = activeScheduledBlockFor(normalized, activeBlocks);
+    const tier = scheduled
+        ? normalizeTier(scheduled.tier, "standard")
+        : normalizeLimitConfig(data[KEYS.blockedDomains]?.[normalized]).tier;
     if (tier === "strict" && !(await verifyStrictChallengeToken(challengeToken, normalized))) {
         throw new Error("Complete the challenge before snoozing.");
     }
@@ -1783,7 +1856,17 @@ async function snoozeDomain(domain, minutes, challengeToken = null) {
     const snoozeHistory = data[KEYS.snoozeHistory] || {};
     snoozeHistory[today] = Number(snoozeHistory[today] || 0) + 1;
 
-    await set({ [KEYS.snoozedDomains]: snoozedDomains, [KEYS.snoozeHistory]: snoozeHistory });
+    const updates = { [KEYS.snoozedDomains]: snoozedDomains, [KEYS.snoozeHistory]: snoozeHistory };
+    if (scheduled) {
+        const now = Date.now();
+        updates[KEYS.activeBlocks] = activeBlocks.map((block) => {
+            if (normalizeDomain(block.domain) !== normalized) return block;
+            const closed = closeScheduledBreak(block, now);
+            return { ...closed, breakStartedAt: now, breakUntil: expiresAt };
+        });
+    }
+
+    await set(updates);
     chrome.alarms.create(`snoozeEnd_${normalized}`, { when: expiresAt });
     await queueDnrRulesSync();
     await clearActiveLimitAlarms(normalized);
@@ -1798,14 +1881,27 @@ async function clearDomainSnooze(domain, options = {}) {
     const normalized = normalizeDomain(domain);
     if (!isValidDomain(normalized)) return false;
 
-    const data = await get([KEYS.snoozedDomains]);
+    const data = await get([KEYS.snoozedDomains, KEYS.activeBlocks]);
     const snoozedDomains = data[KEYS.snoozedDomains] || {};
     const removed = deleteSnoozeEntriesForDomain(snoozedDomains, normalized);
+    const updates = { [KEYS.snoozedDomains]: snoozedDomains };
+    if (removed.length) {
+        const now = Date.now();
+        const activeBlocks = data[KEYS.activeBlocks] || [];
+        const nextActiveBlocks = activeBlocks.map((block) => (
+            normalizeDomain(block.domain) === normalized
+                ? closeScheduledBreak(block, now)
+                : block
+        ));
+        if (JSON.stringify(nextActiveBlocks) !== JSON.stringify(activeBlocks)) {
+            updates[KEYS.activeBlocks] = nextActiveBlocks;
+        }
+    }
     const enforceDelayMs = Math.max(0, Math.min(5000, Number(options.enforceDelayMs) || 0));
     if (removed.length && enforceDelayMs) {
         scheduleSnoozeEnforcement(normalized, enforceDelayMs);
     }
-    await set({ [KEYS.snoozedDomains]: snoozedDomains });
+    await set(updates);
     const alarmDomains = Array.from(new Set([normalized, ...removed, ...removed.map(normalizeDomain)]));
     await Promise.all(alarmDomains.map((alarmDomain) => (
         chrome.alarms.clear(`snoozeEnd_${alarmDomain}`).catch(() => {})
@@ -2105,9 +2201,15 @@ const handlers = {
         });
     },
     endScheduledBlock: async (request, sender) => {
+        const endedAt = Date.now();
         const domain = normalizeDomain(request.domain);
         const data = await get([KEYS.activeBlocks]);
-        const next = (data[KEYS.activeBlocks] || []).filter((block) => normalizeDomain(block.domain) !== domain);
+        const activeBlocks = data[KEYS.activeBlocks] || [];
+        const endingBlocks = activeBlocks.filter((block) => normalizeDomain(block.domain) === domain);
+        for (const block of endingBlocks) {
+            await addScheduledReclaimForBlock(block, endedAt);
+        }
+        const next = activeBlocks.filter((block) => normalizeDomain(block.domain) !== domain);
         await set({ [KEYS.activeBlocks]: next });
         await queueDnrRulesSync();
         await scheduleActiveLimitWakeups(domain);

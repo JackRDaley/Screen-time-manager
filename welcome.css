@@ -192,12 +192,12 @@ h1 {
     cursor: pointer;
     color: var(--text);
     font-family: inherit;
-    transition: border-color .15s, background .15s, filter .15s, transform .15s;
+    transition: border-color .15s, background .15s, color .15s, opacity .15s;
 }
 
 .btn:hover {
-    transform: translateY(-1px);
-    filter: brightness(1.07);
+    opacity: .94;
+    border-color: rgba(255,177,138,.30);
 }
 
 .btn.primary {

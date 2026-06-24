@@ -167,10 +167,13 @@ h1 {
     font-family: inherit;
     cursor: pointer;
     box-shadow: 0 8px 18px rgba(0,0,0,.22);
-    transition: border-color .15s, background .15s, filter .15s;
+    transition: border-color .15s, background .15s, color .15s, opacity .15s;
 }
 
-.btn:hover { filter: brightness(1.08); }
+.btn:hover {
+    opacity: .94;
+    border-color: rgba(255,177,138,.34);
+}
 
 .btn.ghost {
     background: rgba(247,231,214,.06);
@@ -184,7 +187,10 @@ h1 {
     color: rgba(255,226,205,.96);
     box-shadow: 0 8px 18px rgba(212,106,68,.16);
 }
-.btn.snooze:hover { filter: brightness(1.10); }
+.btn.snooze:hover {
+    opacity: .94;
+    border-color: rgba(255,166,77,.46);
+}
 
 .blocked-until {
     position: relative;
