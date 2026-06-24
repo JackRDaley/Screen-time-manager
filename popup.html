@@ -65,9 +65,9 @@
             <img class="streak-icon" src="assets/icons/streak_icon.png" alt="" aria-hidden="true" />
             <span class="streak-header-value" id="streakHeaderValue">0</span>
         </div>
-        <div class="status-pill">
+        <div class="status-pill is-inactive" id="statusPill" aria-live="polite">
             <span class="pulse"></span>
-            <span id="activeCount">0</span>&nbsp;active
+            <span id="activeCount">Idle</span>
         </div>
         <button class="settings-cog-btn" id="settingsCogBtn" type="button" aria-label="Open settings" aria-controls="settingsOverlay" aria-expanded="false" title="Settings"></button>
     </header>
@@ -90,7 +90,7 @@
                             <img class="stat-icon" src="assets/icons/clock-regular-full.svg" alt="" />
                         </div>
                         <div class="stat-content">
-                            <div class="stat-lbl">Time reclaimed</div>
+                            <div class="stat-lbl">Screen time</div>
                             <div class="stat-value-row">
                                 <div class="stat-val" id="statScreenTime">—</div>
                             </div>
@@ -104,7 +104,7 @@
                             <img class="stat-icon" src="assets/icons/arrow-pointer-solid-full.svg" alt="" />
                         </div>
                         <div class="stat-content">
-                            <div class="stat-lbl">Blocked</div>
+                            <div class="stat-lbl">Visits</div>
                             <div class="stat-value-row">
                                 <div class="stat-val" id="statVisits">—</div>
                             </div>
@@ -184,14 +184,14 @@
 
             <div class="card" id="rankingCard">
                 <div class="card-head">
-                    <div class="card-title">Time in Orbit</div>
+                    <div class="card-title">Time Spent</div>
                 </div>
                 <div id="ranking" class="list muted">No data yet.</div>
             </div>
 
             <div class="card" id="rankingByVisitsCard">
                 <div class="card-head">
-                    <div class="card-title">Frequent Pulls</div>
+                    <div class="card-title">Most Visited</div>
                 </div>
                 <div id="rankingByVisits" class="list muted">No data yet.</div>
             </div>
@@ -199,7 +199,7 @@
             <div class="usage-row">
                 <div class="card" id="usageCard">
                     <div class="card-head">
-                        <div class="card-title" id="usageCardTitle">Orbit Pattern</div>
+                        <div class="card-title" id="usageCardTitle">Hourly Usage</div>
                     </div>
                     <div class="hourly-chart-section">
                         <div id="hourlyDistribution" class="hourly-distribution muted">No data yet.</div>
@@ -254,7 +254,7 @@
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card" id="limitListCard">
                 <div class="card-head">
                     <div class="card-title">Limit List</div>
                 </div>
@@ -325,7 +325,7 @@
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card" id="scheduledListCard">
                 <div class="card-head">
                     <div class="card-title">Scheduled Sessions</div>
                 </div>

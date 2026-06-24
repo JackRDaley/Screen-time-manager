@@ -116,8 +116,8 @@ const ONBOARDING_STEPS = Object.freeze([
     {
         tabId: "tab1",
         target: ".stat-strip",
-        title: "Start on your journey",
-        copy: "The top cards summarize reclaimed time, while the journey, lists, and orbit pattern show where your focus is going."
+        title: "Start on your dashboard",
+        copy: "The top cards summarize today, while the lists and hourly chart help you spot where your time is going."
     },
     {
         tabId: "tab2",
@@ -803,16 +803,17 @@ function renderStats() {
     const range = $("statRange")?.value || "Today";
     const currentOffsets = offsetsForRange(range);
     const previousPeriodOffsets = previousOffsets(currentOffsets);
+    const total = totals(statsForOffsets(currentOffsets));
+    const previousTotal = totals(statsForOffsets(previousPeriodOffsets));
     const reclaim = reclaimStatsForOffsets(currentOffsets);
-    const previousReclaim = reclaimStatsForOffsets(previousPeriodOffsets);
     const snoozes = snoozesForOffsets(currentOffsets);
     const previousSnoozes = snoozesForOffsets(previousPeriodOffsets);
 
-    setText("statScreenTime", formatShortTime(reclaim.estimatedMs));
-    setText("statVisits", String(reclaim.count));
+    setText("statScreenTime", formatShortTime(total.timeMs));
+    setText("statVisits", String(total.visits));
     setText("statSnoozes", String(snoozes));
-    setText("statScreenTimeDelta", formatPercentDelta(reclaim.estimatedMs, previousReclaim.estimatedMs));
-    setText("statVisitsDelta", formatPercentDelta(reclaim.count, previousReclaim.count));
+    setText("statScreenTimeDelta", formatPercentDelta(total.timeMs, previousTotal.timeMs));
+    setText("statVisitsDelta", formatPercentDelta(total.visits, previousTotal.visits));
     setText("statSnoozesDelta", formatPercentDelta(snoozes, previousSnoozes));
     renderJourney(reclaim);
 }
@@ -890,7 +891,15 @@ function renderActive() {
     `);
 
     const html = [...activeRows, ...pausedRows, ...reachedRows].join("");
-    setText("activeCount", String(activeRows.length + pausedRows.length + reachedRows.length));
+    const activeBlockCount = activeRows.length;
+    const statusPill = $("statusPill");
+    if (statusPill) {
+        statusPill.classList.toggle("is-inactive", activeBlockCount === 0);
+        statusPill.setAttribute("aria-label", activeBlockCount > 0
+            ? `${activeBlockCount} active ${activeBlockCount === 1 ? "block" : "blocks"}`
+            : "No active blocks or schedules");
+    }
+    setText("activeCount", activeBlockCount > 0 ? `${activeBlockCount} active` : "Idle");
     $("activeCard")?.style.setProperty("display", html ? "" : "none");
     renderList("activeList", html, "No active blocks.");
 }
@@ -978,8 +987,8 @@ function renderRankingStyled() {
 
     const timeTitle = $("ranking")?.parentElement?.querySelector(".card-title");
     const visitsTitle = $("rankingByVisits")?.parentElement?.querySelector(".card-title");
-    if (timeTitle) timeTitle.textContent = `Time in Orbit - ${range}`;
-    if (visitsTitle) visitsTitle.textContent = `Frequent Pulls - ${range}`;
+    if (timeTitle) timeTitle.textContent = `Time Spent · ${range}`;
+    if (visitsTitle) visitsTitle.textContent = `Most Visited · ${range}`;
     state.rankingSignature = rankingSignature(range);
     renderList("ranking", makeRows(false), "No data yet.");
     renderList("rankingByVisits", makeRows(true), "No data yet.");
@@ -1510,7 +1519,7 @@ function renderHourlyStyled() {
     const title = $("usageCardTitle");
     if (!list) return;
     const range = $("statRange")?.value || "Today";
-    if (title) title.textContent = `Orbit Pattern - ${range}`;
+    if (title) title.textContent = `Usage Distribution · ${range}`;
 
     const bucketsByHour = hourlyUsageForOffsets(offsetsForRange(range));
     const buckets = Array.from({ length: 24 }, (_, hour) => {
@@ -1626,8 +1635,8 @@ function renderHourInsightStyled(slot) {
     insight.classList.remove("muted");
     insight.innerHTML = `
         <div class="hourly-tip-header">
-            <div class="hourly-tip-time">${formatHourRangeTooltip(hour)}${isPeak ? ' - <span class="hourly-tip-inline-peak">Peak</span>' : ""}</div>
-            <div class="hourly-tip-time-spent">${formatShortTime(time)} in orbit</div>
+            <div class="hourly-tip-time">${formatHourRangeTooltip(hour)}${isPeak ? ' · <span class="hourly-tip-inline-peak">Peak</span>' : ""}</div>
+            <div class="hourly-tip-time-spent">${formatShortTime(time)} spent</div>
         </div>
         ${domains.length > 0
             ? `<div class="hourly-tip-sites">${domains.map((entry) => `
