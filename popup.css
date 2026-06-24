@@ -697,6 +697,18 @@ nav label:focus-visible {
     min-height: 50px;
 }
 
+.insight-placeholder {
+    padding: 8px 0 10px;
+    min-height: 50px;
+}
+
+.insight-placeholder-title {
+    color: rgba(237,242,255,.84);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
 #personalInsightsList .insight-copy {
     white-space: normal;
     line-height: 1.35;

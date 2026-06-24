@@ -814,6 +814,7 @@ function insightTimeLabel(timestamp) {
 
 function personalInsightItems() {
     if (state.settings.personalInsightsEnabled === false) return [];
+    if (!hasEnoughInsightData()) return [];
 
     const dismissed = state.data[DISMISSED_INSIGHTS_KEY] || {};
     const byDomain = new Map();
@@ -841,6 +842,32 @@ function personalInsightItems() {
         .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || Number(b.timestamp || 0) - Number(a.timestamp || 0))
         .slice(0, 4);
     return withDisambiguatedInsightLabels(sorted);
+}
+
+function insightReadiness() {
+    const readiness = globalThis.StmInsights?.insightDataReadiness;
+    if (typeof readiness !== "function") return { ready: false };
+
+    return readiness({
+        statsToday: state.data.statsToday || {},
+        allStatsToday: state.data.allStatsToday || state.data.statsToday || {},
+        statsHistory: state.data.statsHistory || {},
+        hourlyUsageHistory: state.data.hourlyUsageHistory || {},
+        settings: state.settings || {},
+        now: Date.now()
+    });
+}
+
+function hasEnoughInsightData() {
+    return insightReadiness().ready === true;
+}
+
+function insightPlaceholderHtml() {
+    return `
+        <div class="insight-placeholder" role="status">
+            <div class="insight-placeholder-title">Insights aren't ready yet, check back later.</div>
+        </div>
+    `;
 }
 
 function formatInsightMinutes(ms) {
@@ -1239,15 +1266,22 @@ function renderPersonalInsights() {
     const card = $("personalInsightsCard");
     const list = $("personalInsightsList");
     const nav = $("personalInsightsNav");
+    const insightsEnabled = state.settings.personalInsightsEnabled !== false;
     if (card) {
-        card.hidden = !insights.length;
-        card.classList.toggle("dashboard-card-hidden", !insights.length);
+        card.hidden = !insightsEnabled;
+        card.classList.toggle("dashboard-card-hidden", !insightsEnabled);
     }
     if (nav) nav.innerHTML = "";
     if (!list) return;
 
-    if (!insights.length) {
+    if (!insightsEnabled) {
         list.innerHTML = "";
+        return;
+    }
+
+    if (!insights.length) {
+        list.classList.add("muted");
+        list.innerHTML = insightPlaceholderHtml();
         return;
     }
 

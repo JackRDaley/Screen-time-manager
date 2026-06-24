@@ -1635,6 +1635,28 @@ describe('Background helper functions (unit)', () => {
     expect(new Set(insights.map((insight) => insight.domain)).size).toBe(insights.length);
   });
 
+  test('analyzeUsagePatterns waits for enough usage history before creating personal insights', () => {
+    const now = new Date(2026, 4, 10, 10, 30).getTime();
+
+    const insights = analyzeUsagePatterns({
+      now,
+      settings: { personalInsightsEnabled: true, insightSensitivity: 'normal' },
+      activeSession: {
+        domain: 'youtube.com',
+        startedAt: now - 40 * 60 * 1000,
+        lastHeartbeatAt: now
+      },
+      allStatsToday: {
+        'youtube.com': { timeMs: 40 * 60 * 1000, visits: 2 }
+      },
+      statsHistory: {},
+      hourlyUsageHistory: {},
+      blockedDomains: {}
+    });
+
+    expect(insights).toEqual([]);
+  });
+
   test('generateInsights stores insights and caps pattern notifications', async () => {
     const now = new Date(2026, 4, 10, 11, 0).getTime();
     const dayForOffset = (offset) => {
@@ -1701,7 +1723,7 @@ describe('Background helper functions (unit)', () => {
     global.chrome.notifications.create = origNotificationCreate;
   });
 
-  test('generateInsights replaces stale stored insights with current patterns', async () => {
+  test('generateInsights clears stale stored insights when usage history is not ready', async () => {
     const now = new Date(2026, 4, 10, 11, 0).getTime();
     const today = localDayKey(new Date(now));
     const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -1767,11 +1789,7 @@ describe('Background helper functions (unit)', () => {
     const result = await generateInsights({ now, allowNotifications: false });
 
     expect(result.success).toBe(true);
-    expect(storage.data.personalInsights).toHaveLength(1);
-    expect(storage.data.personalInsights[0]).toEqual(expect.objectContaining({
-      type: 'long_session',
-      domain: 'youtube.com'
-    }));
+    expect(storage.data.personalInsights).toHaveLength(0);
     expect(storage.data.personalInsights.some((insight) => insight.domain === 'amazon.com')).toBe(false);
     expect(storage.data.personalInsights.some((insight) => insight.domain === 'google.com')).toBe(false);
 
