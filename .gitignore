@@ -2,11 +2,13 @@
 node_modules/
 server/node_modules/
 worker/node_modules/
+reactbits-prototype/dist/
 .tools/
 
 # Environment / secrets
 .env
 .env.*
+.vercel/
 !.env.example
 !.dev.vars.example
 worker/.dev.vars
