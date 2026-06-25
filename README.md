@@ -163,6 +163,7 @@ Recommended event-scoped custom dimensions:
 - `onboarding_step`
 - `funnel_version`
 - `error_name`
+- `strict_challenge_game`
 - `preset_id`
 - `rule_type`
 - `created_count`
@@ -172,7 +173,7 @@ Recommended event-scoped custom dimensions:
 
 Avoid registering unique or high-cardinality values such as redirect IDs, domains, raw URLs, or client IDs as custom dimensions.
 
-Use GA4's Active Users metric against `blocked_page_view` if you want a rough measure of how many installs are still hitting real blocks.
+Use GA4's Active Users metric against `blocked_page_view` if you want a rough measure of how many installs are still hitting real blocks. `blocked_page_action` is reserved for user-initiated actions from the blocked page, such as snoozing, closing the tab, undoing a lenient block, or passing a strict challenge.
 
 ---
 

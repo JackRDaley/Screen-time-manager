@@ -30,7 +30,7 @@
     "host_permissions": ["<all_urls>"],
     "web_accessible_resources": [
         {
-            "resources": ["blocked.html", "blocked.js", "blocked.css", "assets/icons/icon.png"],
+            "resources": ["blocked.html", "blocked.js", "blocked.css"],
             "matches": ["<all_urls>"]
         },
         {

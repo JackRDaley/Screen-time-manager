@@ -39,8 +39,6 @@ const rawDomain = params.get("d");
 const d = validateDomainParam(rawDomain) || "this site";
 const source = params.get("source") || "limit";
 const tier = (params.get("tier") || "lenient").toLowerCase();
-const eventId = params.get("eid") || "";
-const BLOCK_EVENT_TRACKER_KEY = "blockedAnalyticsEvent";
 const FIRST_BLOCK_REACHED_KEY = "activationFirstBlockReachedAt";
 const BLOCK_ANALYTICS_URL = "https://screen-time-manager.jackster0627.workers.dev/analytics/block-event";
 const TIER_LABELS = {
@@ -53,6 +51,7 @@ const DEFAULT_SNOOZE_MINUTES = 5;
 
 let strictChallengeReadyAt = 0;
 let strictChallengeWindowEndsAt = 0;
+let selectedStrictChallengeGame = "";
 
 const STRICT_GAMES = {
     MATH_PROBLEM: 'mathProblem',
@@ -126,14 +125,6 @@ async function trackFirstBlockReached() {
 async function trackBlockedPageView() {
     if (typeof getOrCreateAnalyticsClientId !== "function") return;
 
-    const trackerKey = `${BLOCK_EVENT_TRACKER_KEY}:${eventId || location.href}`;
-    try {
-        if (sessionStorage.getItem(trackerKey)) return;
-        sessionStorage.setItem(trackerKey, "1");
-    } catch {
-        // Best effort only; analytics should never affect the block page.
-    }
-
     try {
         const clientId = await getOrCreateAnalyticsClientId(chrome.storage.local);
         await fetch(BLOCK_ANALYTICS_URL, {
@@ -143,7 +134,8 @@ async function trackBlockedPageView() {
                 clientId,
                 extensionVersion: chrome.runtime.getManifest?.().version || "unknown",
                 source: normalizedBlockSource(),
-                tier: normalizedTierName()
+                tier: normalizedTierName(),
+                challengeGame: selectedStrictChallengeGame
             })
         });
     } catch {
@@ -571,6 +563,7 @@ async function renderTierActions() {
     const strictChallenge = document.getElementById("strictChallenge");
     const immutableNotice = document.getElementById("immutableNotice");
 
+    selectedStrictChallengeGame = "";
     primary.innerHTML = "";
     strictChallenge.hidden = true;
     immutableNotice.hidden = true;
@@ -622,7 +615,7 @@ async function renderTierActions() {
         strictChallenge.hidden = false;
         // Pick a game (random). Could be extended to user preference.
         const selectedGame = selectRandomGame();
-        trackBlockedPageAction(`strict_challenge_game_${selectedGame}`);
+        selectedStrictChallengeGame = selectedGame;
 
         // show appropriate UI and attach handlers
         hideAllStrictGameContainers();

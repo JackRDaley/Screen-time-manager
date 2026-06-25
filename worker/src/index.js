@@ -59,6 +59,7 @@ const ANALYTICS_ALLOWED_PARAMS = new Set([
     "onboarding_step",
     "funnel_version",
     "error_name",
+    "strict_challenge_game",
     "preset_id",
     "rule_type",
     "created_count",
@@ -69,6 +70,12 @@ const ANALYTICS_ALLOWED_PARAMS = new Set([
 
 const ANALYTICS_BLOCK_SOURCES = new Set(["limit", "scheduled", "unknown"]);
 const ANALYTICS_BLOCK_TIERS = new Set(["lenient", "standard", "strict", "immutable", "unknown"]);
+const ANALYTICS_STRICT_CHALLENGE_GAMES = new Set([
+    "gridMemory",
+    "mathProblem",
+    "memorySequence",
+    "typingChallenge"
+]);
 
 function bytesToBase64Url(bytes) {
     let binary = "";
@@ -1245,14 +1252,24 @@ export default {
             return json({ error: "Missing clientId" }, 400);
         }
 
+        const strictChallengeGame = sanitizeAnalyticsEnum(
+            body?.challengeGame,
+            ANALYTICS_STRICT_CHALLENGE_GAMES,
+            ""
+        );
+        const blockEventParams = {
+            block_source: sanitizeAnalyticsEnum(body?.source, ANALYTICS_BLOCK_SOURCES),
+            block_tier: sanitizeAnalyticsEnum(body?.tier, ANALYTICS_BLOCK_TIERS),
+            extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32)
+        };
+        if (strictChallengeGame) {
+            blockEventParams.strict_challenge_game = strictChallengeGame;
+        }
+
         const blockEventPayload = {
             eventName: "blocked_page_view",
             clientId,
-            params: {
-                block_source: sanitizeAnalyticsEnum(body?.source, ANALYTICS_BLOCK_SOURCES),
-                block_tier: sanitizeAnalyticsEnum(body?.tier, ANALYTICS_BLOCK_TIERS),
-                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32)
-            }
+            params: blockEventParams
         };
         logAnalyticsDebug(env, "[analytics/block-event] forwarding", blockEventPayload);
 
