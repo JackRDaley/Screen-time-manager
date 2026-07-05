@@ -1498,6 +1498,7 @@ function benefitInsightItems() {
 
 function personalInsightItems() {
     if (state.settings.personalInsightsEnabled === false) return [];
+    if (!hasEnoughInsightData()) return [];
 
     const dismissed = state.data[DISMISSED_INSIGHTS_KEY] || {};
     const byDomain = new Map();
@@ -1528,6 +1529,32 @@ function personalInsightItems() {
         ...benefitInsightItems(),
         ...withDisambiguatedInsightLabels(sorted)
     ].slice(0, 6);
+}
+
+function insightReadiness() {
+    const readiness = globalThis.StmInsights?.insightDataReadiness;
+    if (typeof readiness !== "function") return { ready: false };
+
+    return readiness({
+        statsToday: state.data.statsToday || {},
+        allStatsToday: state.data.allStatsToday || state.data.statsToday || {},
+        statsHistory: state.data.statsHistory || {},
+        hourlyUsageHistory: state.data.hourlyUsageHistory || {},
+        settings: state.settings || {},
+        now: Date.now()
+    });
+}
+
+function hasEnoughInsightData() {
+    return insightReadiness().ready === true;
+}
+
+function insightPlaceholderHtml() {
+    return `
+        <div class="insight-placeholder" role="status">
+            <div class="insight-placeholder-title">Insights aren't ready yet, check back later.</div>
+        </div>
+    `;
 }
 
 function formatInsightMinutes(ms) {
@@ -2016,13 +2043,22 @@ function renderPersonalInsights() {
     `;
 
     const visibleInsight = insights[state.selectedInsightIndex];
-    if (visibleInsight?.id && !viewedInsightsThisSession.has(visibleInsight.id)) {
-        viewedInsightsThisSession.add(visibleInsight.id);
-        trackFunnelEvent("insight_viewed", {
+    if (visibleInsight?.id && !presentedInsightsThisSession.has(visibleInsight.id)) {
+        presentedInsightsThisSession.add(visibleInsight.id);
+        trackFunnelEvent("insight_presented", {
             trigger: "dashboard",
             action: visibleInsight.action || "view"
         });
     }
+}
+
+function trackInsightInteraction(trigger, insight = personalInsightItems()[state.selectedInsightIndex]) {
+    if (!insight?.id || interactedInsightsThisSession.has(insight.id)) return;
+    interactedInsightsThisSession.add(insight.id);
+    trackFunnelEvent("insight_viewed", {
+        trigger,
+        action: insight.action || "view"
+    });
 }
 
 function moveInsightCarousel(direction) {
@@ -2031,6 +2067,7 @@ function moveInsightCarousel(direction) {
     const nextIndex = (state.selectedInsightIndex + direction + insights.length) % insights.length;
     state.selectedInsightIndex = nextIndex;
     renderPersonalInsights();
+    trackInsightInteraction(direction > 0 ? "insight_next" : "insight_previous", insights[nextIndex]);
 }
 
 function renderHourlyStyled() {
@@ -2765,6 +2802,7 @@ function prefillLimitForm(domain) {
     const normalized = normalizeDomain(domain);
     if (!isValidDomain(normalized)) return;
 
+    trackInsightInteraction("insight_add_limit");
     trackFunnelEvent("insight_add_limit_clicked", { trigger: "personal_insight" });
     const tab = $("tab2");
     const input = $("domainInput");
@@ -2779,6 +2817,7 @@ function viewInsightUsage(domain) {
     const normalized = normalizeDomain(domain);
     if (!isValidDomain(normalized)) return;
 
+    trackInsightInteraction("insight_view_usage");
     if ($("tab1")) $("tab1").checked = true;
     if ($("statRange")) $("statRange").value = "Today";
     state.selectedHourlyHour = null;
@@ -2793,6 +2832,8 @@ function viewInsightUsage(domain) {
 }
 
 async function dismissPersonalInsight(id) {
+    const insight = personalInsightItems().find((item) => item.id === id);
+    trackInsightInteraction("insight_dismiss", insight);
     const response = await send("dismissInsight", { id });
     if (!response?.success) {
         console.error("Dismiss insight failed:", response?.error || "Unknown error");

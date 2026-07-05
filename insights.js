@@ -3,6 +3,9 @@
 
     const MINUTE_MS = 60 * 1000;
     const DAY_MS = 24 * 60 * MINUTE_MS;
+    const INSIGHT_MIN_ACTIVE_DAYS = 2;
+    const INSIGHT_MIN_TOTAL_MS = 15 * MINUTE_MS;
+    const INSIGHT_MIN_VISITS = 5;
 
     const DEFAULT_INSIGHT_SETTINGS = Object.freeze({
         personalInsightsEnabled: true,
@@ -155,6 +158,62 @@
         if (offset === 0) return normalizeStats(input.allStatsToday || input.statsToday || {});
         const day = dayKeyOffset(now, offset);
         return normalizeStats((input.statsHistory || {})[day] || {});
+    }
+
+    function hourlyTotalsForDay(hourlyUsageHistory = {}, day) {
+        return Object.values(hourlyUsageHistory?.[day] || {}).reduce((totals, bucket = {}) => {
+            totals.timeMs += Math.max(0, Number(bucket.timeMs || 0));
+            totals.visits += Math.max(0, Number(bucket.visits || 0));
+
+            if (!Number(bucket.timeMs || 0)) {
+                Object.values(bucket.domains || {}).forEach((ms) => {
+                    totals.timeMs += Math.max(0, Number(ms || 0));
+                });
+            }
+            if (!Number(bucket.visits || 0)) {
+                Object.values(bucket.domainVisits || {}).forEach((visitCount) => {
+                    totals.visits += Math.max(0, Number(visitCount || 0));
+                });
+            }
+
+            return totals;
+        }, { timeMs: 0, visits: 0 });
+    }
+
+    function insightDataReadiness(input = {}) {
+        const now = Number(input.now || Date.now());
+        const hourlyUsageHistory = input.hourlyUsageHistory || {};
+        let activeDays = 0;
+        let totalMs = 0;
+        let visitCount = 0;
+
+        for (let offset = 0; offset < 7; offset += 1) {
+            const day = dayKeyOffset(now, offset);
+            const stats = statsForOffset(input, now, offset);
+            const statsTotals = Object.values(stats).reduce((totals, entry = {}) => {
+                totals.timeMs += entryTimeMs(entry);
+                totals.visits += entryVisits(entry);
+                return totals;
+            }, { timeMs: 0, visits: 0 });
+            const hourlyTotals = hourlyTotalsForDay(hourlyUsageHistory, day);
+            const dayMs = Math.max(statsTotals.timeMs, hourlyTotals.timeMs);
+            const dayVisits = Math.max(statsTotals.visits, hourlyTotals.visits);
+
+            if (dayMs > 0 || dayVisits > 0) activeDays += 1;
+            totalMs += dayMs;
+            visitCount += dayVisits;
+        }
+
+        const hasEnoughVolume = totalMs >= INSIGHT_MIN_TOTAL_MS || visitCount >= INSIGHT_MIN_VISITS;
+        return {
+            ready: activeDays >= INSIGHT_MIN_ACTIVE_DAYS && hasEnoughVolume,
+            activeDays,
+            totalMs,
+            visits: visitCount,
+            requiredActiveDays: INSIGHT_MIN_ACTIVE_DAYS,
+            requiredTotalMs: INSIGHT_MIN_TOTAL_MS,
+            requiredVisits: INSIGHT_MIN_VISITS
+        };
     }
 
     function normalizedBlockedDomains(blockedDomains = {}) {
@@ -649,6 +708,7 @@
     function analyzeUsagePatterns(input = {}) {
         const settings = getInsightSettings(input.settings || {});
         if (!settings.personalInsightsEnabled) return [];
+        if (!insightDataReadiness(input).ready) return [];
 
         const now = Number(input.now || Date.now());
         const dateKey = dayKeyOffset(now, 0);
@@ -667,6 +727,7 @@
         DEFAULT_INSIGHT_SETTINGS,
         SENSITIVITY_THRESHOLDS,
         analyzeUsagePatterns,
+        insightDataReadiness,
         getInsightSettings,
         normalizeDomain,
         isValidDomain,

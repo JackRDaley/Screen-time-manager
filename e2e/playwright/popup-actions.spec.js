@@ -503,8 +503,49 @@ test('fresh install with no usage history does not show insights', async ({ page
         window.__popupMessages.some((message) => message.action === 'generateInsights')
     ))).toBe(true);
     await expect.poll(() => page.evaluate(() => window.__popupData.personalInsights?.length || 0)).toBe(0);
-    await expect(page.locator('#personalInsightsCard')).toBeHidden();
-    await expect(page.locator('#personalInsightsList')).toBeEmpty();
+    await expect(page.locator('#personalInsightsCard')).toBeVisible();
+    await expect(page.locator('#personalInsightsList')).toContainText("Insights aren't ready yet, check back later.");
+});
+
+test('stored insights are hidden and untracked until enough usage history exists', async ({ page }) => {
+    const today = dayKey();
+    await installPopupChromeMock(page, {
+        statsToday: {
+            'youtube.com': { timeMs: 40 * 60 * 1000, visits: 2 }
+        },
+        allStatsToday: {
+            'youtube.com': { timeMs: 40 * 60 * 1000, visits: 2 }
+        },
+        statsHistory: {},
+        hourlyUsageHistory: {},
+        personalInsights: [
+            {
+                id: `long_session:youtube.com:${today}`,
+                type: 'long_session',
+                domain: 'youtube.com',
+                title: 'YouTube is holding your attention right now',
+                message: 'Active for 40 minutes straight',
+                action: 'viewUsage',
+                priority: 100,
+                timestamp: Date.now(),
+                dateKey: today,
+                context: { durationMs: 40 * 60 * 1000 }
+            }
+        ],
+        dismissedInsights: {}
+    });
+
+    await page.goto(popupUrl());
+
+    await expect.poll(() => page.evaluate(() => window.__popupData.personalInsights?.length || 0)).toBe(0);
+    await expect(page.locator('#personalInsightsCard')).toBeVisible();
+    await expect(page.locator('#personalInsightsList')).toContainText("Insights aren't ready yet, check back later.");
+    await expect.poll(() => page.evaluate(() => (
+        window.__popupMessages.filter((message) => (
+            message.action === 'trackAnalyticsEvent'
+            && ['insight_presented', 'insight_viewed'].includes(message.eventName)
+        )).length
+    ))).toBe(0);
 });
 
 test('external upgrade and billing buttons open intended destinations', async ({ page }) => {

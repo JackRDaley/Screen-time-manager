@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --bg: #060810;
+        --panel: rgba(16, 20, 36, 0.88);
+        --line: rgba(237, 242, 255, 0.12);
+        --text: #edf2ff;
+        --muted: rgba(237, 242, 255, 0.58);
+        --cyan: #22d9ff;
+        --purple: #8b6fff;
+        --green: #2effa8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 1600px;
+        height: 900px;
+        overflow: hidden;
+        background: var(--bg);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--text);
+      }
+
+      body {
+        position: relative;
+        display: grid;
+        place-items: center;
+      }
+
+      .ambient {
+        position: absolute;
+        inset: -140px;
+        background:
+          radial-gradient(560px 420px at 17% 13%, rgba(139, 111, 255, 0.34), transparent 62%),
+          radial-gradient(520px 420px at 84% 14%, rgba(34, 217, 255, 0.24), transparent 64%),
+          radial-gradient(620px 430px at 50% 106%, rgba(46, 255, 168, 0.10), transparent 58%),
+          linear-gradient(135deg, #070916 0%, #0a0e1e 45%, #050711 100%);
+      }
+
+      .grid {
+        position: absolute;
+        inset: 0;
+        opacity: 0.22;
+        background-image:
+          linear-gradient(rgba(237, 242, 255, 0.07) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(237, 242, 255, 0.07) 1px, transparent 1px);
+        background-size: 72px 72px;
+        mask-image: radial-gradient(circle at 50% 48%, black 0%, transparent 72%);
+      }
+
+      .stage {
+        position: relative;
+        width: 1420px;
+        height: 760px;
+      }
+
+      .halo {
+        position: absolute;
+        inset: 78px 84px 64px;
+        border-radius: 42px;
+        background:
+          linear-gradient(110deg, rgba(139, 111, 255, 0.28), rgba(34, 217, 255, 0.18)),
+          rgba(255, 255, 255, 0.03);
+        filter: blur(30px);
+        transform: rotate(-3deg);
+      }
+
+      .browser {
+        position: absolute;
+        right: 38px;
+        top: 42px;
+        width: 1055px;
+        height: 674px;
+        border: 1px solid rgba(237, 242, 255, 0.14);
+        border-radius: 32px;
+        overflow: hidden;
+        background: #090c18;
+        box-shadow:
+          0 48px 120px rgba(0, 0, 0, 0.54),
+          0 0 0 1px rgba(255, 255, 255, 0.05),
+          inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      }
+
+      .browser-top {
+        position: absolute;
+        inset: 0 0 auto;
+        z-index: 2;
+        height: 54px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 22px;
+        border-bottom: 1px solid rgba(237, 242, 255, 0.10);
+        background: rgba(7, 10, 18, 0.92);
+      }
+
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: rgba(237, 242, 255, 0.24);
+      }
+
+      .dot:nth-child(1) {
+        background: #ff5f57;
+      }
+
+      .dot:nth-child(2) {
+        background: #ffbd2e;
+      }
+
+      .dot:nth-child(3) {
+        background: #28c840;
+      }
+
+      .bar {
+        margin-left: 12px;
+        height: 28px;
+        width: 520px;
+        border-radius: 999px;
+        border: 1px solid rgba(237, 242, 255, 0.10);
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .shot-wrap {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 54px;
+        bottom: 0;
+        overflow: hidden;
+      }
+
+      .shot {
+        position: absolute;
+        left: 0;
+        top: -28px;
+        width: 1055px;
+        height: auto;
+      }
+
+      .fade {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(90deg, rgba(6, 8, 16, 0.18), transparent 38%),
+          linear-gradient(0deg, rgba(6, 8, 16, 0.20), transparent 42%);
+        pointer-events: none;
+      }
+
+      .brand {
+        position: absolute;
+        left: 34px;
+        top: 96px;
+        width: 445px;
+        padding: 34px;
+        border-radius: 30px;
+        border: 1px solid rgba(237, 242, 255, 0.13);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.035)),
+          rgba(10, 14, 28, 0.82);
+        box-shadow:
+          0 28px 82px rgba(0, 0, 0, 0.38),
+          inset 0 1px 0 rgba(255, 255, 255, 0.12);
+        backdrop-filter: blur(22px);
+      }
+
+      .logo-row {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .logo {
+        width: 78px;
+        height: 78px;
+        border-radius: 22px;
+        box-shadow:
+          0 20px 42px rgba(34, 217, 255, 0.18),
+          0 0 0 1px rgba(255, 255, 255, 0.12);
+      }
+
+      .name {
+        font-size: 34px;
+        font-weight: 850;
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      .name span {
+        color: var(--cyan);
+      }
+
+      .sub {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 19px;
+        font-weight: 650;
+        line-height: 1.35;
+      }
+
+      .mini {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 28px;
+      }
+
+      .mini-card {
+        min-height: 88px;
+        border-radius: 18px;
+        padding: 14px;
+        border: 1px solid rgba(237, 242, 255, 0.11);
+        background:
+          linear-gradient(150deg, rgba(139, 111, 255, 0.16), transparent 56%),
+          rgba(255, 255, 255, 0.045);
+      }
+
+      .mini-label {
+        color: rgba(237, 242, 255, 0.52);
+        font-size: 12px;
+        font-weight: 850;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+
+      .mini-value {
+        margin-top: 8px;
+        color: #fff;
+        font-size: 25px;
+        font-weight: 850;
+      }
+
+      .status {
+        position: absolute;
+        left: 112px;
+        bottom: 96px;
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 13px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(46, 255, 168, 0.28);
+        background: rgba(46, 255, 168, 0.10);
+        color: var(--green);
+        font-size: 19px;
+        font-weight: 850;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      }
+
+      .pulse {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 18px var(--green);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="ambient"></div>
+    <div class="grid"></div>
+    <main class="stage">
+      <div class="halo"></div>
+      <section class="browser" aria-label="Screen Time Manager dashboard preview">
+        <div class="browser-top">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="bar"></span>
+        </div>
+        <div class="shot-wrap">
+          <img class="shot" src="../assets/extension-dashboard-render.png" alt="" />
+          <div class="fade"></div>
+        </div>
+      </section>
+      <aside class="brand">
+        <div class="logo-row">
+          <img class="logo" src="../new_logo.png" alt="" />
+          <div>
+            <div class="name">Screen Time <span>Manager</span></div>
+            <div class="sub">Focus &amp; Limits Manager</div>
+          </div>
+        </div>
+        <div class="mini">
+          <div class="mini-card">
+            <div class="mini-label">Screen time</div>
+            <div class="mini-value">2h 18m</div>
+          </div>
+          <div class="mini-card">
+            <div class="mini-label">Active</div>
+            <div class="mini-value">2 blocks</div>
+          </div>
+        </div>
+      </aside>
+      <div class="status"><span class="pulse"></span>Focus mode active</div>
+    </main>
+  </body>
+</html>

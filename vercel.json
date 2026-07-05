@@ -1,4 +1,7 @@
 {
+  "installCommand": "cd reactbits-prototype && npm ci",
+  "buildCommand": "cd reactbits-prototype && npm run build",
+  "outputDirectory": "reactbits-prototype/dist",
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [
