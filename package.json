@@ -6,6 +6,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:playwright": "playwright test",
+    "export:ga4": "node tools/ga4-data-api-export.mjs",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy"
   },

@@ -2,6 +2,11 @@ const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 
+const WHOP_CHECKOUT_START_URL = 'https://screen-time-manager.jackster0627.workers.dev/whop/start';
+const WHOP_MANAGE_URL = 'https://whop.com/hub/memberships/';
+const CHROME_WEBSTORE_REVIEW_URL = 'https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo/reviews';
+const SURVEYMONKEY_FEEDBACK_URL = 'https://www.surveymonkey.com/r/QF2RJ58';
+
 function popupUrl() {
     return `file:///${path.join(process.cwd(), 'popup.html').replace(/\\/g, '/')}`;
 }
@@ -152,6 +157,7 @@ async function installPopupChromeMock(page, overrides = {}) {
                 }
             },
             snoozeHistory: {},
+            recentlyReset: {},
             snoozedDomains: {
                 'www.alpha.com': { expiresAt: Date.now() + 10 * 60 * 1000, minutes: 5 }
             },
@@ -183,9 +189,11 @@ async function installPopupChromeMock(page, overrides = {}) {
         };
         window.__popupData = data;
         window.__popupMessages = [];
+        window.__popupOpenedTabs = [];
         window.__popupFlushCount = 0;
         window.chrome = {
             runtime: {
+                id: 'mock-extension-id',
                 getURL: (value) => value,
                 sendMessage: async (message) => {
                     window.__popupMessages.push(message);
@@ -221,6 +229,16 @@ async function installPopupChromeMock(page, overrides = {}) {
                         const keys = Object.keys(data.blockedDomains).filter((key) => normalizeDomain(key) === normalized);
                         for (const key of keys) data.blockedDomains[key].enabled = message.enabled !== false;
                         if (!keys.length) return { success: false, error: 'Domain not found.' };
+                    }
+                    if (message?.action === 'toggleScheduledBlockEnabled') {
+                        const id = String(message.id || '');
+                        const enabled = message.enabled !== false;
+                        const index = (data.scheduledBlocks || []).findIndex((block) => block.id === id);
+                        if (index < 0) return { success: false, error: 'Schedule not found.' };
+                        data.scheduledBlocks[index] = { ...data.scheduledBlocks[index], enabled };
+                        if (!enabled) {
+                            data.activeBlocks = (data.activeBlocks || []).filter((block) => block.id !== id);
+                        }
                     }
                     if (message?.action === 'generateInsights') {
                         const now = Number(message.now || Date.now());
@@ -271,7 +289,13 @@ async function installPopupChromeMock(page, overrides = {}) {
                 },
                 onChanged: { addListener: (listener) => listeners.push(listener) }
             },
-            tabs: { create: async () => ({}) }
+            tabs: {
+                create: async (details) => {
+                    window.__popupOpenedTabs.push(clone(details));
+                    return { id: window.__popupOpenedTabs.length, ...details };
+                }
+            },
+            alarms: { clear: async () => true }
         };
     }, { today: dayKey(), overrides, insightsSource });
 }
@@ -300,6 +324,42 @@ test('popup live refresh keeps flushing and repainting visible stats', async ({ 
         .toBeGreaterThanOrEqual((20 * 60 * 1000) + 3000);
     await expect(page.locator('#statScreenTime')).toContainText('30m');
     await expect(page.locator('#statScreenTimeDelta')).not.toHaveText('Today');
+});
+
+test('popup live refresh updates total screen time chip across minute boundaries', async ({ page }) => {
+    await installPopupChromeMock(page, {
+        flushMutatesStats: true,
+        statsToday: {
+            'alpha.com': { timeMs: (29 * 60 * 1000) + 58000, visits: 4 },
+            'beta.com': { timeMs: 0, visits: 0 }
+        },
+        allStatsToday: {
+            'alpha.com': { timeMs: (29 * 60 * 1000) + 58000, visits: 4 },
+            'beta.com': { timeMs: 0, visits: 0 }
+        }
+    });
+
+    await page.goto(popupUrl());
+    await expect(page.locator('#statScreenTime')).toContainText('29m');
+
+    await expect.poll(() => page.evaluate(() => window.__popupData.statsToday['alpha.com']?.timeMs), { timeout: 3500 })
+        .toBeGreaterThanOrEqual(30 * 60 * 1000);
+    await expect(page.locator('#statScreenTime')).toContainText('30m');
+});
+
+test('popup snooze stat handles legacy per-domain history without NaN', async ({ page }) => {
+    await installPopupChromeMock(page, {
+        snoozeHistory: {
+            [dayKey()]: {
+                'alpha.com': 2,
+                'beta.com': 1
+            }
+        }
+    });
+
+    await page.goto(popupUrl());
+    await expect(page.locator('#statSnoozes')).toHaveText('3');
+    await expect(page.locator('#statSnoozes')).not.toHaveText('NaN');
 });
 
 test('selected hourly bar survives live refresh repaint', async ({ page }) => {
@@ -447,6 +507,116 @@ test('fresh install with no usage history does not show insights', async ({ page
     await expect(page.locator('#personalInsightsList')).toBeEmpty();
 });
 
+test('external upgrade and billing buttons open intended destinations', async ({ page }) => {
+    await installPopupChromeMock(page, {
+        blockedDomains: {
+            'alpha.com': { enabled: true, limitSeconds: 60, tier: 'standard' },
+            'beta.com': { enabled: true, limitSeconds: 60, tier: 'standard' },
+            'gamma.com': { enabled: true, limitSeconds: 60, tier: 'standard' }
+        },
+        scheduledBlocks: [{
+            id: 'schedule-alpha',
+            domain: 'alpha.com',
+            startTime: '09:00',
+            endTime: '17:00',
+            days: [1],
+            enabled: true,
+            tier: 'standard'
+        }]
+    });
+
+    await page.goto(popupUrl());
+    const expectedCheckoutUrl = `${WHOP_CHECKOUT_START_URL}?ext=mock-extension-id`;
+
+    await page.locator('#upgradeBtnHeader').click();
+    await page.locator('label[for="tab2"]').click();
+    await expect(page.locator('#limitsPaywallCard')).toBeVisible();
+    await page.locator('#upgradeBtnFromLimits').click();
+    await page.locator('label[for="tab3"]').click();
+    await expect(page.locator('#schedulePaywallCard')).toBeVisible();
+    await page.locator('#upgradeBtnFromSchedule').click();
+    await page.locator('label[for="tab4"]').click();
+    await page.locator('#upgradeBtnFromProfile').click();
+    await page.locator('#settingsCogBtn').click();
+    await expect(page.locator('#settingsOverlay')).toHaveClass(/is-visible/);
+    await page.locator('#upgradeBtnFromSettings').click();
+    await page.locator('#manageWhopBtn').click();
+
+    await expect.poll(() => page.evaluate(() => window.__popupOpenedTabs.map((tab) => tab.url))).toEqual([
+        expectedCheckoutUrl,
+        expectedCheckoutUrl,
+        expectedCheckoutUrl,
+        expectedCheckoutUrl,
+        expectedCheckoutUrl,
+        WHOP_MANAGE_URL
+    ]);
+});
+
+test('feedback and Chrome review buttons open intended destinations', async ({ page }) => {
+    await installPopupChromeMock(page);
+
+    await page.goto(popupUrl());
+    await page.evaluate(() => {
+        const toast = document.getElementById('reviewPromptToast');
+        toast.hidden = false;
+        toast.classList.add('is-visible');
+    });
+    await page.locator('#giveFeedbackToastBtn').click();
+
+    await page.evaluate(() => {
+        const toast = document.getElementById('reviewPromptToast');
+        toast.hidden = false;
+        toast.classList.add('is-visible');
+    });
+    await page.locator('#leaveReviewToastBtn').click();
+
+    await expect.poll(() => page.evaluate(() => window.__popupOpenedTabs.map((tab) => tab.url))).toEqual([
+        SURVEYMONKEY_FEEDBACK_URL,
+        CHROME_WEBSTORE_REVIEW_URL
+    ]);
+    await expect.poll(() => page.evaluate(() => Boolean(window.__popupData.reviewPromptState?.feedbackClickedAt))).toBe(true);
+    await expect.poll(() => page.evaluate(() => Boolean(window.__popupData.reviewPromptState?.reviewedAt))).toBe(true);
+});
+
+test('journey card can be collapsed without using experience mode settings', async ({ page }) => {
+    await installPopupChromeMock(page);
+
+    await page.goto(popupUrl());
+    await expect(page.locator('#experienceMode')).toHaveCount(0);
+    await expect(page.locator('#journeyCard')).not.toHaveClass(/is-collapsed/);
+    const expandedToggleBox = await page.locator('#journeyToggleBtn').boundingBox();
+
+    await page.locator('#journeyToggleBtn').click();
+
+    await expect(page.locator('#journeyCard')).toHaveClass(/is-collapsed/);
+    await expect(page.locator('#journeyToggleBtn')).toHaveText('');
+    await expect(page.locator('#journeyToggleBtn')).toHaveAttribute('aria-label', 'Show journey');
+    await expect(page.locator('#journeyCollapsedTitle')).toBeVisible();
+    await expect(page.locator('#journeyCollapsedTitle')).toHaveText('Journey');
+    const collapsedToggleBox = await page.locator('#journeyToggleBtn').boundingBox();
+    expect(collapsedToggleBox?.width).toBe(expandedToggleBox?.width);
+    expect(collapsedToggleBox?.height).toBe(expandedToggleBox?.height);
+    await expect.poll(() => page.evaluate(() => window.__popupData.uiSettings?.journeyCollapsed)).toBe(true);
+});
+
+test('journey percentage does not scroll when the displayed value is unchanged', async ({ page }) => {
+    await installPopupChromeMock(page);
+
+    await page.goto(popupUrl());
+    await expect(page.locator('#journeyProgressPct')).toHaveAttribute('aria-label', '0%');
+
+    await page.evaluate(() => {
+        window.animateJourneyPercent(12, true);
+    });
+    await expect(page.locator('#journeyProgressPct')).toHaveClass(/is-scrolling/);
+
+    await page.evaluate(() => {
+        window.animateJourneyPercent(12, true);
+    });
+    await expect(page.locator('#journeyProgressPct')).not.toHaveClass(/is-scrolling/);
+    await expect(page.locator('#journeyProgressPct')).toHaveAttribute('aria-label', '12%');
+});
+
 test('mock insight data populates real insights and insight Add Limit saves a limit', async ({ page }) => {
     await installPopupChromeMock(page, insightMockUsageData());
 
@@ -499,14 +669,157 @@ test('limit list switches and remove buttons work from visible controls', async 
 
     const alphaRow = page.locator('#limitList .row-limit').filter({ hasText: 'alpha.com' });
     await expect(alphaRow.locator('[data-action="toggle-domain"]')).not.toBeDisabled();
-    await expect(alphaRow.locator('[data-action="remove-domain"]')).not.toBeDisabled();
+    await expect(alphaRow.locator('[data-action="remove-domain"]')).toBeDisabled();
 
     await alphaRow.locator('.switch-slider').click();
     await expect.poll(() => page.evaluate(() => window.__popupData.blockedDomains['alpha.com']?.enabled)).toBe(false);
+    await expect(alphaRow.locator('[data-action="remove-domain"]')).not.toBeDisabled();
 
     const betaRow = page.locator('#limitList .row-limit').filter({ hasText: 'beta.com' });
     await betaRow.locator('[data-action="remove-domain"]').click();
     await expect.poll(() => page.evaluate(() => window.__popupData.blockedDomains['beta.com'])).toBeUndefined();
+});
+
+test('visible Limits tab usage keeps ticking for the active limited site', async ({ page }) => {
+    await installPopupChromeMock(page, {
+        flushMutatesStats: true,
+        blockedDomains: {
+            'alpha.com': { enabled: true, limitSeconds: 3600, tier: 'standard' }
+        },
+        statsToday: {
+            'alpha.com': { timeMs: 59 * 1000, visits: 1 }
+        },
+        allStatsToday: {
+            'alpha.com': { timeMs: 59 * 1000, visits: 1 }
+        },
+        snoozedDomains: {}
+    });
+
+    await page.goto(popupUrl());
+    await page.locator('label[for="tab2"]').click();
+    const alphaRow = page.locator('#limitList .row-limit').filter({ hasText: 'alpha.com' });
+    await alphaRow.evaluate((row) => {
+        row.dataset.renderIdentity = 'alpha-row';
+    });
+    const chip = alphaRow.locator('.limit-used-chip');
+    const initialChipText = await chip.textContent();
+    expect(initialChipText).toContain('Today');
+
+    await expect.poll(() => page.evaluate(() => window.__popupData.statsToday['alpha.com']?.timeMs), { timeout: 3500 })
+        .toBeGreaterThanOrEqual(62 * 1000);
+    await expect.poll(async () => chip.textContent(), { timeout: 3500 }).not.toBe(initialChipText);
+    await expect(chip).toContainText('Today 1m');
+    await expect(alphaRow).toHaveAttribute('data-render-identity', 'alpha-row');
+});
+
+test('reset limit usage clears dashboard reached state and Limits today usage', async ({ page }) => {
+    await installPopupChromeMock(page, {
+        blockedDomains: {
+            'alpha.com': { enabled: true, limitSeconds: 60, tier: 'standard' }
+        },
+        statsToday: {
+            'www.alpha.com': { timeMs: 90 * 1000, visits: 3 }
+        },
+        allStatsToday: {
+            'www.alpha.com': { timeMs: 90 * 1000, visits: 3 }
+        },
+        snoozedDomains: {},
+        recentlyReset: {}
+    });
+
+    await page.goto(popupUrl());
+    await expect(page.locator('#activeList')).toContainText('Daily limit reached');
+    await page.locator('label[for="tab2"]').click();
+
+    const alphaRow = page.locator('#limitList .row-limit').filter({ hasText: 'alpha.com' });
+    await expect(alphaRow).toContainText('Today 1m 30s');
+    await expect(alphaRow.locator('[data-action="remove-domain"]')).toBeDisabled();
+
+    await page.evaluate(() => {
+        chrome.storage.local.set({
+            statsToday: {},
+            allStatsToday: {},
+            recentlyReset: { 'alpha.com': Date.now() }
+        });
+    });
+
+    await expect(alphaRow).toContainText('Today 0s');
+    await expect(alphaRow.locator('[data-action="remove-domain"]')).not.toBeDisabled();
+    await page.locator('label[for="tab1"]').click();
+    await expect(page.locator('#activeList')).not.toContainText('Daily limit reached');
+});
+
+test('limit form rejects daily limits above one day', async ({ page }) => {
+    await installPopupChromeMock(page);
+
+    await page.goto(popupUrl());
+    await page.locator('label[for="tab2"]').click();
+    await page.locator('#domainInput').fill('https://www.example.com/watch?v=1');
+    await page.locator('#limitInput').fill('1441');
+    await page.locator('#addForm button[type="submit"]').click();
+
+    await expect(page.locator('#addFormMsg')).toContainText('Enter a daily limit from 1 to 1440 minutes.');
+    await expect.poll(() => page.evaluate(() => window.__popupData.blockedDomains['example.com'])).toBeUndefined();
+    await expect(page.locator('#limitList')).not.toContainText('example.com');
+});
+
+test('schedule form rejects invalid time input before saving', async ({ page }) => {
+    await installPopupChromeMock(page);
+
+    await page.goto(popupUrl());
+    await page.locator('label[for="tab3"]').click();
+    await page.locator('#scheduledDomain').fill('reddit.com');
+    await page.locator('#startTime').fill('tomorrow');
+    await page.locator('#endTime').fill('banana');
+    await page.locator('#scheduledDays .day-bubble').first().click();
+    await page.locator('#scheduledSubmitBtn').click();
+
+    await expect(page.locator('#scheduledFormMsg')).toContainText('Enter valid start and end times.');
+    await expect.poll(() => page.evaluate(() => (
+        window.__popupMessages.some((message) => message.action === 'addScheduledBlock')
+    ))).toBe(false);
+});
+
+test('active scheduled sessions become cancellable after pausing', async ({ page }) => {
+    const schedule = {
+        id: 'schedule-youtube',
+        domain: 'youtube.com',
+        startTime: '00:00',
+        endTime: '23:59',
+        days: [0, 1, 2, 3, 4, 5, 6],
+        enabled: true,
+        tier: 'standard'
+    };
+
+    await installPopupChromeMock(page, {
+        scheduledBlocks: [schedule],
+        activeBlocks: [{ ...schedule, startedAt: Date.now(), breakMs: 0 }]
+    });
+
+    await page.goto(popupUrl());
+    await page.locator('label[for="tab3"]').click();
+
+    const scheduleRow = page.locator('#scheduledList .row').filter({ hasText: 'youtube.com' });
+    await expect(scheduleRow.locator('[data-action="remove-schedule"]')).toBeDisabled();
+
+    await scheduleRow.locator('.switch-slider').click();
+    await expect.poll(() => page.evaluate(() => window.__popupData.scheduledBlocks[0]?.enabled)).toBe(false);
+    await expect.poll(() => page.evaluate(() => window.__popupData.activeBlocks.length)).toBe(0);
+    await expect(scheduleRow.locator('[data-action="remove-schedule"]')).not.toBeDisabled();
+
+    await scheduleRow.locator('[data-action="remove-schedule"]').click();
+    await expect.poll(() => page.evaluate(() => window.__popupData.scheduledBlocks.length)).toBe(0);
+});
+
+test('schedule form starts with no days selected', async ({ page }) => {
+    await installPopupChromeMock(page);
+
+    await page.goto(popupUrl());
+    await page.locator('label[for="tab3"]').click();
+
+    await expect(page.locator('#scheduledDays .day-bubble.is-selected')).toHaveCount(0);
+    await page.locator('#scheduledDays .day-bubble').first().click();
+    await expect(page.locator('#scheduledDays .day-bubble.is-selected')).toHaveCount(1);
 });
 
 test('paused legacy www limit keys still allow end pause, toggle, and remove', async ({ page }) => {

@@ -19,43 +19,47 @@
 }
 
 * { box-sizing:border-box; }
-html,body { height:100%; margin:0; }
+html,body {
+    min-height: 100%;
+    margin: 0;
+}
 
 body {
+    min-height: 100vh;
     font-family: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
     color: var(--text);
     background:
-        radial-gradient(ellipse 1100px 700px at 10% -8%, rgba(212,106,68,.22), transparent 60%),
-        radial-gradient(ellipse 1000px 700px at 95% 18%, rgba(143,210,216,.14), transparent 62%),
-        radial-gradient(ellipse 900px 650px at 48% 110%, rgba(255,177,138,.08), transparent 60%),
-        linear-gradient(180deg, var(--bg), var(--bg1));
-    overflow: hidden;
+        linear-gradient(118deg, rgba(212,106,68,.16) 0%, rgba(212,106,68,.055) 34%, transparent 58%),
+        linear-gradient(242deg, rgba(143,210,216,.09) 0%, rgba(143,210,216,.035) 28%, transparent 52%),
+        linear-gradient(180deg, #19110f 0%, #100807 48%, #1a100d 100%);
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 .bg {
     position: fixed;
-    inset: -30px;
+    inset: 0;
     background:
-        radial-gradient(900px 600px at 20% 20%, rgba(212,106,68,.13), transparent 60%),
-        radial-gradient(800px 600px at 80% 25%, rgba(143,210,216,.10), transparent 60%),
-        radial-gradient(900px 700px at 50% 110%, rgba(255,177,138,.08), transparent 55%);
-    filter: blur(12px);
+        linear-gradient(90deg, rgba(247,231,214,.035) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(247,231,214,.024) 1px, transparent 1px),
+        linear-gradient(135deg, rgba(247,231,214,.055) 0%, transparent 28%, rgba(18,10,8,.18) 72%, rgba(18,10,8,.38) 100%);
+    background-size: 72px 72px, 72px 72px, auto;
+    opacity: .42;
     z-index: -1;
 }
 
 .wrap {
-    height: 100%;
+    min-height: 100vh;
     display: grid;
     place-items: center;
-    padding: 22px;
+    padding: clamp(18px, 6vh, 56px) 16px;
 }
 
 .card {
     position: relative;
-    width: min(560px, 100%);
-    max-height: calc(100vh - 44px);
-    overflow: auto;
-    padding: 14px;
+    width: min(560px, calc(100vw - 32px));
+    overflow: hidden;
+    padding: clamp(16px, 3vw, 24px);
     border-radius: var(--r-card);
     border: 0;
     background:
@@ -67,61 +71,35 @@ body {
     box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.035), var(--shadow);
 }
 
-.card::after {
-    content: "";
-    position: absolute;
-    right: -30px;
-    bottom: -24px;
-    width: 190px;
-    height: 62px;
-    border: 1px solid rgba(255,177,138,.20);
-    border-radius: 50%;
-    transform: rotate(-14deg);
-    pointer-events: none;
-}
-
 .blocked-brand {
-    position: relative;
+    position: absolute;
+    top: clamp(16px, 3vw, 24px);
+    right: clamp(16px, 3vw, 24px);
     z-index: 1;
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
 }
 
 .blocked-brand img {
-    width: 42px;
-    height: 42px;
+    width: 46px;
+    height: 46px;
     object-fit: contain;
     filter: drop-shadow(0 10px 16px rgba(0,0,0,.28));
 }
 
-.blocked-brand span {
-    color: #FFF6EA;
-    font-size: 20px;
-    font-weight: 900;
-    line-height: 1;
-}
-
 .badge {
-    position: relative;
-    z-index: 1;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 11px;
-    padding: 5px 10px;
-    border-radius: var(--r-pill);
-    border: 1px solid rgba(255,177,138,.30);
-    background: rgba(212,106,68,.14);
-    color: rgba(255,248,238,.95);
-    font-weight: 800;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
 }
 
 h1 {
     position: relative;
     z-index: 1;
-    margin: 10px 0 5px;
+    margin: 0 62px 5px 0;
     font-size: 26px;
     letter-spacing: 0;
     color: #FFF8EE;
@@ -134,17 +112,18 @@ h1 {
     color: var(--muted);
     font-size: 14px;
     line-height: 1.5;
+    overflow-wrap: anywhere;
 }
 
 .domain {
-    display: inline-block;
+    display: inline;
     margin-left: 6px;
-    padding: 2px 10px;
-    border-radius: var(--r-pill);
-    border: 1px solid rgba(255,177,138,.34);
-    background: rgba(212,106,68,.16);
-    color: rgba(255,248,238,.95);
-    font-weight: 800;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #FFF8EE;
+    font-weight: 900;
+    overflow-wrap: anywhere;
 }
 
 .actions {
@@ -301,4 +280,25 @@ h1 {
     background: linear-gradient(135deg, rgba(255,177,138,.90), rgba(255,106,76,.82));
     box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 0 18px rgba(255,177,138,.25), 0 10px 22px rgba(0,0,0,.30);
     transform: scale(1.02);
+}
+
+@media (max-width: 480px) {
+    .actions {
+        flex-direction: column;
+    }
+
+    .btn {
+        flex-basis: auto;
+        width: 100%;
+    }
+
+    .blocked-brand img {
+        width: 36px;
+        height: 36px;
+    }
+
+    h1 {
+        font-size: 24px;
+        margin-right: 52px;
+    }
 }

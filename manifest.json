@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Saturn - Screen Time Manager",
-    "version": "2.2.11",
+    "version": "3.2.13",
     "description": "Reclaim time from distracting sites, track your focus journey, and stay on course with daily limits and scheduled blocks.",
     "icons": {
         "16": "assets/planets/saturn-app-icon-16.png",
@@ -34,7 +34,6 @@
                 "blocked.html",
                 "blocked.js",
                 "blocked.css",
-                "assets/icons/icon.png",
                 "assets/planets/earth.png",
                 "assets/planets/moon.png",
                 "assets/planets/mars.png",

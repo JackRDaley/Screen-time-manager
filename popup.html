@@ -155,7 +155,9 @@
                 </div>
             </div>
 
-            <div class="card journey-card" id="journeyCard">
+            <div class="card journey-card card-analytics card-dominant" id="journeyCard">
+                <button class="journey-toggle-btn" id="journeyToggleBtn" type="button" aria-label="Hide journey" aria-expanded="true" aria-controls="journeyRouteTrack" title="Hide journey"></button>
+                <div class="journey-collapsed-title" id="journeyCollapsedTitle" hidden>Journey</div>
                 <div class="journey-stop journey-stop-current">
                     <img class="journey-stop-planet planet-earth" id="journeyPlanet" src="assets/planets/earth.png" alt="" aria-hidden="true" />
                     <div class="journey-stop-threshold" id="journeyCurrentThreshold">0h</div>
@@ -180,7 +182,7 @@
                 </div>
             </div>
 
-            <div class="card dashboard-card-hidden" id="personalInsightsCard" hidden>
+            <div class="card card-analytics card-secondary dashboard-card-hidden" id="personalInsightsCard" hidden>
                 <div class="card-head">
                     <div class="card-title card-title-with-icon">
                         <img class="card-title-icon" src="assets/stars.png" alt="" />
@@ -191,21 +193,21 @@
                 <div id="personalInsightsList" class="list"></div>
             </div>
 
-            <div class="card" id="activeCard" data-hide-if-empty="true">
+            <div class="card card-output card-secondary" id="activeCard" data-hide-if-empty="true">
                 <div class="card-head">
                     <div class="card-title">Active Blocks</div>
                 </div>
                 <div id="activeList" class="list muted">No active blocks.</div>
             </div>
 
-            <div class="card" id="rankingCard">
+            <div class="card card-analytics card-secondary" id="rankingCard">
                 <div class="card-head">
                     <div class="card-title">Time Spent</div>
                 </div>
                 <div id="ranking" class="list muted">No data yet.</div>
             </div>
 
-            <div class="card" id="rankingByVisitsCard">
+            <div class="card card-analytics card-secondary" id="rankingByVisitsCard">
                 <div class="card-head">
                     <div class="card-title">Most Visited</div>
                 </div>
@@ -213,7 +215,7 @@
             </div>
 
             <div class="usage-row">
-                <div class="card" id="usageCard">
+                <div class="card card-analytics card-secondary" id="usageCard">
                     <div class="card-head">
                         <div class="card-title" id="usageCardTitle">Hourly Usage</div>
                     </div>
@@ -222,7 +224,7 @@
                     </div>
                 </div>
 
-                <div class="card" id="usageCardInfo">
+                <div class="card card-output card-secondary" id="usageCardInfo">
                     <div class="card-head">
                         <div class="card-title">Usage info</div>
                     </div>
@@ -236,7 +238,7 @@
 
         <!-- ── Limits ─────────────────────────────────── -->
         <div class="panel panel-limits" id="p2">
-            <div class="card" id="limitsPaywallCard" style="display:none">
+            <div class="card card-output card-secondary" id="limitsPaywallCard" style="display:none">
                 <div class="card-head">
                     <div class="card-title">Premium Required</div>
                 </div>
@@ -246,7 +248,14 @@
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card card-output card-secondary" id="limitListCard">
+                <div class="card-head">
+                    <div class="card-title">Limit List</div>
+                </div>
+                <div id="limitList" class="list muted">No limits set yet.</div>
+            </div>
+
+            <div class="card card-input card-dominant">
                 <div class="card-head">
                     <div class="card-title">Add Limit</div>
                 </div>
@@ -270,14 +279,7 @@
                 </div>
             </div>
 
-            <div class="card" id="limitListCard">
-                <div class="card-head">
-                    <div class="card-title">Limit List</div>
-                </div>
-                <div id="limitList" class="list muted">No limits set yet.</div>
-            </div>
-
-            <div class="card" id="presetCard">
+            <div class="card card-analytics card-secondary" id="presetCard">
                 <div class="card-head">
                     <div class="card-title">Limit Presets</div>
                 </div>
@@ -288,7 +290,7 @@
 
         <!-- ── Schedule ───────────────────────────────── -->
         <div class="panel panel-schedule" id="p3">
-            <div class="card" id="schedulePaywallCard" style="display:none">
+            <div class="card card-output card-secondary" id="schedulePaywallCard" style="display:none">
                 <div class="card-head">
                     <div class="card-title">Premium Required</div>
                 </div>
@@ -298,7 +300,14 @@
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card card-output card-secondary" id="scheduledListCard">
+                <div class="card-head">
+                    <div class="card-title">Scheduled Sessions</div>
+                </div>
+                <div id="scheduledList" class="list muted">No scheduled sessions.</div>
+            </div>
+
+            <div class="card card-input card-dominant">
                 <div class="card-head">
                     <div class="card-title">New Scheduled Block</div>
                 </div>
@@ -341,14 +350,7 @@
                 </div>
             </div>
 
-            <div class="card" id="scheduledListCard">
-                <div class="card-head">
-                    <div class="card-title">Scheduled Sessions</div>
-                </div>
-                <div id="scheduledList" class="list muted">No scheduled sessions.</div>
-            </div>
-
-            <div class="card" id="schedulePresetCard">
+            <div class="card card-analytics card-secondary" id="schedulePresetCard">
                 <div class="card-head">
                     <div class="card-title">Schedule Presets</div>
                 </div>
@@ -575,17 +577,6 @@
                                         <option value="low">Low</option>
                                         <option value="normal">Normal</option>
                                         <option value="high">High</option>
-                                    </select>
-                                </div>
-
-                                <div class="settings-row settings-row-stacked">
-                                    <div>
-                                        <label class="settings-label" for="experienceMode">Experience Mode</label>
-                                        <div class="settings-help">Saturn Mode adds subtle progress visuals. Classic Mode keeps a simple productivity dashboard.</div>
-                                    </div>
-                                    <select id="experienceMode" class="input settings-select">
-                                        <option value="saturn">Saturn Mode</option>
-                                        <option value="classic">Classic Mode</option>
                                     </select>
                                 </div>
 

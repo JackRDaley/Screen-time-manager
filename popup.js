@@ -32,6 +32,7 @@ const REVIEW_PROMPT_MIN_DASHBOARD_OPENS = 4;
 const REVIEW_PROMPT_MIN_RECLAIM_MS = 20 * 60 * 1000;
 const LIVE_REFRESH_INTERVAL_MS = 1000;
 const LIVE_REFRESH_MOTION_SUPPRESSION_MS = 120;
+const MAX_DAILY_LIMIT_MINUTES = 1440;
 const LIVE_REFRESH_TARGET_IDS = Object.freeze([
     "ranking",
     "rankingByVisits"
@@ -75,7 +76,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     insightNotificationsEnabled: true,
     insightMaxNotificationsPerDay: 1,
     insightSensitivity: "normal",
-    experienceMode: "saturn"
+    journeyCollapsed: false
 });
 
 const DEFAULT_PREMIUM = Object.freeze({
@@ -166,7 +167,7 @@ const state = {
     premium: { ...DEFAULT_PREMIUM },
     onboarding: { step: 0, completed: false, completedAt: null, version: ONBOARDING_VERSION },
     immutableOverride: { available: false },
-    selectedDays: [0, 1, 2, 3, 4, 5, 6],
+    selectedDays: [],
     selectedHourlyHour: null,
     selectedInsightIndex: 0,
     editingScheduleId: null,
@@ -198,6 +199,24 @@ function isValidDomain(domain) {
     if (!value || value.length > 255 || value.includes("..")) return false;
     if (!/^[a-z0-9.-]+$/.test(value)) return false;
     return value.split(".").every((part) => part && !part.startsWith("-") && !part.endsWith("-"));
+}
+
+function parseScheduleTimeInput(value) {
+    const match = String(value || "").trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (!match) return null;
+
+    let hour = Number(match[1]);
+    const minute = Number(match[2] || 0);
+    const meridian = match[3]?.toLowerCase();
+    if (minute < 0 || minute > 59 || hour < 0 || hour > 23) return null;
+    if (meridian === "pm" && hour < 12) hour += 12;
+    if (meridian === "am" && hour === 12) hour = 0;
+
+    return { hour, minute };
+}
+
+function isValidScheduleTimeInput(value) {
+    return Boolean(parseScheduleTimeInput(value));
 }
 
 function send(action, payload = {}) {
@@ -423,13 +442,19 @@ function deleteSnoozeEntriesForDomain(snoozedDomains = {}, domain) {
     deleteEntriesForDomain(snoozedDomains, domain);
 }
 
-function isLimitCurrentlyBlocking(domain, cfg, statsToday = {}, snoozedDomains = {}) {
+function wasRecentlyReset(domain, recentlyReset = {}, now = Date.now()) {
+    const ts = Number(entryForDomain(recentlyReset, domain) || 0);
+    return Number.isFinite(ts) && ts > 0 && now - ts < 5000;
+}
+
+function isLimitCurrentlyBlocking(domain, cfg, statsToday = {}, snoozedDomains = {}, recentlyReset = {}) {
     const limit = limitConfig(cfg);
     if (!limit.enabled || !limit.limitSeconds) return false;
+    if (wasRecentlyReset(domain, recentlyReset)) return false;
     const snooze = entryForDomain(snoozedDomains, domain);
     const snoozeExpiresAt = Number(snooze?.expiresAt || snooze || 0);
     if (snoozeExpiresAt > Date.now()) return false;
-    return timeMs(statsToday?.[domain]) >= limit.limitSeconds * 1000;
+    return timeMs(entryForDomain(statsToday, domain) || statsToday?.[domain]) >= limit.limitSeconds * 1000;
 }
 
 function escapeHtml(value) {
@@ -490,9 +515,22 @@ function previousOffsets(offsets = []) {
     return offsets.map((offset) => offset + periodLength);
 }
 
+function snoozeHistoryCount(value) {
+    const direct = Number(value || 0);
+    if (Number.isFinite(direct)) return Math.max(0, direct);
+    if (!value || typeof value !== "object") return 0;
+
+    return Object.values(value).reduce((sum, entry) => {
+        const count = typeof entry === "object"
+            ? Number(entry?.count ?? entry?.snoozes ?? 0)
+            : Number(entry || 0);
+        return sum + (Number.isFinite(count) ? Math.max(0, count) : 0);
+    }, 0);
+}
+
 function snoozesForOffsets(offsets = []) {
     const history = state.data.snoozeHistory || {};
-    return offsets.reduce((sum, offset) => sum + Number(history[dayKeyOffset(offset)] || 0), 0);
+    return offsets.reduce((sum, offset) => sum + snoozeHistoryCount(history[dayKeyOffset(offset)]), 0);
 }
 
 function emptyReclaimSummary() {
@@ -663,7 +701,10 @@ function animateJourneyPercent(progress, animate = false) {
     el.setAttribute("aria-label", nextText);
 
     if (!animate || safePreviousValue === nextValue) {
-        el.innerHTML = odometerPercentHtml(nextValue, nextValue);
+        el.classList.remove("is-scrolling");
+        if (safePreviousValue !== nextValue || !el.querySelector(".journey-percent-odometer")) {
+            el.innerHTML = odometerPercentHtml(nextValue, nextValue);
+        }
         return;
     }
 
@@ -773,6 +814,17 @@ function renderJourney(reclaimSummary = { count: 0, estimatedMs: 0 }) {
     const card = $("journeyCard");
     if (!card) return;
 
+    const collapsed = Boolean(state.settings.journeyCollapsed);
+    card.classList.toggle("is-collapsed", collapsed);
+    const toggle = $("journeyToggleBtn");
+    if (toggle) {
+        toggle.setAttribute("aria-label", collapsed ? "Show journey" : "Hide journey");
+        toggle.title = collapsed ? "Show journey" : "Hide journey";
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+    }
+    const collapsedTitle = $("journeyCollapsedTitle");
+    if (collapsedTitle) collapsedTitle.hidden = !collapsed;
+
     const visual = state.journeyVisual || { summary: reclaimSummary };
     if (journeyAnimationCleanupTimer && !visual.shouldAnimate) return;
 
@@ -840,7 +892,6 @@ function renderJourney(reclaimSummary = { count: 0, estimatedMs: 0 }) {
 function renderProfile() {
     const reclaim = reclaimStatsForHistory();
     const journey = journeyForTime(reclaim.estimatedMs);
-    const classicMode = state.settings.experienceMode === "classic";
     const limitBlocks = sourceCount(reclaim, "limit");
     const scheduledBlocks = sourceCount(reclaim, "scheduled");
     const topSource = limitBlocks || scheduledBlocks
@@ -851,8 +902,8 @@ function renderProfile() {
 
     setText("profileTotalReclaimed", formatShortTime(reclaim.estimatedMs));
     setText("profileBlockedCount", reclaim.count.toLocaleString());
-    setText("profileCurrentLocation", classicMode ? formatDayCount(daysUnderLimits(offsetsForRange("This week"))) : journey.current.label);
-    setText("profileNextDestination", classicMode ? formatShortTime(reclaimStatsForOffsets(offsetsForRange("This week")).estimatedMs) : (journey.next ? journey.next.label : "Complete"));
+    setText("profileCurrentLocation", journey.current.label);
+    setText("profileNextDestination", journey.next ? journey.next.label : "Complete");
     setText("profileTopSource", topSource);
     setText("profileJourneySummary", `${formatDistanceKm(journey.current.distanceKm)} traveled`);
     setText("profileSourceTotal", formatBlockCount(reclaim.count));
@@ -1073,14 +1124,11 @@ function renderBenefitCards(currentOffsets) {
     const rangeReclaim = reclaimStatsForOffsets(currentOffsets);
     const underLimitDays = daysUnderLimits(currentOffsets);
     const underLimitStreak = consecutiveDaysUnderLimits();
-    const saturnMode = state.settings.experienceMode !== "classic";
 
     setAllAnimatedText('[data-benefit-value="saved-week"]', formatShortTime(weekReclaim.estimatedMs));
     setAllText(
         '[data-benefit-copy="saved-week"]',
-        saturnMode
-            ? `${formatShortTime(rangeReclaim.estimatedMs)} reclaimed on this route.`
-            : "Time you kept for other things."
+        `${formatShortTime(rangeReclaim.estimatedMs)} reclaimed on this route.`
     );
     setAllAnimatedText('[data-benefit-value="avoided-visits"]', String(rangeReclaim.count));
     setAllText('[data-benefit-copy="avoided-visits"]', rangeReclaim.count === 1 ? "Distracting visit avoided." : "Distracting visits avoided.");
@@ -1115,7 +1163,9 @@ function presetApplyMessage(preset, result) {
     return parts.join(" ");
 }
 
-function renderStats() {
+function renderStats(options = {}) {
+    const animateValues = options.animateValues !== false;
+    const setStatText = animateValues ? setAnimatedText : setText;
     const range = $("statRange")?.value || "Today";
     const currentOffsets = offsetsForRange(range);
     const previousPeriodOffsets = previousOffsets(currentOffsets);
@@ -1127,15 +1177,13 @@ function renderStats() {
     const snoozes = snoozesForOffsets(currentOffsets);
     const previousSnoozes = snoozesForOffsets(previousPeriodOffsets);
 
-    setAnimatedText("statScreenTime", formatShortTime(currentTotals.timeMs));
-    setAnimatedText("statVisits", String(currentTotals.visits));
-    setAnimatedText("statSnoozes", String(snoozes));
+    setStatText("statScreenTime", formatShortTime(currentTotals.timeMs));
+    setStatText("statVisits", String(currentTotals.visits));
+    setStatText("statSnoozes", String(snoozes));
     setText("statScreenTimeDelta", formatPercentDelta(currentTotals.timeMs, previousTotals.timeMs));
     setText("statVisitsDelta", formatPercentDelta(currentTotals.visits, previousTotals.visits));
     setText("statSnoozesDelta", formatPercentDelta(snoozes, previousSnoozes));
-    if (state.settings.experienceMode !== "classic") {
-        renderJourney(reclaim);
-    }
+    renderJourney(reclaim);
 }
 
 function renderActive() {
@@ -1156,13 +1204,15 @@ function renderActive() {
 
     const activeDomains = new Set(activeBlocks.map((block) => normalizeDomain(block.domain)));
     const limitRows = Object.entries(blockedDomains)
-        .filter(([domain, cfg]) => !activeDomains.has(normalizeDomain(domain)) && isLimitCurrentlyBlocking(domain, cfg, statsToday, state.data.snoozedDomains))
+        .filter(([domain, cfg]) => !activeDomains.has(normalizeDomain(domain)) && isLimitCurrentlyBlocking(domain, cfg, statsToday, state.data.snoozedDomains, state.data.recentlyReset))
         .map(([domain, cfg]) => ({ domain, cfg }));
 
     const activeRows = activeBlocks.map((block) => {
-        const endMs = Number(block.endTime || block.endsAt || 0);
+        const endMs = Number(block.endsAt || block.endAt || 0);
         const remainingSec = endMs > Date.now() ? Math.floor((endMs - Date.now()) / 1000) : 0;
-        const endsText = endMs ? new Date(endMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : formatTimeForDisplay(block.endTime);
+        const endsText = endMs && Number.isFinite(endMs)
+            ? new Date(endMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : formatTimeForDisplay(block.endTime);
 
         return `
             <div class="row row-accent-cyan" data-domain="${escapeHtml(block.domain)}">
@@ -2132,9 +2182,10 @@ function renderLimitsStyled() {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([domain, raw]) => {
             const config = limitConfig(raw);
-            const usedSec = Math.round(timeMs(stats[domain]) / 1000);
-            const displaySec = config.limitSeconds ? Math.min(usedSec, config.limitSeconds) : usedSec;
-            const pct = config.limitSeconds ? Math.min(100, Math.round((displaySec / config.limitSeconds) * 100)) : 0;
+            const statEntry = entryForDomain(stats, domain) || stats[domain];
+            const usedSec = Math.round(timeMs(statEntry) / 1000);
+            const pct = config.limitSeconds ? Math.min(100, Math.round((usedSec / config.limitSeconds) * 100)) : 0;
+            const isActive = isLimitCurrentlyBlocking(domain, config, stats, state.data.snoozedDomains, state.data.recentlyReset);
             const accent = !config.enabled
                 ? "row-accent-muted"
                 : (pct >= 100 ? "row-accent-red" : (pct >= 85 ? "row-accent-purple" : "row-accent-cyan"));
@@ -2147,8 +2198,8 @@ function renderLimitsStyled() {
                             <div class="row-metrics">
                                 <span class="tag metric-chip metric-chip-glass">${formatTierLabel(config.tier)}</span>
                                 <span class="tag metric-chip metric-chip-glass">Limit ${config.limitSeconds ? `${Math.round(config.limitSeconds / 60)} min` : "--"}</span>
-                                <span class="tag metric-chip metric-chip-glass">Today ${formatTimeSec(displaySec)}</span>
-                                <span class="tag metric-chip metric-chip-glass">${visits(stats[domain])} visits</span>
+                                <span class="tag metric-chip metric-chip-glass limit-used-chip" data-domain="${escapeHtml(domain)}">Today ${formatTimeSec(usedSec)}</span>
+                                <span class="tag metric-chip metric-chip-glass">${visits(statEntry)} visits</span>
                             </div>
                         </div>
                         <div class="row-right">
@@ -2156,7 +2207,7 @@ function renderLimitsStyled() {
                                 <input class="switch-input" type="checkbox" data-action="toggle-domain" data-domain="${escapeHtml(domain)}" ${config.enabled ? "checked" : ""} aria-label="Toggle ${escapeHtml(domain)} limit" />
                                 <span class="switch-slider" aria-hidden="true"></span>
                             </label>
-                            ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}"`)}
+                            ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}" ${isActive ? "disabled" : ""}`)}
                         </div>
                     </div>
                     ${config.limitSeconds ? `<div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>` : ""}
@@ -2167,6 +2218,16 @@ function renderLimitsStyled() {
 
     renderList("limitList", rows, "No limits set yet.");
     renderPaywalls();
+}
+
+function updateLimitUsageChipsInPlace() {
+    const stats = state.data.statsToday || {};
+    document.querySelectorAll("#limitList .limit-used-chip[data-domain]").forEach((chip) => {
+        const domain = chip.dataset.domain;
+        const statEntry = entryForDomain(stats, domain) || stats[domain];
+        const usedSec = Math.round(timeMs(statEntry) / 1000);
+        chip.textContent = `Today ${formatTimeSec(usedSec)}`;
+    });
 }
 
 function renderScheduleDays() {
@@ -2185,6 +2246,7 @@ function renderScheduleDays() {
             state.selectedDays = state.selectedDays.includes(day)
                 ? state.selectedDays.filter((value) => value !== day)
                 : [...state.selectedDays, day].sort((a, b) => a - b);
+            if (state.selectedDays.length) container.classList.remove("is-invalid");
             renderScheduleDays();
         });
     });
@@ -2194,8 +2256,8 @@ function renderSchedulesStyled() {
     const activeIds = new Set((state.data.activeBlocks || []).map((block) => block.id));
     const rows = (state.data.scheduledBlocks || []).map((block) => {
         const days = block.days || block.daysOfWeek || [];
-        const active = activeIds.has(block.id);
         const enabled = block.enabled !== false;
+        const active = enabled && activeIds.has(block.id);
         const accent = !enabled ? "row-accent-muted is-disabled" : (active ? "row-accent-purple" : "row-accent-cyan");
 
         return `
@@ -2243,19 +2305,6 @@ function renderPaywalls() {
 
     const profileUpgradeCard = $("profileUpgradeCard");
     if (profileUpgradeCard) profileUpgradeCard.hidden = isPremium;
-}
-
-function applyExperienceMode() {
-    const classicMode = state.settings.experienceMode === "classic";
-    document.body.classList.toggle("classic-mode", classicMode);
-    document.body.classList.toggle("saturn-mode", !classicMode);
-
-    const mode = $("experienceMode");
-    if (mode) mode.value = classicMode ? "classic" : "saturn";
-    const logoName = document.querySelector(".logo-name");
-    const logoSub = document.querySelector(".logo-sub");
-    if (logoName) logoName.textContent = classicMode ? "FOCUS" : "SATURN";
-    if (logoSub) logoSub.textContent = classicMode ? "Simple screen time controls." : "Your time. Your universe.";
 }
 
 function renderStreak() {
@@ -2309,7 +2358,6 @@ function renderSettings() {
     const insightNotifications = $("insightNotificationsEnabled");
     const maxNotifications = $("insightMaxNotificationsPerDay");
     const sensitivity = $("insightSensitivity");
-    const mode = $("experienceMode");
     if (defaultLimit) defaultLimit.value = state.settings.defaultLimitMinutes;
     if (use24Hour) use24Hour.checked = Boolean(state.settings.use24HourTime);
     if (limitNotifications) limitNotifications.checked = state.settings.limitNotificationsEnabled !== false;
@@ -2319,7 +2367,6 @@ function renderSettings() {
     if (sensitivity) sensitivity.value = ["low", "normal", "high"].includes(state.settings.insightSensitivity)
         ? state.settings.insightSensitivity
         : "normal";
-    if (mode) mode.value = state.settings.experienceMode === "classic" ? "classic" : "saturn";
     renderImmutableOverride();
 
     setText("premiumStatusMsg", state.premium.active
@@ -2355,7 +2402,6 @@ function renderAll(options = {}) {
     if (suppressRankingMotion) beginRankingMotionSuppression();
 
     try {
-        applyExperienceMode();
         renderStats();
         renderProfile();
         renderActive();
@@ -2377,7 +2423,11 @@ function renderAll(options = {}) {
 function renderLiveUsageOnly() {
     beginRankingMotionSuppression();
     try {
+        renderStats({ animateValues: false });
         updateRankingMetricsInPlace({ allowRerender: false });
+        if ($("tab2")?.checked) {
+            updateLimitUsageChipsInPlace();
+        }
     } finally {
         endRankingMotionSuppressionSoon();
     }
@@ -2399,6 +2449,7 @@ async function loadAll(options = {}) {
         DISMISSED_INSIGHTS_KEY,
         "snoozeHistory",
         "snoozedDomains",
+        "recentlyReset",
         "activeBlocks",
         "scheduledBlocks",
         SETTINGS_KEY,
@@ -2457,8 +2508,11 @@ async function addDomain(event) {
 async function saveLimitForDomain(domain, minutes, tier = "standard") {
     const normalized = normalizeDomain(domain);
     const numericMinutes = Number(minutes);
-    if (!isValidDomain(normalized) || !Number.isFinite(numericMinutes) || numericMinutes <= 0) {
-        return { success: false, error: "Enter a valid domain and limit." };
+    if (!isValidDomain(normalized)) {
+        return { success: false, error: "Enter a valid domain." };
+    }
+    if (!Number.isFinite(numericMinutes) || numericMinutes <= 0 || numericMinutes > MAX_DAILY_LIMIT_MINUTES) {
+        return { success: false, error: `Enter a daily limit from 1 to ${MAX_DAILY_LIMIT_MINUTES} minutes.` };
     }
 
     const data = await chrome.storage.local.get(["blockedDomains", "alertsSent"]);
@@ -2767,10 +2821,19 @@ function scheduleFromForm() {
 async function saveSchedule(event) {
     event.preventDefault();
     const block = scheduleFromForm();
+    const missingScheduleFields = !block.domain || !block.startTime || !block.endTime || !block.days.length;
+    $("scheduledDays")?.classList.toggle("is-invalid", !block.days.length);
 
-    if (!isValidDomain(block.domain) || !block.startTime || !block.endTime || !block.days.length) {
+    if (missingScheduleFields) {
         setFeedback("scheduledFormMsg", "Complete the schedule fields.", false);
-        $("scheduledDays")?.classList.toggle("is-invalid", !block.days.length);
+        return;
+    }
+    if (!isValidDomain(block.domain)) {
+        setFeedback("scheduledFormMsg", "Enter a valid domain.", false);
+        return;
+    }
+    if (!isValidScheduleTimeInput(block.startTime) || !isValidScheduleTimeInput(block.endTime)) {
+        setFeedback("scheduledFormMsg", "Enter valid start and end times.", false);
         return;
     }
 
@@ -2814,7 +2877,7 @@ function editSchedule(id) {
 
 function resetScheduleForm() {
     state.editingScheduleId = null;
-    state.selectedDays = [0, 1, 2, 3, 4, 5, 6];
+    state.selectedDays = [];
     $("scheduledForm")?.reset();
     $("cancelScheduledEditBtn").hidden = true;
     $("scheduledFormModeLabel").hidden = true;
@@ -2843,7 +2906,6 @@ function settingsFromForm() {
     const limitNotifications = $("limitNotificationsEnabled");
     const insightMax = Number($("insightMaxNotificationsPerDay")?.value ?? DEFAULT_SETTINGS.insightMaxNotificationsPerDay);
     const sensitivity = String($("insightSensitivity")?.value || DEFAULT_SETTINGS.insightSensitivity).toLowerCase();
-    const experienceMode = String($("experienceMode")?.value || DEFAULT_SETTINGS.experienceMode).toLowerCase();
     return {
         defaultLimitMinutes: Math.max(1, Number($("defaultLimitMinutes")?.value || DEFAULT_SETTINGS.defaultLimitMinutes)),
         use24HourTime: Boolean($("use24HourTime")?.checked),
@@ -2862,7 +2924,7 @@ function settingsFromForm() {
         insightSensitivity: ["low", "normal", "high"].includes(sensitivity)
             ? sensitivity
             : DEFAULT_SETTINGS.insightSensitivity,
-        experienceMode: experienceMode === "classic" ? "classic" : "saturn"
+        journeyCollapsed: Boolean(state.settings.journeyCollapsed)
     };
 }
 
@@ -2883,10 +2945,18 @@ async function persistSettings() {
     if (state.settings.personalInsightsEnabled !== false) {
         await send("generateInsights", { allowNotifications: false });
     }
-    applyExperienceMode();
     renderStats();
     renderProfile();
     setFeedback("settingsSavedMsg", "Settings saved");
+}
+
+async function toggleJourneyCollapsed() {
+    state.settings = {
+        ...state.settings,
+        journeyCollapsed: !state.settings.journeyCollapsed
+    };
+    await chrome.storage.local.set({ [SETTINGS_KEY]: state.settings });
+    renderStats();
 }
 
 async function saveSettings(event) {
@@ -3321,6 +3391,7 @@ function bindEvents() {
     $("scheduledForm")?.addEventListener("submit", saveSchedule);
     $("cancelScheduledEditBtn")?.addEventListener("click", resetScheduleForm);
     $("settingsForm")?.addEventListener("submit", saveSettings);
+    $("journeyToggleBtn")?.addEventListener("click", toggleJourneyCollapsed);
     $("settingsCogBtn")?.addEventListener("click", () => openSettingsOverlay());
     $("settingsCloseBtn")?.addEventListener("click", () => closeSettingsOverlay());
     $("use24HourTime")?.addEventListener("change", persistSettings);
@@ -3329,7 +3400,6 @@ function bindEvents() {
     $("insightNotificationsEnabled")?.addEventListener("change", persistSettings);
     $("insightMaxNotificationsPerDay")?.addEventListener("change", persistSettings);
     $("insightSensitivity")?.addEventListener("change", persistSettings);
-    $("experienceMode")?.addEventListener("change", persistSettings);
     $("immutableAdminOverrideBtn")?.addEventListener("click", useImmutableOverride);
     $("verifyWhopBtn")?.addEventListener("click", syncPremium);
     $("manageWhopBtn")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_MANAGE_URL }));
@@ -3381,6 +3451,7 @@ function bindEvents() {
             PERSONAL_INSIGHTS_KEY,
             DISMISSED_INSIGHTS_KEY,
             "snoozedDomains",
+            "recentlyReset",
             "activeBlocks",
             "scheduledBlocks",
             SETTINGS_KEY,

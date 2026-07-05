@@ -1,4 +1,4 @@
-# Screen Time Blocker Extension
+# Saturn Chrome Extension
 
 A lightweight Chrome extension that helps users stay focused by tracking time spent on specific websites and automatically blocking them once a limit is reached.
 
@@ -36,7 +36,7 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 
 ## Vercel Website
 
-This repo includes a static marketing website for Screen Time Manager:
+This repo includes a static marketing website for Saturn:
 
 - `index.html`
 - `privacy.html`
@@ -115,6 +115,7 @@ Blocked-page redirects and blocked-page actions can be tracked with GA4 through 
 - The extension sends one anonymous event per redirect to `/analytics/block-event`.
 - The extension sends low-cardinality blocked-page actions to `/analytics/event`.
 - The Worker forwards those events to GA4 using the Measurement Protocol.
+- Analytics are sent only from the production Chrome Web Store extension ID; unpacked/internal extension IDs are skipped before they reach GA4.
 - No GA secret is stored in the extension.
 
 To enable it:
@@ -128,7 +129,12 @@ To enable it:
   ```bash
   wrangler secret put GA4_API_SECRET
   ```
-4. Deploy the Worker again.
+4. Configure analytics extension ID gates if they differ from the defaults:
+  ```bash
+  wrangler vars set ANALYTICS_PRODUCTION_EXTENSION_IDS
+  wrangler vars set ANALYTICS_INTERNAL_EXTENSION_IDS
+  ```
+5. Deploy the Worker again.
 
 The main emitted GA4 events are:
 

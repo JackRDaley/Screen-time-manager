@@ -81,9 +81,19 @@ describe('Background helper functions (unit)', () => {
     // Prepare a simple in-memory storage mock
     const storage = {
       data: {
-        statsToday: { 'example.com': { timeMs: 60000, visits: 1 } },
-        allStatsToday: { 'example.com': { timeMs: 60000, visits: 1 } },
-        alertsSent: { 'example.com': { '75': true } }
+        statsToday: {
+          'example.com': { timeMs: 60000, visits: 1 },
+          'www.example.com': { timeMs: 120000, visits: 2 }
+        },
+        allStatsToday: {
+          'example.com': { timeMs: 60000, visits: 1 },
+          'www.example.com': { timeMs: 120000, visits: 2 }
+        },
+        alertsSent: {
+          'example.com': { '75': true },
+          'www.example.com': { '90': true }
+        },
+        recentlyReset: {}
       },
       async get(keys) {
         const out = {};
@@ -100,7 +110,13 @@ describe('Background helper functions (unit)', () => {
 
     // Patch global chrome.storage.local used by background.js
     const origStorage = global.chrome.storage.local;
+    const origAlarmsClear = global.chrome.alarms.clear;
+    const origSetBadgeText = global.chrome.action.setBadgeText;
+    const origSetBadgeBackgroundColor = global.chrome.action.setBadgeBackgroundColor;
     global.chrome.storage.local = storage;
+    global.chrome.alarms.clear = jest.fn(async () => true);
+    global.chrome.action.setBadgeText = jest.fn(async () => {});
+    global.chrome.action.setBadgeBackgroundColor = jest.fn(async () => {});
 
     // Call resetDomainUsage (exposed on global)
     const res = await resetDomainUsage('example.com');
@@ -108,6 +124,11 @@ describe('Background helper functions (unit)', () => {
 
     // After reset, stats should no longer have example.com
     expect(storage.data.statsToday['example.com']).toBeUndefined();
+    expect(storage.data.statsToday['www.example.com']).toBeUndefined();
+    expect(storage.data.allStatsToday['example.com']).toBeUndefined();
+    expect(storage.data.allStatsToday['www.example.com']).toBeUndefined();
+    expect(storage.data.alertsSent['example.com']).toBeUndefined();
+    expect(storage.data.alertsSent['www.example.com']).toBeUndefined();
 
     // recentlyReset should be set to a timestamp (>0)
     expect(typeof storage.data.recentlyReset).toBe('object');
@@ -116,6 +137,9 @@ describe('Background helper functions (unit)', () => {
 
     // restore original storage mock
     global.chrome.storage.local = origStorage;
+    global.chrome.alarms.clear = origAlarmsClear;
+    global.chrome.action.setBadgeText = origSetBadgeText;
+    global.chrome.action.setBadgeBackgroundColor = origSetBadgeBackgroundColor;
   });
 
   test('clearDomainSnooze removes snooze and immediately redirects over-limit tabs', async () => {
@@ -1068,6 +1092,90 @@ describe('Background helper functions (unit)', () => {
     global.fetch = origFetch;
   });
 
+  test('active limit wakeup flushes live time and sends a 75% notification', async () => {
+    const startedAt = 1700000000000;
+    const storage = {
+      data: {
+        statsToday: { 'alpha.com': { timeMs: 44000, visits: 1 } },
+        allStatsToday: { 'alpha.com': { timeMs: 44000, visits: 1 } },
+        hourlyUsageHistory: {},
+        blockedDomains: { 'alpha.com': { enabled: true, limitSeconds: 60, tier: 'standard' } },
+        snoozedDomains: {},
+        recentlyReset: {},
+        activeBlocks: [],
+        alertsSent: {},
+        uiSettings: { limitNotificationsEnabled: true }
+      },
+      async get(keys) {
+        const out = {};
+        for (const k of keys) out[k] = this.data[k];
+        return out;
+      },
+      async set(items) {
+        Object.assign(this.data, items);
+        return items;
+      }
+    };
+
+    const origStorage = global.chrome.storage.local;
+    const origGet = global.chrome.tabs.get;
+    const origQuery = global.chrome.tabs.query;
+    const origUpdate = global.chrome.tabs.update;
+    const origCreate = global.chrome.alarms.create;
+    const origClear = global.chrome.alarms.clear;
+    const origSetBadgeText = global.chrome.action.setBadgeText;
+    const origSetBadgeBackgroundColor = global.chrome.action.setBadgeBackgroundColor;
+    const origNotificationCreate = global.chrome.notifications.create;
+    const origFetch = global.fetch;
+    const dateNowSpy = jest.spyOn(Date, 'now');
+
+    global.chrome.storage.local = storage;
+    global.chrome.tabs.get = jest.fn(async () => ({ id: 23, windowId: 1, url: 'https://alpha.com/watch' }));
+    global.chrome.tabs.query = jest.fn(async () => [{ id: 23, windowId: 1, active: true, url: 'https://alpha.com/watch' }]);
+    global.chrome.tabs.update = jest.fn(async () => ({}));
+    global.chrome.alarms.create = jest.fn();
+    global.chrome.alarms.clear = jest.fn(async () => true);
+    global.chrome.action.setBadgeText = jest.fn(async () => {});
+    global.chrome.action.setBadgeBackgroundColor = jest.fn(async () => {});
+    global.chrome.notifications.create = jest.fn(async () => 'stmalert:alpha.com:75');
+    global.fetch = jest.fn(async () => ({ ok: true }));
+
+    dateNowSpy.mockReturnValue(startedAt);
+    await setActiveDomain(23, false, { enforce: false, badge: false });
+    await handleActivePageHeartbeat({
+      tab: { id: 23, windowId: 1, url: 'https://alpha.com/watch' }
+    }, {
+      reason: 'visible',
+      pageFocused: true,
+      visibilityState: 'visible'
+    });
+    global.chrome.notifications.create.mockClear();
+
+    dateNowSpy.mockReturnValue(startedAt + 1000);
+    await handleActiveLimitWakeup('activeLimitThreshold:75:alpha.com');
+
+    expect(storage.data.statsToday['alpha.com'].timeMs).toBe(45000);
+    expect(global.chrome.notifications.create).toHaveBeenCalledWith(
+      'stmalert:alpha.com:75',
+      expect.objectContaining({
+        title: '75% of alpha.com limit used'
+      })
+    );
+    expect(storage.data.alertsSent['alpha.com']['75']).toBe(true);
+
+    dateNowSpy.mockRestore();
+    global.chrome.storage.local = origStorage;
+    global.chrome.tabs.get = origGet;
+    global.chrome.tabs.query = origQuery;
+    global.chrome.tabs.update = origUpdate;
+    global.chrome.alarms.create = origCreate;
+    global.chrome.alarms.clear = origClear;
+    global.chrome.action.setBadgeText = origSetBadgeText;
+    global.chrome.action.setBadgeBackgroundColor = origSetBadgeBackgroundColor;
+    global.chrome.notifications.create = origNotificationCreate;
+    global.fetch = origFetch;
+  });
+
   test('active page heartbeat keeps the badge moving while popup is closed', async () => {
     const startedAt = 1700000000000;
     const storage = {
@@ -1141,6 +1249,101 @@ describe('Background helper functions (unit)', () => {
     expect(response).toEqual(expect.objectContaining({ success: true, domain: 'alpha.com' }));
     expect(storage.data.statsToday['alpha.com'].timeMs).toBe(21000);
     expect(global.chrome.action.setBadgeText).toHaveBeenLastCalledWith({ text: '35%' });
+
+    dateNowSpy.mockRestore();
+    global.chrome.storage.local = origStorage;
+    global.chrome.tabs.get = origGet;
+    global.chrome.tabs.query = origQuery;
+    global.chrome.tabs.update = origUpdate;
+    global.chrome.alarms.create = origCreate;
+    global.chrome.alarms.clear = origClear;
+    global.chrome.action.setBadgeText = origSetBadgeText;
+    global.chrome.action.setBadgeBackgroundColor = origSetBadgeBackgroundColor;
+    global.chrome.notifications.create = origNotificationCreate;
+    global.fetch = origFetch;
+  });
+
+  test('heartbeat clamps usage to the limit when it triggers a block', async () => {
+    const startedAt = 1700000000000;
+    const storage = {
+      data: {
+        statsToday: { 'alpha.com': { timeMs: 59000, visits: 1 } },
+        allStatsToday: { 'alpha.com': { timeMs: 59000, visits: 1 } },
+        hourlyUsageHistory: {},
+        blockedDomains: { 'alpha.com': { enabled: true, limitSeconds: 60, tier: 'standard' } },
+        snoozedDomains: {},
+        recentlyReset: {},
+        activeBlocks: [],
+        alertsSent: {},
+        uiSettings: { limitNotificationsEnabled: true }
+      },
+      async get(keys) {
+        const out = {};
+        for (const k of keys) out[k] = this.data[k];
+        return out;
+      },
+      async set(items) {
+        Object.assign(this.data, items);
+        return items;
+      }
+    };
+
+    const origStorage = global.chrome.storage.local;
+    const origGet = global.chrome.tabs.get;
+    const origQuery = global.chrome.tabs.query;
+    const origUpdate = global.chrome.tabs.update;
+    const origCreate = global.chrome.alarms.create;
+    const origClear = global.chrome.alarms.clear;
+    const origSetBadgeText = global.chrome.action.setBadgeText;
+    const origSetBadgeBackgroundColor = global.chrome.action.setBadgeBackgroundColor;
+    const origNotificationCreate = global.chrome.notifications.create;
+    const origFetch = global.fetch;
+    const dateNowSpy = jest.spyOn(Date, 'now');
+
+    global.chrome.storage.local = storage;
+    global.chrome.tabs.get = jest.fn(async () => ({ id: 91, windowId: 1, url: 'https://alpha.com/watch' }));
+    global.chrome.tabs.query = jest.fn(async () => [{ id: 91, windowId: 1, active: true, url: 'https://alpha.com/watch' }]);
+    global.chrome.tabs.update = jest.fn(async () => ({}));
+    global.chrome.alarms.create = jest.fn();
+    global.chrome.alarms.clear = jest.fn(async () => true);
+    global.chrome.action.setBadgeText = jest.fn(async () => {});
+    global.chrome.action.setBadgeBackgroundColor = jest.fn(async () => {});
+    global.chrome.notifications.create = jest.fn(async () => 'stmalert:alpha.com:90');
+    global.fetch = jest.fn(async () => ({ ok: true }));
+
+    dateNowSpy.mockReturnValue(startedAt);
+    await handleWindowFocusChanged(1);
+    await setActiveDomain(91, false, { enforce: false, badge: false });
+    await handleActivePageHeartbeat({
+      tab: { id: 91, windowId: 1, url: 'https://alpha.com/watch' }
+    }, {
+      reason: 'visible',
+      pageFocused: true,
+      visibilityState: 'visible'
+    });
+
+    global.chrome.tabs.query = jest.fn(async () => [{
+      id: 99,
+      windowId: 1,
+      active: true,
+      url: global.chrome.runtime.getURL('popup.html')
+    }]);
+
+    dateNowSpy.mockReturnValue(startedAt + 2000);
+    const response = await flushActiveTimeNow({ source: 'popup' });
+
+    expect(response).toEqual(expect.objectContaining({
+      success: true,
+      countedMs: 2000
+    }));
+    expect(storage.data.statsToday['alpha.com'].timeMs).toBe(60000);
+    expect(storage.data.allStatsToday['alpha.com'].timeMs).toBe(60000);
+    expect(global.chrome.tabs.update).toHaveBeenCalledWith(
+      91,
+      expect.objectContaining({
+        url: expect.stringContaining('blocked.html')
+      })
+    );
 
     dateNowSpy.mockRestore();
     global.chrome.storage.local = origStorage;
@@ -1935,6 +2138,22 @@ describe('Background helper functions (unit)', () => {
       expect.objectContaining({ domain: 'docs.example.com', title: expect.stringContaining('docs.example.com') }),
       expect.objectContaining({ domain: 'example.com', title: expect.stringContaining('example.com') })
     ]));
+  });
+
+  test('scheduled block messages reject invalid times before storing', async () => {
+    const response = await sendBackgroundMessage({
+      action: 'addScheduledBlock',
+      block: {
+        domain: 'focus.com',
+        startTime: 'tomorrow',
+        endTime: 'banana',
+        days: [1],
+        tier: 'standard'
+      }
+    });
+
+    expect(response).toEqual({ success: false, error: 'Enter valid start and end times.' });
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
   });
 
   test('overnight scheduled blocks stay active after midnight', () => {

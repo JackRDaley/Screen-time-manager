@@ -26,6 +26,11 @@ function isTrustedExtensionOrigin(origin) {
     return /^chrome-extension:\/\/[a-p]{32}$/i.test(String(origin || ""));
 }
 
+function extensionIdFromOrigin(origin) {
+    const match = String(origin || "").match(/^chrome-extension:\/\/([a-p]{32})$/i);
+    return match ? match[1].toLowerCase() : "";
+}
+
 const ANALYTICS_ALLOWED_EVENTS = new Set([
     "blocked_page_view",
     "blocked_page_action",
@@ -61,6 +66,7 @@ const ANALYTICS_ALLOWED_PARAMS = new Set([
 
 const ANALYTICS_BLOCK_SOURCES = new Set(["limit", "scheduled", "unknown"]);
 const ANALYTICS_BLOCK_TIERS = new Set(["lenient", "standard", "strict", "immutable", "unknown"]);
+const DEFAULT_ANALYTICS_PRODUCTION_EXTENSION_ID = "pecaajdaecdmikcgfdgldcofdebhfbgo";
 
 function bytesToBase64Url(bytes) {
     let binary = "";
@@ -633,6 +639,48 @@ function sanitizeAnalyticsParams(value) {
     return sanitized;
 }
 
+function parseExtensionIdList(value, fallback = []) {
+    const ids = String(value || "")
+        .split(",")
+        .map((id) => id.trim().toLowerCase())
+        .filter(isValidChromeExtensionId);
+
+    return ids.length ? ids : fallback;
+}
+
+function shouldSkipAnalyticsForExtension(env, requestOrigin, body) {
+    const originExtensionId = extensionIdFromOrigin(requestOrigin);
+    const bodyExtensionId = isValidChromeExtensionId(body?.extensionId)
+        ? String(body.extensionId).trim().toLowerCase()
+        : "";
+    const extensionId = originExtensionId || bodyExtensionId;
+
+    if (!extensionId) {
+        return { skip: true, reason: "missing-extension-id" };
+    }
+
+    if (bodyExtensionId && originExtensionId && bodyExtensionId !== originExtensionId) {
+        return { skip: true, reason: "extension-id-mismatch" };
+    }
+
+    const internalIds = parseExtensionIdList(env.ANALYTICS_INTERNAL_EXTENSION_IDS);
+    if (internalIds.includes(extensionId)) {
+        return { skip: true, reason: "internal-extension-id" };
+    }
+
+    const configuredProductionIds = String(env.ANALYTICS_PRODUCTION_EXTENSION_IDS || "").trim();
+    if (configuredProductionIds === "*") {
+        return { skip: false, extensionId };
+    }
+
+    const productionIds = parseExtensionIdList(configuredProductionIds, [DEFAULT_ANALYTICS_PRODUCTION_EXTENSION_ID]);
+    if (!productionIds.includes(extensionId)) {
+        return { skip: true, reason: "non-production-extension-id" };
+    }
+
+    return { skip: false, extensionId };
+}
+
 function shouldLogAnalytics(env) {
     const value = String(env.ANALYTICS_DEBUG_LOGS || "").trim().toLowerCase();
     return value === "1" || value === "true" || value === "yes" || value === "on";
@@ -1189,6 +1237,19 @@ export default {
             return json({ error: error instanceof Error ? error.message : "Invalid JSON body" }, 400);
         }
 
+        const analyticsSkip = shouldSkipAnalyticsForExtension(env, requestOrigin, body);
+        if (analyticsSkip.skip) {
+            logAnalyticsDebug(env, "[analytics/block-event] skipped", {
+                reason: analyticsSkip.reason,
+                origin: requestOrigin,
+                extensionId: body?.extensionId || null
+            });
+            return json({ ok: true, skipped: true, reason: analyticsSkip.reason }, 200, {
+                "Access-Control-Allow-Origin": requestOrigin,
+                "Vary": "Origin"
+            });
+        }
+
         const clientId = sanitizeAnalyticsText(body?.clientId, "", 128);
         if (!clientId) {
             return json({ error: "Missing clientId" }, 400);
@@ -1234,6 +1295,19 @@ export default {
             body = await parseJsonBody(request);
         } catch (error) {
             return json({ error: error instanceof Error ? error.message : "Invalid JSON body" }, 400);
+        }
+
+        const analyticsSkip = shouldSkipAnalyticsForExtension(env, requestOrigin, body);
+        if (analyticsSkip.skip) {
+            logAnalyticsDebug(env, "[analytics/event] skipped", {
+                reason: analyticsSkip.reason,
+                origin: requestOrigin,
+                extensionId: body?.extensionId || null
+            });
+            return json({ ok: true, skipped: true, reason: analyticsSkip.reason }, 200, {
+                "Access-Control-Allow-Origin": requestOrigin,
+                "Vary": "Origin"
+            });
         }
 
         const clientId = sanitizeAnalyticsText(body?.clientId, "", 128);

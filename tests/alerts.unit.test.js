@@ -43,6 +43,31 @@ describe('Alerts: deduplication', () => {
     expect(global.chrome.notifications.create).toHaveBeenCalledTimes(1);
   });
 
+  test('creates separate 75% and 90% alerts as usage increases', async () => {
+    const domain = 'example.com';
+    const blockedDomains = { [domain]: { limitSeconds: 120 } };
+
+    await checkAndSendAlerts(domain, blockedDomains, { [domain]: { timeMs: 120 * 1000 * 0.75, visits: 1 } });
+    await checkAndSendAlerts(domain, blockedDomains, { [domain]: { timeMs: 120 * 1000 * 0.9, visits: 1 } });
+
+    expect(global.chrome.notifications.create).toHaveBeenCalledTimes(2);
+    expect(global.chrome.storage.local.data.alertsSent[domain]['75']).toBe(true);
+    expect(global.chrome.storage.local.data.alertsSent[domain]['90']).toBe(true);
+  });
+
+  test('does not mark an alert sent when Chrome notification creation fails', async () => {
+    const domain = 'example.com';
+    const blockedDomains = { [domain]: { limitSeconds: 120 } };
+    const statsToday = { [domain]: { timeMs: 120 * 1000 * 0.75, visits: 1 } };
+    global.chrome.notifications.create = jest.fn(async () => {
+      throw new Error('notifications unavailable');
+    });
+
+    await checkAndSendAlerts(domain, blockedDomains, statsToday);
+
+    expect(global.chrome.storage.local.data.alertsSent[domain]).toBeUndefined();
+  });
+
   test('does not create limit alerts when notifications are disabled', async () => {
     global.chrome.storage.local.data.uiSettings = { limitNotificationsEnabled: false };
     const domain = 'example.com';

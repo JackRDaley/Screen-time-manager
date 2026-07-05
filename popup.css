@@ -52,14 +52,18 @@ html, body {
 .scene::before {
     content: "";
     position: absolute;
-    inset: -80px;
+    inset: 0;
     background:
-        radial-gradient(ellipse 520px 380px at 8% -5%, rgba(212,106,68,.22), transparent 60%),
-        radial-gradient(ellipse 380px 300px at 96% 10%, rgba(143,210,216,.16), transparent 60%),
-        linear-gradient(180deg, #120a08 0%, #1b0f0d 48%, #0b090b 100%);
-    filter: blur(16px);
+        linear-gradient(90deg, rgba(247,231,214,.025) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(247,231,214,.018) 1px, transparent 1px),
+        linear-gradient(118deg, rgba(212,106,68,.14) 0%, rgba(212,106,68,.052) 34%, transparent 58%),
+        linear-gradient(242deg, rgba(143,210,216,.075) 0%, rgba(143,210,216,.026) 28%, transparent 52%),
+        linear-gradient(180deg, #17100e 0%, #100807 48%, #120d0d 100%);
+    background-size: 64px 64px, 64px 64px, auto, auto, auto;
+    filter: none;
     z-index: 0;
-    animation: drift 24s ease-in-out infinite alternate;
+    opacity: .96;
+    animation: none;
 }
 
 @keyframes drift {
@@ -963,12 +967,13 @@ nav label:focus-visible {
     --ranking-limit-gap: 5px;
     position: relative;
     justify-content: flex-end;
-    padding-left: calc(var(--ranking-limit-space) + var(--ranking-limit-gap));
+    min-width: calc(var(--ranking-limit-space) + var(--ranking-limit-gap) + 46px);
 }
 
 #ranking .row-ranking .ranking-stat-chip,
 #rankingByVisits .row-ranking .ranking-stat-chip {
-    transform: translateX(calc((var(--ranking-limit-space) + var(--ranking-limit-gap)) * -1));
+    transform: translateX(0);
+    transition: transform .18s var(--ease-standard);
 }
 
 #ranking .row-ranking .ranking-limit-chip,
@@ -978,9 +983,16 @@ nav label:focus-visible {
     width: var(--ranking-limit-space);
     min-width: var(--ranking-limit-space);
     opacity: 0;
-    transform: translateX(0);
+    transform: translateX(6px);
     pointer-events: none;
-    transition: border-color .15s, background .15s, color .15s, opacity .15s;
+    transition: border-color .15s, background .15s, color .15s, opacity .15s, transform .18s var(--ease-standard);
+}
+
+#ranking .row-ranking:hover .ranking-stat-chip,
+#ranking .row-ranking:focus-within .ranking-stat-chip,
+#rankingByVisits .row-ranking:hover .ranking-stat-chip,
+#rankingByVisits .row-ranking:focus-within .ranking-stat-chip {
+    transform: translateX(calc((var(--ranking-limit-space) + var(--ranking-limit-gap)) * -1));
 }
 
 #ranking .row-ranking:hover .ranking-limit-chip,
@@ -988,6 +1000,7 @@ nav label:focus-visible {
 #rankingByVisits .row-ranking:hover .ranking-limit-chip,
 #rankingByVisits .row-ranking:focus-within .ranking-limit-chip {
     opacity: 1;
+    transform: translateX(0);
     pointer-events: auto;
 }
 
@@ -1792,8 +1805,8 @@ img.planet-current {
     left: var(--journey-marker-left, 0%);
     top: 50%;
     z-index: 2;
-    width: 18px;
-    height: 18px;
+    width: 30px;
+    height: 30px;
     transform: translate(-50%, -50%) rotate(-16deg);
     filter: drop-shadow(0 2px 4px rgba(0,0,0,.45));
 }
@@ -2169,6 +2182,96 @@ img.planet-current {
     pointer-events: none;
 }
 
+.journey-toggle-btn {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    z-index: 4;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: rgba(255,248,238,.78);
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.journey-toggle-btn::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform .18s var(--ease-standard);
+}
+
+.journey-toggle-btn:hover,
+.journey-toggle-btn:focus-visible {
+    background: rgba(247,231,214,.085);
+    color: #FFF8EE;
+    outline: none;
+}
+
+.journey-card.is-collapsed {
+    min-height: 36px;
+    grid-template-columns: 1fr;
+    padding: 0 14px;
+    border-color: rgba(143,210,216,.24);
+    background:
+        radial-gradient(circle at 17% 44%, rgba(255,177,138,.12), transparent 28%),
+        radial-gradient(circle at 82% 36%, rgba(143,210,216,.11), transparent 32%),
+        radial-gradient(circle at 43% 23%, rgba(255,255,255,.09) 0 1px, transparent 2px),
+        radial-gradient(circle at 62% 72%, rgba(255,255,255,.045) 0 1px, transparent 2px),
+        linear-gradient(135deg, rgba(24,13,12,.99), rgba(9,10,15,.98) 58%, rgba(15,20,23,.94)),
+        var(--surface0);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.10),
+        inset 0 0 0 1px rgba(143,210,216,.055),
+        0 0 0 1px rgba(255,177,138,.06),
+        0 8px 18px rgba(0,0,0,.24),
+        0 0 22px rgba(143,210,216,.07);
+}
+
+.journey-card.is-collapsed .journey-stop,
+.journey-card.is-collapsed .journey-route {
+    display: none;
+}
+
+.journey-collapsed-title {
+    position: absolute;
+    top: 50%;
+    left: 38px;
+    z-index: 2;
+    transform: translateY(-50%);
+    color: #FFF3E4;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: 0;
+    text-shadow: 0 1px 8px rgba(0,0,0,.45);
+    pointer-events: none;
+}
+
+.journey-card.is-collapsed .journey-toggle-btn {
+    top: 3px;
+    left: 4px;
+    color: rgba(255,248,238,.88);
+}
+
+.journey-card.is-collapsed .journey-toggle-btn:hover,
+.journey-card.is-collapsed .journey-toggle-btn:focus-visible {
+    background: rgba(255,248,238,.10);
+}
+
+.journey-card.is-collapsed .journey-toggle-btn::before {
+    transform: translateX(-1px) rotate(-45deg);
+}
+
 .journey-stop {
     position: relative;
     z-index: 2;
@@ -2324,11 +2427,11 @@ img.planet-current {
     position: relative;
     z-index: 2;
     display: grid;
-    grid-template-rows: 1fr 28px 17px 9px;
+    grid-template-rows: 1fr 40px 17px 9px;
     align-items: center;
     gap: 1px;
     min-width: 0;
-    height: 78px;
+    height: 90px;
     align-self: center;
 }
 
@@ -2411,7 +2514,7 @@ img.planet-current {
 .journey-line {
     grid-row: 2;
     position: relative;
-    height: 28px;
+    height: 40px;
     margin: 0;
     border-radius: 999px;
     overflow: visible;
@@ -2429,17 +2532,20 @@ img.planet-current {
 
 .journey-line-image {
     position: absolute;
-    inset: 0;
+    top: 50%;
+    left: 0;
     width: 100%;
-    height: 100%;
-    object-fit: fill;
+    height: auto;
+    aspect-ratio: 1536 / 124;
+    object-fit: contain;
+    transform: translateY(-50%);
     pointer-events: none;
     user-select: none;
 }
 
 .journey-line-image-base {
-    filter: saturate(.85) brightness(.78);
-    opacity: .72;
+    filter: drop-shadow(0 0 8px rgba(212, 106, 68, .34));
+    opacity: 1;
 }
 
 .journey-line-fill {
@@ -2478,8 +2584,8 @@ img.planet-current {
     left: var(--journey-marker-left);
     top: 50%;
     z-index: 3;
-    width: 28px;
-    height: 28px;
+    width: 40px;
+    height: 40px;
     object-fit: contain;
     transform: translate(-50%, -50%) rotate(48deg);
     filter: drop-shadow(0 5px 8px rgba(0,0,0,.34));
@@ -2933,49 +3039,6 @@ img.planet-current {
     font-size: 12px;
     font-weight: 650;
     line-height: 1.4;
-}
-
-.classic-mode .journey-card,
-.classic-mode .planet-unlock-modal,
-.classic-mode .profile-orbit-card,
-.classic-mode .streak-header,
-.classic-mode .profile-brand-icon {
-    display: none !important;
-}
-
-.classic-mode .profile-hero::after {
-    display: none;
-}
-
-.classic-mode .profile-brand-name {
-    font-size: 20px;
-}
-
-.classic-mode .profile-brand-name::before {
-    content: "Classic";
-}
-
-.classic-mode .profile-brand-name {
-    color: #FFF6EA;
-    background: none;
-    -webkit-text-fill-color: currentColor;
-}
-
-.classic-mode .profile-brand-name {
-    font-size: 0;
-}
-
-.classic-mode .profile-brand-name::before {
-    font-size: 20px;
-}
-
-.classic-mode .profile-brand-sub {
-    font-size: 0;
-}
-
-.classic-mode .profile-brand-sub::before {
-    content: "Simple productivity dashboard";
-    font-size: 12px;
 }
 
 .profile-map-card {
@@ -4502,11 +4565,6 @@ img.planet-current {
     flex: 1;
 }
 
-.settings-row-stacked {
-    align-items: stretch;
-    flex-direction: column;
-}
-
 .settings-help {
     margin-top: 3px;
     color: rgba(237,242,255,.56);
@@ -5529,9 +5587,8 @@ img.planet-current {
     overflow: hidden;
     border: 1px solid rgba(255,126,86,.22);
     background:
-        radial-gradient(circle at 82% 22%, rgba(255,126,86,.13), transparent 30%),
-        radial-gradient(circle at 20% 78%, rgba(143,210,216,.09), transparent 34%),
-        linear-gradient(135deg, rgba(21,12,11,.98), rgba(11,10,14,.95) 58%, rgba(16,12,14,.98)),
+        linear-gradient(180deg, rgba(247,231,214,.052), rgba(247,231,214,.022)),
+        linear-gradient(135deg, rgba(22,14,13,.94), rgba(15,11,13,.94)),
         var(--surface0);
     box-shadow:
         inset 0 1px 0 rgba(255,255,255,.08),
@@ -5544,9 +5601,8 @@ img.planet-current {
 .panel-schedule > #schedulePresetCard:not(#schedulePaywallCard) {
     border-color: rgba(255,177,138,.15);
     background:
-        radial-gradient(circle at 96% 8%, rgba(255,126,86,.06), transparent 24%),
-        radial-gradient(circle at 6% 82%, rgba(143,210,216,.07), transparent 30%),
-        linear-gradient(135deg, rgba(22,13,12,.90), rgba(12,10,13,.92) 60%, rgba(18,13,14,.90)),
+        linear-gradient(180deg, rgba(247,231,214,.042), rgba(247,231,214,.018)),
+        linear-gradient(135deg, rgba(18,12,12,.88), rgba(14,11,13,.88)),
         var(--surface0);
     box-shadow:
         inset 0 1px 0 rgba(255,255,255,.055),
@@ -5556,7 +5612,7 @@ img.planet-current {
 
 .panel-limits > .card:not(#limitsPaywallCard)::after,
 .panel-schedule > .card:not(#schedulePaywallCard)::after {
-    content: "";
+    content: none;
     position: absolute;
     right: -34px;
     bottom: -24px;
@@ -5969,6 +6025,332 @@ img.planet-current {
 
 #usageInsight.muted {
     color: rgba(247,231,214,.64);
+}
+
+/* Dashboard / limits / schedule hierarchy layer */
+.panel-dashboard .card,
+.panel-limits .card,
+.panel-schedule .card {
+    isolation: isolate;
+}
+
+.card-input {
+    --role-accent: var(--orbit-orange);
+    --role-accent-soft: rgba(255,138,97,.16);
+    --role-border: rgba(255,177,138,.38);
+}
+
+.card-output {
+    --role-accent: var(--orbit-gold);
+    --role-accent-soft: rgba(255,177,138,.075);
+    --role-border: rgba(247,231,214,.12);
+}
+
+.card-analytics {
+    --role-accent: var(--cyan);
+    --role-accent-soft: rgba(143,210,216,.12);
+    --role-border: rgba(143,210,216,.20);
+}
+
+.card.card-dominant {
+    overflow: hidden;
+}
+
+.card.card-secondary {
+    overflow: visible;
+}
+
+.card.card-dominant > * {
+    position: relative;
+    z-index: 1;
+}
+
+.card.card-dominant > .journey-toggle-btn {
+    position: absolute;
+    z-index: 4;
+}
+
+.card.card-dominant > .journey-collapsed-title {
+    position: absolute;
+    z-index: 2;
+}
+
+.card.card-dominant::before {
+    content: "";
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background:
+        linear-gradient(90deg, transparent, rgba(255,255,255,.075), transparent),
+        linear-gradient(135deg, color-mix(in srgb, var(--role-accent) 14%, transparent), transparent 46%);
+    opacity: .92;
+    pointer-events: none;
+}
+
+.card.card-dominant .card-title {
+    color: rgba(255,248,238,.94);
+    font-size: 11px;
+    text-decoration-color: color-mix(in srgb, var(--role-accent) 48%, transparent);
+}
+
+.card.card-secondary .card-title {
+    color: rgba(247,231,214,.58);
+    font-size: 9.5px;
+    text-decoration-color: rgba(247,231,214,.16);
+}
+
+.card.card-secondary.card-analytics .card-title {
+    color: rgba(194,235,238,.66);
+    text-decoration-color: rgba(143,210,216,.22);
+}
+
+.panel-dashboard .stat-box,
+.panel-dashboard .stat-filter-wrap {
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.052), rgba(247,231,214,.018)),
+        rgba(247,231,214,.028);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.04),
+        inset 0 0 0 1px rgba(255,255,255,.018);
+}
+
+.panel-dashboard .journey-card.card-dominant {
+    min-height: 116px;
+    border-color: rgba(143,210,216,.24);
+    background:
+        radial-gradient(circle at 17% 44%, rgba(255,177,138,.18), transparent 28%),
+        radial-gradient(circle at 82% 36%, rgba(143,210,216,.17), transparent 32%),
+        radial-gradient(circle at 43% 23%, rgba(255,255,255,.09) 0 1px, transparent 2px),
+        radial-gradient(circle at 62% 72%, rgba(255,255,255,.045) 0 1px, transparent 2px),
+        linear-gradient(135deg, rgba(24,13,12,.99), rgba(9,10,15,.98) 58%, rgba(15,20,23,.94)),
+        var(--surface0);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.10),
+        inset 0 0 0 1px rgba(143,210,216,.055),
+        0 0 0 1px rgba(255,177,138,.06),
+        0 12px 24px rgba(0,0,0,.28),
+        0 0 30px rgba(143,210,216,.09);
+}
+
+.panel-dashboard .journey-card.card-dominant.is-collapsed {
+    min-height: 36px;
+}
+
+.panel-dashboard .card.card-secondary {
+    border: 1px solid rgba(247,231,214,.08);
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.047), rgba(247,231,214,.016)),
+        rgba(13,10,13,.62);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.035),
+        inset 0 0 0 1px rgba(255,255,255,.012),
+        0 6px 14px rgba(0,0,0,.17);
+}
+
+.panel-dashboard .card.card-secondary.card-analytics {
+    border-color: rgba(143,210,216,.12);
+    background:
+        radial-gradient(circle at 96% 4%, rgba(143,210,216,.075), transparent 30%),
+        linear-gradient(180deg, rgba(247,231,214,.044), rgba(247,231,214,.014)),
+        rgba(12,12,15,.64);
+}
+
+#personalInsightsCard.card-secondary {
+    background:
+        radial-gradient(circle at 92% 10%, rgba(143,210,216,.09), transparent 28%),
+        linear-gradient(180deg, rgba(247,231,214,.052), rgba(247,231,214,.016)),
+        rgba(13,10,13,.68);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.045),
+        inset 0 0 0 1px rgba(255,255,255,.014),
+        0 6px 14px rgba(0,0,0,.18);
+}
+
+.panel-limits > .card.card-dominant:not(#limitsPaywallCard),
+.panel-schedule > .card.card-dominant:not(#schedulePaywallCard) {
+    border-color: rgba(255,177,138,.30);
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.058), rgba(247,231,214,.024)),
+        linear-gradient(135deg, rgba(22,14,13,.95), rgba(15,11,13,.95)),
+        var(--surface0);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.11),
+        inset 0 0 0 1px rgba(255,177,138,.045),
+        0 0 0 1px rgba(255,177,138,.08),
+        0 11px 22px rgba(0,0,0,.28),
+        0 11px 22px rgba(0,0,0,.28);
+}
+
+.panel-limits > .card.card-dominant:not(#limitsPaywallCard)::before,
+.panel-schedule > .card.card-dominant:not(#schedulePaywallCard)::before {
+    content: none;
+}
+
+.panel-limits > .card.card-dominant:not(#limitsPaywallCard)::after,
+.panel-schedule > .card.card-dominant:not(#schedulePaywallCard)::after {
+    content: none;
+}
+
+.panel-limits > .card.card-secondary,
+.panel-schedule > .card.card-secondary {
+    border-color: var(--role-border);
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.046), rgba(247,231,214,.014)),
+        rgba(14,10,12,.64);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.035),
+        inset 0 0 0 1px rgba(255,255,255,.012),
+        0 5px 13px rgba(0,0,0,.16);
+}
+
+.panel-limits > .card.card-secondary:not(#limitsPaywallCard),
+.panel-schedule > .card.card-secondary:not(#schedulePaywallCard) {
+    overflow: visible;
+}
+
+#limitsPaywallCard.card-secondary,
+#schedulePaywallCard.card-secondary {
+    overflow: visible;
+    border-color: rgba(247,231,214,.12);
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.046), rgba(247,231,214,.014)),
+        rgba(13,10,12,.62);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.035),
+        inset 0 0 0 1px rgba(255,255,255,.012),
+        0 5px 13px rgba(0,0,0,.16);
+}
+
+.panel-limits > #limitListCard.card-secondary:not(#limitsPaywallCard),
+.panel-schedule > #scheduledListCard.card-secondary:not(#schedulePaywallCard) {
+    border-color: rgba(247,231,214,.10);
+    background: rgba(17,12,13,.82);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.032),
+        inset 0 0 0 1px rgba(255,255,255,.010),
+        0 5px 12px rgba(0,0,0,.15);
+}
+
+.panel-limits > #limitListCard.card-secondary:not(#limitsPaywallCard) .card-head,
+.panel-limits > #limitListCard.card-secondary:not(#limitsPaywallCard) .card-body,
+.panel-limits > #limitListCard.card-secondary:not(#limitsPaywallCard) .list.muted,
+.panel-schedule > #scheduledListCard.card-secondary:not(#schedulePaywallCard) .card-head,
+.panel-schedule > #scheduledListCard.card-secondary:not(#schedulePaywallCard) .card-body,
+.panel-schedule > #scheduledListCard.card-secondary:not(#schedulePaywallCard) .list.muted {
+    background: transparent;
+    box-shadow: none;
+}
+
+.panel-limits > #presetCard.card-secondary:not(#limitsPaywallCard),
+.panel-schedule > #schedulePresetCard.card-secondary:not(#schedulePaywallCard) {
+    border-color: rgba(143,210,216,.14);
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.046), rgba(247,231,214,.014)),
+        rgba(12,12,15,.62);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.034),
+        inset 0 0 0 1px rgba(255,255,255,.012),
+        0 5px 13px rgba(0,0,0,.16);
+}
+
+.panel-limits > .card.card-secondary::after,
+.panel-schedule > .card.card-secondary::after {
+    content: none;
+}
+
+.panel-limits > #limitListCard.card-secondary:not(#limitsPaywallCard)::after,
+.panel-schedule > #scheduledListCard.card-secondary:not(#schedulePaywallCard)::after {
+    opacity: .16;
+    border-color: rgba(247,231,214,.18);
+}
+
+.panel-limits > #presetCard.card-secondary:not(#limitsPaywallCard)::after,
+.panel-schedule > #schedulePresetCard.card-secondary:not(#schedulePaywallCard)::after {
+    content: none;
+}
+
+.card-output.card-secondary .row,
+.card-output.card-secondary .list.muted {
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.038), rgba(247,231,214,.014)),
+        rgba(247,231,214,.018);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.026),
+        inset 0 0 0 1px rgba(255,255,255,.012);
+}
+
+.card-output.card-secondary .row {
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.026),
+        inset 0 0 0 1px rgba(255,255,255,.012);
+}
+
+.panel-limits > #limitListCard.card-secondary:not(#limitsPaywallCard) .list.muted,
+.panel-schedule > #scheduledListCard.card-secondary:not(#schedulePaywallCard) .list.muted {
+    background: transparent;
+    box-shadow: none;
+}
+
+.card-analytics.card-secondary .row,
+.card-analytics.card-secondary .preset-option {
+    background:
+        linear-gradient(180deg, rgba(247,231,214,.046), rgba(247,231,214,.017)),
+        linear-gradient(165deg, rgba(143,210,216,.085), transparent 58%),
+        rgba(247,231,214,.018);
+    box-shadow:
+        inset 2px 0 0 rgba(143,210,216,.22),
+        inset 0 1px 0 rgba(255,255,255,.03),
+        inset 0 0 0 1px rgba(255,255,255,.012);
+}
+
+.card-input.card-dominant .input,
+.card-input.card-dominant .math-input,
+.card-input.card-dominant .day-bubble {
+    border-color: rgba(255,177,138,.24);
+    background:
+        linear-gradient(180deg, rgba(255,248,238,.075), rgba(255,248,238,.028)),
+        rgba(12,9,11,.72);
+}
+
+.card-input.card-dominant .day-bubble {
+    position: relative;
+}
+
+.card-input.card-dominant .day-bubble:not(.is-selected) {
+    border-color: rgba(255,177,138,.14);
+    opacity: .56;
+}
+
+.card-input.card-dominant .day-bubble:not(.is-selected):hover {
+    border-color: rgba(255,177,138,.26);
+    opacity: .76;
+}
+
+.card-input.card-dominant .day-bubble.is-selected {
+    border-color: rgba(255,177,138,.42);
+    background:
+        linear-gradient(180deg, rgba(255,248,238,.09), rgba(255,248,238,.035)),
+        rgba(12,9,11,.78);
+    color: rgba(255,248,238,.96);
+    opacity: 1;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.08),
+        inset 0 0 0 1px rgba(255,177,138,.08);
+}
+
+.card-input.card-dominant .day-bubble.is-selected:hover {
+    border-color: rgba(255,177,138,.54);
+    color: rgba(255,248,238,1);
+}
+
+.card-input.card-dominant .input:focus,
+.card-input.card-dominant .math-input:focus {
+    border-color: rgba(255,197,158,.68);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.06),
+        0 0 0 3px rgba(212,106,68,.18),
+        0 0 18px rgba(212,106,68,.10);
 }
 
 .chart-insight,
