@@ -1,49 +1,40 @@
-import { useMemo, useState } from "react";
-
 const features = [
   {
     title: "Website blocking",
     detail: "Block distracting sites before they pull you back in.",
     icon: "pause",
-    tone: "blue"
+    tone: "orange"
   },
   {
     title: "Daily limits",
     detail: "Set time limits for specific domains so quick checks do not turn into long sessions.",
     icon: "clock",
-    tone: "cyan"
+    tone: "gold"
   },
   {
     title: "Focus schedules",
     detail: "Create time blocks where distracting websites stay unavailable.",
     icon: "calendar",
-    tone: "mint"
+    tone: "cyan"
   },
   {
     title: "Activity dashboard",
     detail: "See blocked pages, repeat visits, and usage patterns in one simple view.",
     icon: "spark",
-    tone: "violet"
+    tone: "orange"
   },
   {
     title: "Adjustable friction",
     detail: "Use gentle reminders, strict blocks, and focus rules that match real life.",
     icon: "pointer",
-    tone: "cyan"
+    tone: "gold"
   },
   {
     title: "Privacy-conscious tracking",
     detail: "Track only what is needed to provide blocking, limits, and basic usage stats.",
     icon: "shield",
-    tone: "mint"
+    tone: "cyan"
   }
-];
-
-const proofItems = [
-  ["Chrome extension", "Built for the browser where distractions happen."],
-  ["No account required", "Install and start with one distracting site."],
-  ["Privacy-conscious", "Domain-level controls, not surveillance."],
-  ["Flexible rules", "Limits, schedules, and stricter focus blocks."]
 ];
 
 const heroPoints = [
@@ -61,32 +52,32 @@ const steps = [
 const walkthroughs = [
   {
     eyebrow: "Daily limits",
-    title: "Set a ceiling before the scroll starts.",
-    detail: "Give each distracting domain a realistic daily budget. When time runs out, Screen Time Manager turns the next visit into a decision point.",
+    title: "Set a limit before you scroll",
+    detail: "Give each distracting domain a realistic daily budget. When time runs out, Saturn turns the next visit into a decision point.",
     bullets: ["Domain-specific limits", "Clean remaining-time status", "Simple edits when routines change"],
-    imageSrc: "/extension-limits-tab-render.png",
+    imageSrc: "/saturn-extension-limits-render.png",
     imageSide: "right"
   },
   {
     eyebrow: "Focus schedules",
-    title: "Protect the hours that matter.",
+    title: "Protect the hours that matter",
     detail: "Schedule blocks for study sessions, work blocks, sleep windows, or any recurring moment where entertainment should stay out of reach.",
     bullets: ["Work and study windows", "Recurring schedule support", "Rules that can be stricter when needed"],
-    imageSrc: "/extension-schedule-tab-render.png",
+    imageSrc: "/saturn-extension-schedule-render.png",
     imageSide: "left"
   },
   {
     eyebrow: "Activity insight",
-    title: "Turn vague screen-time guilt into something visible.",
+    title: "See the numbers in real time",
     detail: "See the sites that keep pulling you back, the attempts you avoided, and the moments where a better rule would help.",
-    bullets: ["Most-visited domains", "Blocked-attempt awareness", "Signals you can actually adjust"],
-    imageSrc: "/extension-dashboard-render.png",
+    bullets: ["Blocked attempts and snoozes", "Most-visited domains", "Personalized insights"],
+    imageSrc: "/saturn-extension-dashboard-render.png",
     imageSide: "right"
   }
 ];
 
 const faqs = [
-  ["Is Screen Time Manager free?", "The extension is free to install from the Chrome Web Store."],
+  ["Is Saturn free?", "The extension is free to install from the Chrome Web Store."],
   ["Can I block specific websites?", "Yes. Add the domains that distract you, then choose limits, schedules, or stricter focus blocks for each one."],
   ["Can I use schedules for school or work?", "Yes. Focus schedules are designed for recurring sessions like class, homework, deep work, or bedtime."],
   ["Can I still change my rules later?", "Yes. You control the domains, schedules, limits, and friction level, so your setup can change with your routine."],
@@ -116,6 +107,7 @@ const testimonials = [
 ];
 
 const storeUrl = "https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo";
+const feedbackUrl = "https://www.surveymonkey.com/r/QF2RJ58";
 
 const internalLinks = {
   privacy: "/privacy",
@@ -124,10 +116,9 @@ const internalLinks = {
 };
 
 const trustItems = [
+  "No account required",
   "No unnecessary tracking",
   "No selling user data",
-  "Clear domain-based controls",
-  "Settings stay under your control"
 ];
 
 function Icon({ name }) {
@@ -201,26 +192,90 @@ function GlowCard({ children, className = "" }) {
   return <article className={`glow-card ${className}`}>{children}</article>;
 }
 
-function ProductStage() {
+function DashboardPreview() {
   return (
-    <div className="product-stage" aria-label="Screen Time Manager product preview">
-      <div className="device-frame">
-        <img src="/extension-dashboard-render.png" alt="Screen Time Manager dashboard preview" />
+    <div className="dashboard-preview" aria-label="Saturn dashboard preview">
+      <div className="preview-topline">
+        <div className="preview-brand">
+          <img src="/planets/saturn-app-icon-128.png" alt="" />
+          <div>
+            <strong>Saturn</strong>
+          </div>
+        </div>
+        <div className="preview-status">
+          <span className="status-burn">8</span>
+          <span className="status-active">2 active</span>
+        </div>
+      </div>
+      <div className="preview-tabs" aria-hidden="true">
+        <span className="is-active">Dashboard</span>
+        <span>Limits</span>
+        <span>Schedule</span>
+        <span>Settings</span>
+      </div>
+      <div className="preview-stat-grid">
+        <div>
+          <span>Screen time</span>
+          <strong>2h 18m</strong>
+          <em>-34m</em>
+        </div>
+        <div>
+          <span>Visits</span>
+          <strong>37</strong>
+          <em>-22%</em>
+        </div>
+        <div>
+          <span>Snoozes</span>
+          <strong>3</strong>
+          <em>Today</em>
+        </div>
+      </div>
+      <div className="preview-filter">Today</div>
+      <div className="preview-card active-blocks">
+        <span className="preview-label">Active blocks</span>
+        <div className="preview-row">
+          <div>
+            <strong>youtube.com</strong>
+            <span>Daily limit reached</span>
+          </div>
+          <em>0m left</em>
+        </div>
+        <div className="preview-row">
+          <div>
+            <strong>reddit.com</strong>
+            <span>Focus block active until 5:00 PM</span>
+          </div>
+          <em>42m</em>
+        </div>
+      </div>
+      <div className="preview-bottom-grid">
+        <div className="preview-card rank-card">
+          <span className="preview-label">Time spent</span>
+          <div className="rank-line"><strong>1</strong><span>youtube.com</span><em>1h 02m</em></div>
+          <div className="preview-meter"><span style={{ width: "86%" }} /></div>
+          <div className="rank-line"><strong>2</strong><span>reddit.com</span><em>34m</em></div>
+          <div className="preview-meter"><span style={{ width: "58%" }} /></div>
+        </div>
+        <div className="preview-card chart-card">
+          <span className="preview-label">Hourly usage</span>
+          <div className="preview-chart" aria-hidden="true">
+            {[18, 26, 12, 8, 24, 46, 58, 72, 49, 76, 61, 44, 32, 27, 20, 14].map((height, index) => (
+              <span key={index} style={{ height: `${height}%` }} />
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function ProofStrip() {
+function ProductStage() {
   return (
-    <section className="proof-strip" aria-label="Product trust signals">
-      {proofItems.map(([title, detail]) => (
-        <div className="proof-item" key={title}>
-          <strong>{title}</strong>
-          <span>{detail}</span>
-        </div>
-      ))}
-    </section>
+    <div className="product-stage" aria-label="Saturn product preview">
+      <div className="device-frame">
+        <DashboardPreview />
+      </div>
+    </div>
   );
 }
 
@@ -229,19 +284,17 @@ function FrictionDemo() {
     <section className="friction-section">
       <div className="friction-copy">
         <span className="section-kicker">Why it works</span>
-        <h2>Add a pause between impulse and action.</h2>
+        <h2>Saturn adds a pause between impulse and action</h2>
         <p>
-          Most distraction starts as muscle memory: type a URL, open a feed, forget why you were
-          there. Screen Time Manager interrupts that pattern with enough friction to make the next
-          click intentional.
+          Most distractions are unconcious. Saturn adds a moment to notice the habit before it takes over.
         </p>
       </div>
       <div className="friction-demo" aria-label="Friction flow example">
         <div className="browser-bar">
-          <span />
-          <span />
-          <span />
           <strong>youtube.com</strong>
+          <span />
+          <span />
+          <span />
         </div>
         <div className="intervention-card">
           <Icon name="pause" />
@@ -252,7 +305,7 @@ function FrictionDemo() {
         </div>
         <div className="choice-row">
           <span>Return to task</span>
-          <span>Adjust rule</span>
+          <span>Close tab</span>
         </div>
       </div>
     </section>
@@ -272,7 +325,7 @@ function ProductWalkthrough() {
     <section className="walkthrough-section" id="walkthrough">
       <div className="section-heading">
         <span className="section-kicker">Product walkthrough</span>
-        <h2>See the extension doing the work.</h2>
+        <h2>Not convinced? See for yourself</h2>
         <p>
           The strongest rules are the ones you can understand at a glance: what is blocked, why it
           is blocked, and how much attention the pause is protecting.
@@ -299,42 +352,70 @@ function ProductWalkthrough() {
   );
 }
 
-function Calculator() {
-  const [hours, setHours] = useState(4);
-  const updateHours = (event) => setHours(Number(event.currentTarget.value));
-  const stats = useMemo(() => {
-    const weekly = hours * 7 * 0.25;
-    return {
-      weekly: weekly.toFixed(1),
-      yearly: Math.round((weekly * 52) / 24)
-    };
-  }, [hours]);
-
+function JourneySystem() {
   return (
-    <GlowCard className="calculator-card">
-      <div>
-        <span className="section-kicker">Time calculator</span>
-        <h2>What would a 25% reduction give back?</h2>
+    <GlowCard className="journey-card">
+      <div className="journey-header">
+        <span className="journey-kicker">Planet journey system</span>
+        <h2>
+          Your reclaimed time becomes a journey you can <span>see.</span>
+        </h2>
+        <p>Turn focus into progress. Every minute reclaimed moves you forward.</p>
       </div>
-      <div className="range-readout">{hours}h / day</div>
-      <input
-        aria-label="Distracting browsing hours per day"
-        min="1"
-        max="12"
-        step="1"
-        type="range"
-        value={hours}
-        onChange={updateHours}
-        onInput={updateHours}
-      />
-      <div className="calc-stats">
+
+      <div className="journey-visual" aria-label="Journey progress from Earth toward the Moon">
+        <div className="journey-planet journey-planet-start">
+          <span className="journey-planet-icon">
+            <img src="/planets/earth.png" alt="" />
+          </span>
+          <strong>Earth</strong>
+        </div>
+        <div className="journey-path">
+          <img className="journey-path-image" src="/planets/mission-path.png" alt="" aria-hidden="true" />
+          <img className="journey-rocket" src="/planets/rocket-cutout.png" alt="" />
+        </div>
+        <div className="journey-planet journey-planet-next">
+          <span className="journey-planet-icon">
+            <img src="/planets/moon.png" alt="" />
+          </span>
+          <strong>Moon</strong>
+        </div>
+        <div className="journey-future-route" aria-label="Future journey destinations">
+          <span className="future-segment" aria-hidden="true"></span>
+          <span className="journey-future-stop">
+            <img src="/planets/mars.png" alt="Mars" />
+          </span>
+          <span className="future-segment" aria-hidden="true"></span>
+          <span className="journey-future-stop">
+            <img src="/planets/jupiter.png" alt="Jupiter" />
+          </span>
+          <span className="future-segment" aria-hidden="true"></span>
+          <span className="journey-future-stop journey-future-stop-saturn">
+            <img src="/planets/saturn-timeline.png" alt="Saturn" />
+          </span>
+        </div>
+      </div>
+
+      <div className="journey-explainer">
         <div>
-          <strong>{stats.weekly}h</strong>
-          <span>saved each week</span>
+          <span className="journey-info-icon" aria-hidden="true">
+            <img src="/planets/rocket-cutout.png" alt="" />
+          </span>
+          <strong>How you travel</strong>
+          <span>
+            Every blocked distraction and minute reclaimed pushes your rocket farther through the
+            solar system.
+          </span>
         </div>
         <div>
-          <strong>{stats.yearly}</strong>
-          <span>days reclaimed yearly</span>
+          <span className="journey-info-icon" aria-hidden="true">
+            <img src="/planets/saturn-app-icon-128.png" alt="" />
+          </span>
+          <strong>Why it matters</strong>
+          <span>
+            Instead of watching a number increase, you will watch your focus carry you from planet
+            to planet.
+          </span>
         </div>
       </div>
     </GlowCard>
@@ -345,15 +426,15 @@ export default function App() {
   return (
     <main className="prototype-shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="Screen Time Manager home">
-          <img src="/new_logo.png" alt="" />
-          <span>Screen Time Manager</span>
+        <a className="brand" href="#top" aria-label="Saturn home">
+          <img src="/planets/saturn-app-icon-128.png" alt="" />
+          <span>Saturn</span>
         </a>
         <nav aria-label="Prototype navigation">
           <a href="#how-it-works">How it works</a>
           <a href="#features">Features</a>
           <a href="#walkthrough">Product</a>
-          <a href="#calculator">Calculator</a>
+          <a href="#journey">Journey</a>
           <a href="#faq">FAQ</a>
         </nav>
         <a className="button button-primary" href={storeUrl} target="_blank" rel="noreferrer">
@@ -363,18 +444,17 @@ export default function App() {
 
       <section className="hero" id="top">
         <div className="hero-copy">
-          <h1>Block distracting websites. Take back your focus.</h1>
+          <h1>Take back your <span>focus</span> with <span>Saturn</span></h1>
+          <p className="hero-lede">
+            Saturn helps you block distracting sites, set daily limits, and understand where your
+            time goes right from Chrome, with no account required.
+          </p>
           <div className="hero-actions">
             <a className="button button-primary" href={storeUrl} target="_blank" rel="noreferrer">
               Add to Chrome
             </a>
-            <a className="button button-secondary" href="#how-it-works">See how it works</a>
+            <a className="button button-secondary" href="#journey">See the journey</a>
           </div>
-          <p className="hero-lede">
-            Add the websites that pull you off task, set limits or focus blocks, and let
-            Screen Time Manager enforce them right from Chrome.
-          </p>
-          <p className="hero-note">Free to install. Choose the sites that distract you and set your own rules.</p>
           <ul className="hero-points" aria-label="Quick setup">
             {heroPoints.map(([title, detail]) => (
               <li key={title}>
@@ -387,15 +467,13 @@ export default function App() {
         <ProductStage />
       </section>
 
-      <ProofStrip />
-
       <section className="problem-section">
         <div className="problem-copy">
           <span className="section-kicker">The quick check is the trap</span>
-          <h2>Distraction starts before you notice it.</h2>
+          <h2>Distraction starts before you notice it</h2>
           <p>
             You open YouTube for one video. You check Reddit for a minute. You glance at social
-            media between assignments. Screen Time Manager adds the friction you need before those
+            media between assignments. Saturn adds the friction you need before those
             quick visits become a habit.
           </p>
         </div>
@@ -419,8 +497,8 @@ export default function App() {
       <section className="reviews-section" aria-labelledby="reviews-title">
         <div className="section-heading">
           <span className="section-kicker">What users notice</span>
-          <h2 id="reviews-title">A small pause can change the whole session.</h2>
-          <p>People do not need more guilt. They need a moment where the automatic click becomes visible.</p>
+          <h2 id="reviews-title">A small reminder can change everything</h2>
+          <p>You don't need another guilt trip. You need a moment where the automatic click becomes visible.</p>
         </div>
       </section>
 
@@ -429,7 +507,7 @@ export default function App() {
       <section className="flow-section" id="how-it-works">
         <div className="section-heading">
           <span className="section-kicker">How it works</span>
-          <h2>Set the rule once. Let the extension push back.</h2>
+          <h2>Set the rule once. Let Saturn do the rest</h2>
         </div>
         <div className="step-track">
           {steps.map(([number, title, detail]) => (
@@ -445,7 +523,7 @@ export default function App() {
       <section className="feature-section" id="features">
         <div className="section-heading">
           <span className="section-kicker">Features</span>
-          <h2>Simple tools for browser-based focus.</h2>
+          <h2>Simple to use, powerful to customize</h2>
           <p>Clean controls, useful stats, and website limits that stay out of the way until you need them.</p>
         </div>
         <div className="feature-grid">
@@ -461,12 +539,16 @@ export default function App() {
         </div>
       </section>
 
+      <section className="journey-section" id="journey">
+        <JourneySystem />
+      </section>
+
       <ProductWalkthrough />
 
       <section className="credibility-section" aria-labelledby="credibility-title">
         <div className="section-heading">
           <span className="section-kicker">Built for real life</span>
-          <h2 id="credibility-title">Strict when it matters. Flexible when life changes.</h2>
+          <h2 id="credibility-title-1">Strict when it matters, flexible when life changes</h2>
           <p>Good focus tools should help without turning your browser into a punishment system.</p>
         </div>
         <div className="credibility-grid">
@@ -479,15 +561,15 @@ export default function App() {
         </div>
       </section>
 
-      <section className="calculator-section" id="calculator">
-        <Calculator />
-        <div className="calculator-copy">
-          <span className="section-kicker">Estimate the upside</span>
-          <h2>Small changes become real hours.</h2>
-          <p>
-            Drag the slider to estimate how much distracting browsing you could reclaim by cutting
-            unplanned screen time by just 25%.
-          </p>
+      <section className="final-cta">
+        <span className="section-kicker">Ready to focus?</span>
+        <h2>Start with one distracting site</h2>
+        <p>Add Saturn to Chrome, choose the site that pulls you off task most often, and give your next focus session a stronger boundary.</p>
+        <div className="cta-actions">
+          <a className="button button-primary" href={storeUrl} target="_blank" rel="noreferrer">
+            Add to Chrome
+          </a>
+          <a className="button button-secondary" href={internalLinks.privacy}>Read privacy policy</a>
         </div>
       </section>
 
@@ -495,7 +577,6 @@ export default function App() {
         <div className="section-heading">
           <span className="section-kicker">FAQ</span>
           <h2 id="faq-title">Questions before you install?</h2>
-          <p>Short answers for the things people usually want to know before adding a focus extension.</p>
         </div>
         <div className="faq-list">
           {faqs.map(([question, answer]) => (
@@ -510,9 +591,9 @@ export default function App() {
       <section className="privacy-section">
         <div>
           <span className="section-kicker">Privacy and trust</span>
-          <h2>Built to be simple and privacy-conscious.</h2>
+          <h2>Built to be simple and privacy-conscious</h2>
           <p>
-            Screen Time Manager only tracks the activity needed to provide website blocking,
+            Saturn only tracks the activity needed to provide website blocking,
             limits, and usage stats. The product is built for personal focus, not surveillance.
           </p>
         </div>
@@ -523,37 +604,25 @@ export default function App() {
         </ul>
       </section>
 
-      <section className="final-cta">
-        <span className="section-kicker">Ready to focus?</span>
-        <h2>Start with one distracting site.</h2>
-        <p>Add Screen Time Manager to Chrome, choose the site that pulls you off task most often, and give your next focus session a stronger boundary.</p>
-        <div className="cta-actions">
-          <a className="button button-primary" href={storeUrl} target="_blank" rel="noreferrer">
-            Add to Chrome
-          </a>
-          <a className="button button-secondary" href={internalLinks.privacy}>Read privacy policy</a>
-        </div>
-      </section>
-
       <section className="feedback-section">
         <div>
           <span className="section-kicker">Feedback</span>
-          <h2>Help shape Screen Time Manager.</h2>
+          <h2>Help shape Saturn</h2>
           <p>Found a bug, want a feature, or have an idea for making the extension better?</p>
         </div>
-        <a className="button button-secondary" href={internalLinks.feedback}>Send feedback</a>
+        <a className="button button-secondary" href={feedbackUrl} target="_blank" rel="noreferrer">Send feedback</a>
       </section>
 
       <footer className="site-footer">
-        <a className="brand" href="#top" aria-label="Screen Time Manager home">
-          <img src="/new_logo.png" alt="" />
-          <span>Screen Time Manager</span>
+        <a className="brand" href="#top" aria-label="Saturn home">
+          <img src="/planets/saturn-app-icon-128.png" alt="" />
+          <span>Saturn</span>
         </a>
         <nav aria-label="Footer navigation">
           <a href={storeUrl} target="_blank" rel="noreferrer">Chrome Web Store</a>
           <a href={internalLinks.privacy}>Privacy</a>
           <a href={internalLinks.changelog}>Changelog</a>
-          <a href={internalLinks.feedback}>Feedback</a>
+          <a href={feedbackUrl} target="_blank" rel="noreferrer">Feedback</a>
         </nav>
       </footer>
     </main>

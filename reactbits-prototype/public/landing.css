@@ -1200,6 +1200,91 @@ h3 {
   }
 }
 
+/* Saturn shared static-page theme */
+:root {
+  --primary: #ff8a61;
+  --primary-alt: #ffb18a;
+  --primary-dark: #d46a44;
+  --background: #120a08;
+  --background-muted: #1b0f0d;
+  --card: rgba(247, 231, 214, 0.075);
+  --card-soft: rgba(247, 231, 214, 0.045);
+  --blue-soft: rgba(255, 177, 138, 0.13);
+  --text-primary: #fff8ee;
+  --text-secondary: rgba(247, 231, 214, 0.72);
+  --text-muted: rgba(247, 231, 214, 0.58);
+  --border-light: rgba(247, 231, 214, 0.14);
+  --border-medium: rgba(255, 177, 138, 0.34);
+  --shadow-sm: 0 16px 36px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 30px 82px rgba(0, 0, 0, 0.42);
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+}
+
+body {
+  background:
+    linear-gradient(118deg, rgba(212, 106, 68, 0.16) 0%, rgba(212, 106, 68, 0.055) 34%, transparent 58%),
+    linear-gradient(180deg, #19110f 0%, #100807 48%, #1a100d 100%);
+  font-family: "Space Grotesk", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(247, 231, 214, 0.026) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(247, 231, 214, 0.022) 1px, transparent 1px);
+  background-size: 72px 72px, 72px 72px;
+  opacity: 0.68;
+  pointer-events: none;
+}
+
+.site-header,
+.site-footer {
+  border-color: rgba(247, 231, 214, 0.12);
+  background:
+    linear-gradient(180deg, rgba(247, 231, 214, 0.06), rgba(247, 231, 214, 0.022)),
+    rgba(18, 10, 8, 0.82);
+}
+
+.brand img {
+  border-radius: 0;
+  box-shadow: none;
+  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.28));
+}
+
+.site-nav {
+  background: rgba(247, 231, 214, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.site-nav a:hover,
+.site-nav a:focus-visible {
+  background: rgba(255, 177, 138, 0.12);
+}
+
+.button-primary {
+  color: #fff8ee;
+  border-color: rgba(255, 197, 158, 0.76);
+  background: linear-gradient(135deg, rgba(255, 177, 112, 0.98), rgba(230, 96, 58, 0.94) 48%, rgba(142, 54, 38, 0.96));
+  box-shadow: 0 16px 38px rgba(230, 96, 58, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.button-primary:hover,
+.button-primary:focus-visible {
+  background: linear-gradient(135deg, rgba(255, 191, 128, 1), rgba(244, 111, 68, 0.96) 48%, rgba(164, 65, 43, 0.98));
+}
+
+.button-secondary,
+.page-content article {
+  background:
+    linear-gradient(180deg, rgba(247, 231, 214, 0.064), rgba(247, 231, 214, 0.024)),
+    rgba(18, 10, 8, 0.64);
+}
+
 /* Prototype direction port: luminous product-first landing system. */
 :root {
   --primary: #74b6ff;
@@ -1557,4 +1642,66 @@ h2 {
   .trust-strip .proof-card {
     min-height: 104px;
   }
+}
+
+/* Saturn final static-page overrides */
+:root {
+  --primary: #ff8a61;
+  --primary-alt: #ffb18a;
+  --primary-dark: #d46a44;
+  --background: #120a08;
+  --background-muted: #1b0f0d;
+  --card: rgba(247, 231, 214, 0.075);
+  --card-soft: rgba(247, 231, 214, 0.045);
+  --blue-soft: rgba(255, 177, 138, 0.13);
+  --text-primary: #fff8ee;
+  --text-secondary: rgba(247, 231, 214, 0.72);
+  --text-muted: rgba(247, 231, 214, 0.58);
+  --border-light: rgba(247, 231, 214, 0.14);
+  --border-medium: rgba(255, 177, 138, 0.34);
+  --shadow-sm: 0 16px 36px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 30px 82px rgba(0, 0, 0, 0.42);
+}
+
+body {
+  background:
+    linear-gradient(118deg, rgba(212, 106, 68, 0.16) 0%, rgba(212, 106, 68, 0.055) 34%, transparent 58%),
+    linear-gradient(180deg, #19110f 0%, #100807 48%, #1a100d 100%);
+}
+
+.site-header,
+.site-footer {
+  border-color: rgba(247, 231, 214, 0.12);
+  background:
+    linear-gradient(180deg, rgba(247, 231, 214, 0.06), rgba(247, 231, 214, 0.022)),
+    rgba(18, 10, 8, 0.82);
+}
+
+.brand img {
+  border-radius: 0;
+  box-shadow: none;
+  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.28));
+}
+
+.site-nav {
+  background: rgba(247, 231, 214, 0.045);
+}
+
+.site-nav a:hover,
+.site-nav a:focus-visible {
+  background: rgba(255, 177, 138, 0.12);
+}
+
+.button-primary {
+  color: #fff8ee;
+  border-color: rgba(255, 197, 158, 0.76);
+  background: linear-gradient(135deg, rgba(255, 177, 112, 0.98), rgba(230, 96, 58, 0.94) 48%, rgba(142, 54, 38, 0.96));
+  box-shadow: 0 16px 38px rgba(230, 96, 58, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.button-secondary,
+.page-content article {
+  background:
+    linear-gradient(180deg, rgba(247, 231, 214, 0.064), rgba(247, 231, 214, 0.024)),
+    rgba(18, 10, 8, 0.64);
 }

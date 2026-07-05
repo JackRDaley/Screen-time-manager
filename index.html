@@ -3,28 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Screen Time Manager - Website Blocker & Screen Time Tracker for Chrome</title>
+  <title>Saturn - Website Blocker & Screen Time Tracker for Chrome</title>
   <meta
     name="description"
-    content="Screen Time Manager is a Chrome extension that helps you block distracting websites, set daily limits, and understand your browsing habits."
+    content="Saturn is a Chrome extension that helps you block distracting websites, set daily limits, and understand your browsing habits."
   />
-  <meta property="og:title" content="Screen Time Manager - Block distracting websites in Chrome" />
+  <meta property="og:title" content="Saturn - Block distracting websites in Chrome" />
   <meta
     property="og:description"
     content="Set limits, block distracting sites, and understand where your time goes with a simple Chrome extension."
   />
   <meta property="og:type" content="website" />
-  <meta property="og:image" content="/new_logo.png" />
-  <link rel="icon" href="/new_logo.png" />
-  <link rel="stylesheet" href="/landing.css?v=prototype-port-4" />
+  <meta property="og:image" content="/assets/planets/saturn-app-icon-128.png" />
+  <link rel="icon" href="/assets/planets/saturn-app-icon-128.png" />
+  <link rel="stylesheet" href="/landing.css" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
 
   <header class="site-header">
-    <a class="brand" href="/" aria-label="Screen Time Manager home">
-      <img src="/new_logo.png" alt="" />
-      <span>Screen Time Manager</span>
+    <a class="brand" href="/" aria-label="Saturn home">
+      <img src="/assets/planets/saturn-app-icon-128.png" alt="" />
+      <span>Saturn</span>
     </a>
 
     <nav class="site-nav" aria-label="Main navigation">
@@ -45,21 +45,21 @@
         <p class="eyebrow">Chrome focus extension</p>
         <h1>Make every distracting tab hit a speed bump.</h1>
         <p class="hero-lede">
-          Screen Time Manager adds calm friction to distracting websites, makes repeat visits
-          visible, and helps you keep browser time intentional.
+          Saturn helps you block distracting sites, set daily limits, and understand
+          where your time goes right from Chrome.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo" target="_blank" rel="noreferrer">
             Add to Chrome
           </a>
-          <a class="button button-secondary" href="#how-it-works">See how it works</a>
+          <a class="button button-secondary" href="#journey">See the journey</a>
         </div>
       </div>
 
       <figure class="extension-render">
         <img
-          src="/assets/extension-dashboard-render.png"
-          alt="Screen Time Manager extension dashboard showing screen time, visits, active blocks, ranked websites, and an hourly usage chart"
+          src="/assets/saturn-extension-dashboard-render.png"
+          alt="Saturn extension dashboard showing screen time, visits, active blocks, ranked websites, and an hourly usage chart"
           width="1120"
           height="1560"
           decoding="async"
@@ -82,79 +82,45 @@
           <dt>3</dt>
           <dd>snoozes today</dd>
         </div>
+        <div>
+          <dt>Private by design</dt>
+          <dd>Built around local controls and user-owned activity data.</dd>
+        </div>
       </dl>
     </section>
 
-    <section class="problem-section section-shell reveal">
-      <div class="problem-copy">
-        <p class="eyebrow">The problem</p>
-        <h2>Small checks become lost time.</h2>
+    <section class="journey-system section-shell reveal" id="journey">
+      <div class="journey-copy">
+        <p class="eyebrow">Planet journey system</p>
+        <h2>Your reclaimed time becomes a journey you can see.</h2>
         <p>
-          You open YouTube for one video. You check Reddit for a minute. You glance at social media
-          between assignments. Screen Time Manager adds the friction you need before those quick
-          visits become a habit.
+          Saturn turns avoided distractions into visible progress. When blocks,
+          limits, and focus sessions help you reclaim time, your rocket moves toward the next
+          planet instead of leaving that effort buried in a stats table.
+        </p>
+        <p>
+          The journey is there to make progress feel concrete. It gives you a small reward loop for
+          choosing focus, while still keeping the real goal clear: fewer automatic visits, more
+          intentional time, and a dashboard that shows what changed.
         </p>
       </div>
-      <div class="attention-loop" aria-hidden="true">
-        <div class="loop-row">
-          <span class="loop-dot">1</span>
-          <div>
-            <strong>Open a tab</strong>
-            <span>youtube.com</span>
-          </div>
+      <div class="journey-visual" aria-label="Journey progress from Earth toward the Moon">
+        <div class="journey-planet journey-planet-start">
+          <img src="/assets/planets/earth.png" alt="" aria-hidden="true" />
+          <span>Start</span>
         </div>
-        <div class="loop-row">
-          <span class="loop-dot">2</span>
-          <div>
-            <strong>Quick check</strong>
-            <span>37 visits today</span>
-          </div>
+        <div class="journey-path">
+          <img class="journey-path-line" src="/assets/planets/mission-path.png" alt="" aria-hidden="true" />
+          <img class="journey-rocket" src="/assets/planets/rocket-cutout.png" alt="" aria-hidden="true" />
         </div>
-        <div class="loop-row loop-row-alert">
-          <span class="loop-dot">3</span>
-          <div>
-            <strong>Pause the loop</strong>
-            <span>Blocked before it snowballs</span>
-          </div>
+        <div class="journey-planet journey-planet-next">
+          <img src="/assets/planets/moon.png" alt="" aria-hidden="true" />
+          <span>Next planet</span>
         </div>
-        <div class="loop-meter">
-          <span></span>
-          <span></span>
-          <span></span>
+        <div class="journey-rule">
+          <strong>How progress moves</strong>
+          <span>Blocks held, limits respected, and focus time reclaimed advance the route.</span>
         </div>
-      </div>
-    </section>
-
-    <section class="how-section section-shell reveal" id="how-it-works">
-      <div class="section-heading align-left">
-        <p class="eyebrow">How it works</p>
-        <h2>Set limits once. Let us do the rest.</h2>
-      </div>
-      <div class="steps">
-        <article>
-          <div class="step-heading">
-            <span>1</span>
-            <img src="/assets/icons/arrow-pointer-solid-full.svg" alt="" />
-            <h3>Add distracting websites</h3>
-          </div>
-          <p>Add websites like YouTube, Reddit, TikTok, Instagram, X, or any website that pulls you off task.</p>
-        </article>
-        <article>
-          <div class="step-heading">
-            <span>2</span>
-            <img src="/assets/icons/clock-regular-full.svg" alt="" />
-            <h3>Set limits or focus blocks</h3>
-          </div>
-          <p>Choose daily limits, scheduled blocks, or stricter focus rules for each domain.</p>
-        </article>
-        <article>
-          <div class="step-heading">
-            <span>3</span>
-            <img src="/assets/icons/circle-pause-regular-full.svg" alt="" />
-            <h3>Stay focused</h3>
-          </div>
-          <p>Screen Time Manager blocks distractions and helps you see how often you try to return.</p>
-        </article>
       </div>
     </section>
 
@@ -215,8 +181,63 @@
           <span>Evening homework routine</span>
         </article>
         <article>
-          <p>"The activity dashboard turns vague screen-time guilt into something I can actually adjust."</p>
-          <span>Weekly usage review</span>
+          <div class="step-heading">
+            <span>3</span>
+            <h3>Track your progress</h3>
+          </div>
+          <p>Use the dashboard to see time spent, blocked visits, active rules, and useful patterns.</p>
+        </article>
+        <article>
+          <div class="step-heading">
+            <span>4</span>
+            <h3>See time saved</h3>
+          </div>
+          <p>Positive stats show saved time, avoided visits, and days where your limits held.</p>
+        </article>
+        <article>
+          <div class="step-heading">
+            <span>5</span>
+            <h3>Stay in control</h3>
+          </div>
+          <p>Tracking exists to help you manage your own browsing, with privacy-conscious controls.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-block screenshots-section reveal" id="screenshots">
+      <div class="section-heading">
+        <p class="eyebrow">Product tour</p>
+        <h2>What you manage inside the extension.</h2>
+        <p>Short workflows, clear stats, and controls that stay close to the browser.</p>
+      </div>
+      <div class="screenshot-grid">
+        <article class="screenshot-card">
+          <img src="/assets/saturn-extension-dashboard-render.png" alt="Saturn dashboard with stats and website rankings" loading="lazy" />
+          <div>
+            <h3>Dashboard stats</h3>
+            <p>Review screen time, visits, avoided opens, active blocks, and hourly usage in one place.</p>
+          </div>
+        </article>
+        <article class="screenshot-card">
+          <img src="/assets/saturn-extension-limits-render.png" alt="Saturn controls for adding website limits" loading="lazy" />
+          <div>
+            <h3>Website limits</h3>
+            <p>Add domains, set daily minute budgets, and choose how firm the limit should be.</p>
+          </div>
+        </article>
+        <article class="screenshot-card">
+          <img src="/assets/saturn-extension-schedule-render.png" alt="Saturn controls for scheduled focus blocks" loading="lazy" />
+          <div>
+            <h3>Schedule blocks</h3>
+            <p>Create recurring focus windows for work, study, evenings, or any routine that needs guardrails.</p>
+          </div>
+        </article>
+        <article class="screenshot-card">
+          <img src="/assets/saturn-extension-dashboard-render.png" alt="Saturn insights and time saved stats" loading="lazy" />
+          <div>
+            <h3>Insights and time saved</h3>
+            <p>See useful patterns plus positive outcomes like saved time and avoided distracting visits.</p>
+          </div>
         </article>
       </div>
     </section>
@@ -284,11 +305,13 @@
           <p class="eyebrow">Privacy and trust</p>
           <h2>Built to be simple and privacy-conscious.</h2>
           <p>
-            Screen Time Manager only tracks the activity needed to provide website blocking,
+            Saturn only tracks the activity needed to provide website blocking,
             limits, and usage stats. The product is built for personal focus, not surveillance.
+            Your browsing data is used to help you understand and manage your own time.
           </p>
         </div>
         <ul class="trust-list">
+          <li>Activity tracking is for your dashboard and limits</li>
           <li>No unnecessary tracking</li>
           <li>No selling user data</li>
           <li>Clear domain-based controls</li>
@@ -297,11 +320,37 @@
       </div>
     </section>
 
+    <section class="section-block testimonials-section reveal">
+      <div class="section-heading">
+        <p class="eyebrow">User feedback</p>
+        <h2>Clear value without the clutter.</h2>
+        <p>Placeholder testimonials below can be swapped for real Chrome Web Store reviews later.</p>
+      </div>
+      <div class="testimonial-grid">
+        <article>
+          <p>&ldquo;The dashboard made it obvious where my time was going.&rdquo;</p>
+          <span>Student user</span>
+        </article>
+        <article>
+          <p>&ldquo;The schedule blocks helped me stop opening distracting sites during work.&rdquo;</p>
+          <span>Remote worker</span>
+        </article>
+        <article>
+          <p>&ldquo;I like that it gives me useful stats without being overwhelming.&rdquo;</p>
+          <span>Chrome user</span>
+        </article>
+        <article>
+          <p>&ldquo;Daily limits made quick checks feel intentional again.&rdquo;</p>
+          <span>Focus tester</span>
+        </article>
+      </div>
+    </section>
+
     <section class="section-block updates-section reveal">
       <div class="section-heading">
         <p class="eyebrow">Product updates</p>
         <h2>Actively improving.</h2>
-        <p>Screen Time Manager is being updated with clearer activity stats and a cleaner focus experience.</p>
+        <p>Saturn is being updated with clearer activity stats and a cleaner focus experience.</p>
       </div>
       <div class="update-grid">
         <article>
@@ -325,9 +374,18 @@
       </div>
     </section>
 
+    <section class="feedback-section section-shell reveal">
+      <div>
+        <p class="eyebrow">Feedback</p>
+        <h2>Help shape Saturn.</h2>
+        <p>Found a bug, want a feature, or have an idea for making the extension better?</p>
+      </div>
+      <a class="button button-secondary" href="/feedback">Send feedback</a>
+    </section>
+
     <section class="final-cta section-shell reveal">
       <p class="eyebrow">Ready to focus?</p>
-      <h2>Add Screen Time Manager to Chrome.</h2>
+      <h2>Add Saturn to Chrome.</h2>
       <p>Start blocking the sites that pull you off task and see where your attention is going.</p>
       <div class="hero-actions">
         <a class="button button-primary" href="https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo" target="_blank" rel="noreferrer">
@@ -350,8 +408,8 @@
   <footer class="site-footer">
     <div>
       <a class="brand footer-brand" href="/">
-        <img src="/new_logo.png" alt="" />
-        <span>Screen Time Manager</span>
+        <img src="/assets/planets/saturn-app-icon-128.png" alt="" />
+        <span>Saturn</span>
       </a>
     </div>
     <nav aria-label="Footer navigation">

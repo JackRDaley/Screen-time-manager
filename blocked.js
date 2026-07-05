@@ -1,5 +1,5 @@
 const params = new URLSearchParams(location.search);
-const { getOrCreateAnalyticsClientId } = globalThis.StmSharedUtils || {};
+const { getOrCreateAnalyticsClientId, getDayKey } = globalThis.StmSharedUtils || {};
 
 // Domain validation to prevent open redirect vulnerability
 function validateDomainParam(raw) {
@@ -39,8 +39,14 @@ const rawDomain = params.get("d");
 const d = validateDomainParam(rawDomain) || "this site";
 const source = params.get("source") || "limit";
 const tier = (params.get("tier") || "lenient").toLowerCase();
+const eventId = params.get("eid") || "";
+const BLOCK_EVENT_TRACKER_KEY = "blockedAnalyticsEvent";
+const BLOCK_RECLAIM_TRACKER_KEY = "saturnBlockReclaimEvent";
+const BLOCK_RECLAIM_STATS_KEY = "saturnBlockReclaimStats";
 const FIRST_BLOCK_REACHED_KEY = "activationFirstBlockReachedAt";
 const BLOCK_ANALYTICS_URL = "https://screen-time-manager.jackster0627.workers.dev/analytics/block-event";
+const ANALYTICS_PRODUCTION_EXTENSION_ID = "pecaajdaecdmikcgfdgldcofdebhfbgo";
+const RECLAIM_MS_PER_BLOCK = 5 * 60 * 1000;
 const TIER_LABELS = {
     lenient: "Lenient",
     standard: "Standard",
@@ -80,13 +86,17 @@ function blockAnalyticsParams() {
     };
 }
 
+function shouldSendAnalytics() {
+    return chrome.runtime?.id === ANALYTICS_PRODUCTION_EXTENSION_ID;
+}
+
 function setBadgeText() {
     const tierName = normalizedTierName();
     const sourceLabel = source === "scheduled" ? "Scheduled block" : "Limit reached";
     const badge = document.getElementById("badge");
 
     if (badge) {
-        badge.textContent = `${sourceLabel} · ${TIER_LABELS[tierName]}`;
+        badge.textContent = `${sourceLabel} - ${TIER_LABELS[tierName]}`;
     }
 }
 
@@ -104,6 +114,44 @@ function trackBlockedPageAction(action) {
             ...blockAnalyticsParams()
         }
     }).catch(() => null);
+}
+
+function formatClockTime(rawTime) {
+    const match = String(rawTime || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return "";
+
+    const date = new Date();
+    date.setHours(Number(match[1]), Number(match[2]), 0, 0);
+    return date.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
+
+function formatScheduledEnd(block) {
+    const raw = block?.endsAt || block?.endAt || block?.endTime;
+    if (!raw) return "";
+
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0) {
+        return new Date(numeric).toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit"
+        });
+    }
+
+    const clock = formatClockTime(raw);
+    if (clock) return clock;
+
+    const date = new Date(raw);
+    if (!Number.isNaN(date.getTime())) {
+        return date.toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit"
+        });
+    }
+
+    return "";
 }
 
 async function trackFirstBlockReached() {
@@ -124,6 +172,7 @@ async function trackFirstBlockReached() {
 
 async function trackBlockedPageView() {
     if (typeof getOrCreateAnalyticsClientId !== "function") return;
+    if (!shouldSendAnalytics()) return;
 
     try {
         const clientId = await getOrCreateAnalyticsClientId(chrome.storage.local);
@@ -132,6 +181,7 @@ async function trackBlockedPageView() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 clientId,
+                extensionId: chrome.runtime?.id || "",
                 extensionVersion: chrome.runtime.getManifest?.().version || "unknown",
                 source: normalizedBlockSource(),
                 tier: normalizedTierName(),
@@ -140,6 +190,50 @@ async function trackBlockedPageView() {
         });
     } catch {
         // Analytics should never interrupt extension behavior.
+    }
+}
+
+async function trackLocalBlockReclaim() {
+    if (normalizedBlockSource() === "scheduled") return;
+
+    const trackerKey = `${BLOCK_RECLAIM_TRACKER_KEY}:${eventId || location.href}`;
+    try {
+        if (sessionStorage.getItem(trackerKey)) return;
+        sessionStorage.setItem(trackerKey, "1");
+    } catch {
+        // Best effort only; local metrics should never affect the block page.
+    }
+
+    try {
+        const day = typeof getDayKey === "function"
+            ? getDayKey()
+            : new Date().toISOString().slice(0, 10);
+        const data = await chrome.storage.local.get([BLOCK_RECLAIM_STATS_KEY]);
+        const history = data[BLOCK_RECLAIM_STATS_KEY] || {};
+        const current = history[day] || { count: 0, estimatedMs: 0, bySource: {}, byTier: {} };
+        const sourceKey = normalizedBlockSource();
+        const tierKey = normalizedTierName();
+
+        await chrome.storage.local.set({
+            [BLOCK_RECLAIM_STATS_KEY]: {
+                ...history,
+                [day]: {
+                    ...current,
+                    count: Number(current.count || 0) + 1,
+                    estimatedMs: Number(current.estimatedMs || 0) + RECLAIM_MS_PER_BLOCK,
+                    bySource: {
+                        ...(current.bySource || {}),
+                        [sourceKey]: Number(current.bySource?.[sourceKey] || 0) + 1
+                    },
+                    byTier: {
+                        ...(current.byTier || {}),
+                        [tierKey]: Number(current.byTier?.[tierKey] || 0) + 1
+                    }
+                }
+            }
+        });
+    } catch {
+        // Best effort only; local metrics should never affect the block page.
     }
 }
 
@@ -639,14 +733,11 @@ if (source === "scheduled") {
     // Show when the block ends
     chrome.storage.local.get(["activeBlocks"], (data) => {
         const block = (data.activeBlocks || []).find((b) => b.domain === d);
-        if (block?.endTime) {
-            const endTime = new Date(block.endTime).toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit"
-            });
-            const el = document.getElementById("blockedUntil");
-            el.textContent = `Session active until ${endTime}`;
-        }
+        const el = document.getElementById("blockedUntil");
+        if (!el) return;
+
+        const endTime = formatScheduledEnd(block);
+        el.textContent = endTime ? `Session active until ${endTime}` : "";
     });
 }
 
@@ -660,4 +751,5 @@ setDomainText();
 setBadgeText();
 renderTierActions();
 trackBlockedPageView();
+trackLocalBlockReclaim();
 trackFirstBlockReached();

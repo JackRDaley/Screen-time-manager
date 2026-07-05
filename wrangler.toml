@@ -9,17 +9,16 @@ head_sampling_rate = 0.1
 [vars]
 WHOP_VERIFY_URL = "https://api.whop.com/api/v1/memberships"
 WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/"
-WHOP_PRODUCT_ID = "prod_1bS0u0o82g327"
+WHOP_PRODUCT_ID = "prod_1bS0uOo82g327"
 WHOP_COMPANY_ID = "biz_EE8NPUFwUpVWma"
 WHOP_ACTIVE_STATUSES = "active,trialing"
-WHOP_PLAN_NAME = "Lifetime Premium"
-WHOP_CHECKOUT_PRICE_CENTS = "500"
-WHOP_LIFETIME_ACCESS = "true"
 TOKEN_TTL_DAYS = "7"
 WHOP_EXTENSION_ID = "oflgdecdopjpkpbnncendjoeohoeomnf"
 # WHOP_PLAN_ID is optional. If omitted, the Worker resolves a plan_x... from WHOP_PRODUCT_ID.
 GA4_MEASUREMENT_ID = "G-E0X1Q14TFL"
 ANALYTICS_DEBUG_LOGS = "false"
+ANALYTICS_PRODUCTION_EXTENSION_IDS = "pecaajdaecdmikcgfdgldcofdebhfbgo"
+ANALYTICS_INTERNAL_EXTENSION_IDS = "oflgdecdopjpkpbnncendjoeohoeomnf"
 
 [[kv_namespaces]]
 binding = "PREMIUM_STATUS"

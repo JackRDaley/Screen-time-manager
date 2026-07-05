@@ -26,6 +26,11 @@ function isTrustedExtensionOrigin(origin) {
     return /^chrome-extension:\/\/[a-p]{32}$/i.test(String(origin || ""));
 }
 
+function extensionIdFromOrigin(origin) {
+    const match = String(origin || "").match(/^chrome-extension:\/\/([a-p]{32})$/i);
+    return match ? match[1].toLowerCase() : "";
+}
+
 const ANALYTICS_ALLOWED_EVENTS = new Set([
     "blocked_page_view",
     "blocked_page_action",
@@ -39,12 +44,10 @@ const ANALYTICS_ALLOWED_EVENTS = new Set([
     "first_limit_created",
     "first_schedule_created",
     "first_block_reached",
-    "insight_presented",
     "insight_viewed",
     "insight_add_limit_clicked",
     "upgrade_clicked",
     "domain_added",
-    "preset_applied",
     "review_prompt_shown",
     "review_prompt_action"
 ]);
@@ -58,24 +61,12 @@ const ANALYTICS_ALLOWED_PARAMS = new Set([
     "trigger",
     "onboarding_step",
     "funnel_version",
-    "error_name",
-    "strict_challenge_game",
-    "preset_id",
-    "rule_type",
-    "created_count",
-    "skipped_count",
-    "conflict_count",
-    "capped_count"
+    "error_name"
 ]);
 
 const ANALYTICS_BLOCK_SOURCES = new Set(["limit", "scheduled", "unknown"]);
 const ANALYTICS_BLOCK_TIERS = new Set(["lenient", "standard", "strict", "immutable", "unknown"]);
-const ANALYTICS_STRICT_CHALLENGE_GAMES = new Set([
-    "gridMemory",
-    "mathProblem",
-    "memorySequence",
-    "typingChallenge"
-]);
+const DEFAULT_ANALYTICS_PRODUCTION_EXTENSION_ID = "pecaajdaecdmikcgfdgldcofdebhfbgo";
 
 function bytesToBase64Url(bytes) {
     let binary = "";
@@ -239,7 +230,7 @@ async function verifyWithWhopOrFallback(token, env) {
                 membership?.product?.title ||
                 membership?.plan?.id ||
                 membership?.company?.title ||
-                defaultPremiumPlanName(env);
+                "Premium";
 
             return {
                 active,
@@ -428,15 +419,6 @@ function whopApiBaseUrl(env) {
     return String(env.WHOP_API_BASE_URL || "https://api.whop.com/api/v1").replace(/\/$/, "");
 }
 
-function defaultPremiumPlanName(env) {
-    return String(env.WHOP_PLAN_NAME || "Lifetime Premium").trim() || "Lifetime Premium";
-}
-
-function whopCheckoutPriceCents(env) {
-    const cents = Number(env.WHOP_CHECKOUT_PRICE_CENTS || 500);
-    return Number.isFinite(cents) && cents > 0 ? Math.round(cents) : 500;
-}
-
 function normalizeWhopPurchaseUrl(value) {
     const raw = String(value || "").trim();
     if (!raw) return "";
@@ -484,23 +466,8 @@ async function resolveWhopCheckoutPlanId(env) {
         const planProductId = plan?.product?.id || plan?.product_id;
         return planProductId === productId && String(plan?.visibility || "").toLowerCase() !== "archived";
     });
-    const oneTimePlan = matchingPlans.find((plan) => {
-        const planType = String(plan?.plan_type || plan?.type || plan?.billing_period || "").toLowerCase();
-        const renewalPeriod = String(plan?.renewal_period || plan?.interval || "").toLowerCase();
-        const priceCents = Number(plan?.price || plan?.price_cents || plan?.amount || plan?.amount_cents);
-        const priceMatches = !Number.isFinite(priceCents) || priceCents === whopCheckoutPriceCents(env);
-        return priceMatches && (
-            planType.includes("one") ||
-            planType.includes("once") ||
-            planType.includes("single") ||
-            planType.includes("lifetime") ||
-            planType.includes("payment") ||
-            renewalPeriod === "one_time" ||
-            renewalPeriod === "lifetime" ||
-            renewalPeriod === "none"
-        );
-    });
-    const selectedPlan = oneTimePlan || matchingPlans[0];
+    const renewalPlan = matchingPlans.find((plan) => String(plan?.plan_type || "").toLowerCase() === "renewal");
+    const selectedPlan = renewalPlan || matchingPlans[0];
     return String(selectedPlan?.id || "");
 }
 
@@ -670,6 +637,48 @@ function sanitizeAnalyticsParams(value) {
     }
 
     return sanitized;
+}
+
+function parseExtensionIdList(value, fallback = []) {
+    const ids = String(value || "")
+        .split(",")
+        .map((id) => id.trim().toLowerCase())
+        .filter(isValidChromeExtensionId);
+
+    return ids.length ? ids : fallback;
+}
+
+function shouldSkipAnalyticsForExtension(env, requestOrigin, body) {
+    const originExtensionId = extensionIdFromOrigin(requestOrigin);
+    const bodyExtensionId = isValidChromeExtensionId(body?.extensionId)
+        ? String(body.extensionId).trim().toLowerCase()
+        : "";
+    const extensionId = originExtensionId || bodyExtensionId;
+
+    if (!extensionId) {
+        return { skip: true, reason: "missing-extension-id" };
+    }
+
+    if (bodyExtensionId && originExtensionId && bodyExtensionId !== originExtensionId) {
+        return { skip: true, reason: "extension-id-mismatch" };
+    }
+
+    const internalIds = parseExtensionIdList(env.ANALYTICS_INTERNAL_EXTENSION_IDS);
+    if (internalIds.includes(extensionId)) {
+        return { skip: true, reason: "internal-extension-id" };
+    }
+
+    const configuredProductionIds = String(env.ANALYTICS_PRODUCTION_EXTENSION_IDS || "").trim();
+    if (configuredProductionIds === "*") {
+        return { skip: false, extensionId };
+    }
+
+    const productionIds = parseExtensionIdList(configuredProductionIds, [DEFAULT_ANALYTICS_PRODUCTION_EXTENSION_ID]);
+    if (!productionIds.includes(extensionId)) {
+        return { skip: true, reason: "non-production-extension-id" };
+    }
+
+    return { skip: false, extensionId };
 }
 
 function shouldLogAnalytics(env) {
@@ -1023,25 +1032,6 @@ function extractWebhookPaymentId(payload) {
     );
 }
 
-function extractWebhookProductId(payload) {
-    return (
-        payload?.data?.product?.id ||
-        payload?.data?.membership?.product?.id ||
-        payload?.data?.payment?.product?.id ||
-        payload?.data?.receipt?.product?.id ||
-        payload?.data?.plan?.product?.id ||
-        payload?.data?.plan?.product_id ||
-        payload?.data?.product_id ||
-        null
-    );
-}
-
-function webhookMatchesConfiguredProduct(payload, env) {
-    const configuredProductId = String(env.WHOP_PRODUCT_ID || "").trim();
-    const webhookProductId = String(extractWebhookProductId(payload) || "").trim();
-    return !configuredProductId || !webhookProductId || webhookProductId === configuredProductId;
-}
-
 async function verifyWhopWebhookSignature(request, rawBody, secret) {
     const secretBytes = parseWebhookSecret(secret);
     const key = await crypto.subtle.importKey(
@@ -1247,29 +1237,32 @@ export default {
             return json({ error: error instanceof Error ? error.message : "Invalid JSON body" }, 400);
         }
 
+        const analyticsSkip = shouldSkipAnalyticsForExtension(env, requestOrigin, body);
+        if (analyticsSkip.skip) {
+            logAnalyticsDebug(env, "[analytics/block-event] skipped", {
+                reason: analyticsSkip.reason,
+                origin: requestOrigin,
+                extensionId: body?.extensionId || null
+            });
+            return json({ ok: true, skipped: true, reason: analyticsSkip.reason }, 200, {
+                "Access-Control-Allow-Origin": requestOrigin,
+                "Vary": "Origin"
+            });
+        }
+
         const clientId = sanitizeAnalyticsText(body?.clientId, "", 128);
         if (!clientId) {
             return json({ error: "Missing clientId" }, 400);
         }
 
-        const strictChallengeGame = sanitizeAnalyticsEnum(
-            body?.challengeGame,
-            ANALYTICS_STRICT_CHALLENGE_GAMES,
-            ""
-        );
-        const blockEventParams = {
-            block_source: sanitizeAnalyticsEnum(body?.source, ANALYTICS_BLOCK_SOURCES),
-            block_tier: sanitizeAnalyticsEnum(body?.tier, ANALYTICS_BLOCK_TIERS),
-            extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32)
-        };
-        if (strictChallengeGame) {
-            blockEventParams.strict_challenge_game = strictChallengeGame;
-        }
-
         const blockEventPayload = {
             eventName: "blocked_page_view",
             clientId,
-            params: blockEventParams
+            params: {
+                block_source: sanitizeAnalyticsEnum(body?.source, ANALYTICS_BLOCK_SOURCES),
+                block_tier: sanitizeAnalyticsEnum(body?.tier, ANALYTICS_BLOCK_TIERS),
+                extension_version: sanitizeAnalyticsText(body?.extensionVersion, "unknown", 32)
+            }
         };
         logAnalyticsDebug(env, "[analytics/block-event] forwarding", blockEventPayload);
 
@@ -1302,6 +1295,19 @@ export default {
             body = await parseJsonBody(request);
         } catch (error) {
             return json({ error: error instanceof Error ? error.message : "Invalid JSON body" }, 400);
+        }
+
+        const analyticsSkip = shouldSkipAnalyticsForExtension(env, requestOrigin, body);
+        if (analyticsSkip.skip) {
+            logAnalyticsDebug(env, "[analytics/event] skipped", {
+                reason: analyticsSkip.reason,
+                origin: requestOrigin,
+                extensionId: body?.extensionId || null
+            });
+            return json({ ok: true, skipped: true, reason: analyticsSkip.reason }, 200, {
+                "Access-Control-Allow-Origin": requestOrigin,
+                "Vary": "Origin"
+            });
         }
 
         const clientId = sanitizeAnalyticsText(body?.clientId, "", 128);
@@ -1485,23 +1491,21 @@ export default {
         const eventType = typeof payload?.type === "string" ? payload.type : null;
         const userId = extractWebhookUserId(payload);
         const paymentId = extractWebhookPaymentId(payload);
-        const productId = extractWebhookProductId(payload);
-        const productMatches = webhookMatchesConfiguredProduct(payload, env);
 
-        if (productMatches && userId && paymentId) {
+        if (userId && paymentId) {
             await kvSetPaymentToUser(env, paymentId, userId);
         }
 
         // Update KV premium status based on event type
-        if (productMatches && userId) {
+        if (userId) {
             if (WEBHOOK_ACTIVATE_EVENTS.has(eventType)) {
                 await kvSetPremiumStatus(env, userId, {
                     active: true,
-                    planName: payload?.data?.membership?.product?.title || defaultPremiumPlanName(env),
+                    planName: payload?.data?.membership?.product?.title || "Premium",
                     updatedAt: new Date().toISOString(),
                     source: eventType
                 });
-            } else if (WEBHOOK_DEACTIVATE_EVENTS.has(eventType) && String(env.WHOP_LIFETIME_ACCESS || "true") !== "true") {
+            } else if (WEBHOOK_DEACTIVATE_EVENTS.has(eventType)) {
                 await kvSetPremiumStatus(env, userId, {
                     active: false,
                     planName: "Free",
@@ -1515,13 +1519,11 @@ export default {
         console.log(JSON.stringify({
             source: "whop-webhook",
             eventType,
-            productId,
-            productMatches,
             userId,
-            kvUpdated: Boolean(productMatches && userId)
+            kvUpdated: userId !== null
         }));
 
-        return json({ ok: true, eventType, productId, productMatches, userId });
+        return json({ ok: true, eventType, userId });
         }
 
         if (request.method === "POST" && url.pathname === "/whop/issue-token") {

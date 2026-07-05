@@ -1,4 +1,4 @@
-# Screen Time Blocker Extension
+# Saturn Chrome Extension
 
 A lightweight Chrome extension that helps users stay focused by tracking time spent on specific websites and automatically blocking them once a limit is reached.
 
@@ -36,7 +36,7 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 
 ## Vercel Website
 
-This repo includes a static marketing website for Screen Time Manager:
+This repo includes a static marketing website for Saturn:
 
 - `index.html`
 - `privacy.html`
@@ -115,6 +115,7 @@ Blocked-page redirects and blocked-page actions can be tracked with GA4 through 
 - The extension sends one anonymous event per redirect to `/analytics/block-event`.
 - The extension sends low-cardinality blocked-page actions to `/analytics/event`.
 - The Worker forwards those events to GA4 using the Measurement Protocol.
+- Analytics are sent only from the production Chrome Web Store extension ID; unpacked/internal extension IDs are skipped before they reach GA4.
 - No GA secret is stored in the extension.
 
 To enable it:
@@ -128,7 +129,12 @@ To enable it:
   ```bash
   wrangler secret put GA4_API_SECRET
   ```
-4. Deploy the Worker again.
+4. Configure analytics extension ID gates if they differ from the defaults:
+  ```bash
+  wrangler vars set ANALYTICS_PRODUCTION_EXTENSION_IDS
+  wrangler vars set ANALYTICS_INTERNAL_EXTENSION_IDS
+  ```
+5. Deploy the Worker again.
 
 The main emitted GA4 events are:
 
@@ -142,13 +148,9 @@ The main emitted GA4 events are:
 - `first_limit_created`
 - `first_schedule_created`
 - `first_block_reached`
-- `insight_presented`
 - `insight_viewed`
 - `insight_add_limit_clicked`
 - `upgrade_clicked`
-- `preset_applied`
-- `review_prompt_shown`
-- `review_prompt_action`
 - `post_install_redirect_shown`
 - `post_install_redirect_failed`
 
@@ -163,23 +165,16 @@ Recommended event-scoped custom dimensions:
 - `onboarding_step`
 - `funnel_version`
 - `error_name`
-- `strict_challenge_game`
-- `preset_id`
-- `rule_type`
-- `created_count`
-- `skipped_count`
-- `conflict_count`
-- `capped_count`
 
 Avoid registering unique or high-cardinality values such as redirect IDs, domains, raw URLs, or client IDs as custom dimensions.
 
-Use GA4's Active Users metric against `blocked_page_view` if you want a rough measure of how many installs are still hitting real blocks. `blocked_page_action` is reserved for user-initiated actions from the blocked page, such as snoozing, closing the tab, undoing a lenient block, or passing a strict challenge.
+Use GA4's Active Users metric against `blocked_page_view` if you want a rough measure of how many installs are still hitting real blocks.
 
 ---
 
 ## Whop Premium Handoff
 
-The popup opens `/whop/start` on the Cloudflare Worker instead of linking directly to Whop. The Worker receives the current `chrome.runtime.id`, creates a Whop checkout configuration for the one-time $5 Lifetime Premium plan when `WHOP_PLAN_ID` is set, and uses a return URL that lets the post-payment page message this exact extension install.
+The popup opens `/whop/start` on the Cloudflare Worker instead of linking directly to Whop. The Worker receives the current `chrome.runtime.id`, creates a Whop checkout configuration when `WHOP_PLAN_ID` is set, and uses a return URL that lets the post-payment page message this exact extension install.
 
 Required Worker values:
 
@@ -188,11 +183,8 @@ Required Worker values:
 - `WHOP_PRODUCT_ID` (`prod_...`) or `WHOP_PLAN_ID` (`plan_...`)
 - `WHOP_CHECKOUT_URL` as a fallback direct checkout link
 - `WHOP_EXTENSION_ID` as a production fallback for Chrome Web Store installs
-- `WHOP_PLAN_NAME=Lifetime Premium`
-- `WHOP_CHECKOUT_PRICE_CENTS=500`
-- `WHOP_LIFETIME_ACCESS=true`
 
-If only `WHOP_PRODUCT_ID` is configured, the Worker looks up a non-archived buy-now one-time/lifetime plan for that product, preferring a $5 plan, before creating checkout. The Whop API key needs checkout configuration create/read permissions, plan read permission, plus the membership/payment read permissions already used by verification.
+If only `WHOP_PRODUCT_ID` is configured, the Worker looks up the first non-archived buy-now plan for that product before creating checkout. The Whop API key needs checkout configuration create/read permissions, plan read permission, plus the membership/payment read permissions already used by verification.
 
 ---
 

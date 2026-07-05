@@ -1,16 +1,16 @@
 :root {
-    --bg: #060810;
-    --bg1: #0a1020;
-    --surface0: rgba(255,255,255,.055);
-    --surface1: rgba(255,255,255,.035);
-    --border: rgba(255,255,255,.10);
-    --border-hi: rgba(255,255,255,.18);
-    --text: #EDF2FF;
-    --muted: rgba(237,242,255,.62);
-    --purple: #8B6FFF;
-    --cyan: #22D9FF;
-    --green: #2EFFA8;
-    --danger: #FF4D6D;
+    --bg: #120a08;
+    --bg1: #1b0f0d;
+    --surface0: rgba(247,231,214,.075);
+    --surface1: rgba(247,231,214,.045);
+    --border: rgba(247,231,214,.14);
+    --border-hi: rgba(255,177,138,.34);
+    --text: #F7E7D6;
+    --muted: rgba(247,231,214,.66);
+    --purple: #D46A44;
+    --cyan: #8FD2D8;
+    --green: #9DB35C;
+    --danger: #FF6A4C;
     --blur: blur(18px);
     --r-card: 14px;
     --r-pill: 999px;
@@ -29,12 +29,12 @@ body {
 }
 
 body {
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    font-family: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
     color: var(--text);
     background:
-        radial-gradient(ellipse 1100px 700px at 10% -8%, rgba(139,111,255,.24), transparent 60%),
-        radial-gradient(ellipse 1000px 700px at 95% 18%, rgba(34,217,255,.18), transparent 62%),
-        radial-gradient(ellipse 900px 650px at 48% 110%, rgba(255,77,109,.10), transparent 60%),
+        radial-gradient(ellipse 1100px 700px at 10% -8%, rgba(212,106,68,.22), transparent 60%),
+        radial-gradient(ellipse 1000px 700px at 95% 18%, rgba(143,210,216,.14), transparent 62%),
+        radial-gradient(ellipse 900px 650px at 48% 110%, rgba(255,177,138,.08), transparent 60%),
         linear-gradient(180deg, var(--bg), var(--bg1));
 }
 
@@ -44,7 +44,7 @@ body {
     z-index: 0;
     pointer-events: none;
     opacity: 0.18;
-    background-image: radial-gradient(rgba(255,255,255,.12) 0.4px, transparent 0.4px);
+    background-image: radial-gradient(rgba(247,231,214,.14) 0.4px, transparent 0.4px);
     background-size: 2.4px 2.4px;
 }
 
@@ -66,35 +66,77 @@ body {
     border-radius: var(--r-card);
     border: 0;
     background:
-        linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.02)),
-        linear-gradient(165deg, rgba(139,111,255,.09), transparent 54%),
+        linear-gradient(180deg, rgba(247,231,214,.075), rgba(247,231,214,.025)),
+        linear-gradient(165deg, rgba(212,106,68,.11), transparent 54%),
         var(--surface0);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.035), var(--shadow);
+    box-shadow: inset 0 1px 0 rgba(247,231,214,.08), inset 0 0 0 1px rgba(247,231,214,.045), var(--shadow);
     backdrop-filter: var(--blur);
     -webkit-backdrop-filter: var(--blur);
 }
 
 .hero {
+    position: relative;
+    overflow: hidden;
     padding: 30px;
     animation: rise-in 0.5s ease both;
+}
+
+.hero::after {
+    content: "";
+    position: absolute;
+    right: -34px;
+    bottom: -28px;
+    width: 210px;
+    height: 70px;
+    border: 1px solid rgba(255,177,138,.20);
+    border-radius: 50%;
+    transform: rotate(-15deg);
+    pointer-events: none;
+}
+
+.hero > * {
+    position: relative;
+    z-index: 1;
+}
+
+.brand-orbit {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brand-orbit img {
+    width: 46px;
+    height: 46px;
+    object-fit: contain;
+    filter: drop-shadow(0 10px 16px rgba(0,0,0,.28));
+}
+
+.brand-orbit span {
+    color: #FFF6EA;
+    font-size: 22px;
+    font-weight: 900;
+    line-height: 1;
 }
 
 .kicker {
     margin: 0;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     font-size: 11px;
-    color: rgba(237,242,255,.55);
+    color: rgba(255,214,188,.72);
 }
 
 h1 {
     display: inline-block;
-    margin: 12px 0 8px;
+    margin: 10px 0 8px;
     padding-bottom: 0.14em;
     font-size: clamp(30px, 4.5vw, 48px);
     line-height: 1.28;
     letter-spacing: 0;
-    background: linear-gradient(90deg, #ffffff 35%, var(--cyan));
+    background: linear-gradient(90deg, #FFF6EA 34%, var(--cyan));
     background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -121,17 +163,17 @@ h1 {
     gap: 6px;
     padding: 6px 10px;
     border-radius: var(--r-pill);
-    border: 1px solid rgba(46,255,168,.24);
-    background: rgba(46,255,168,.10);
+    border: 1px solid rgba(157,179,92,.30);
+    background: rgba(157,179,92,.12);
     font-size: 12px;
     font-weight: 800;
-    color: rgba(46,255,168,.96);
+    color: rgba(210,224,146,.96);
 }
 
 .pill:nth-child(2) {
-    border-color: rgba(34,217,255,.28);
-    background: rgba(34,217,255,.10);
-    color: rgba(237,242,255,.92);
+    border-color: rgba(255,177,138,.28);
+    background: rgba(212,106,68,.12);
+    color: rgba(255,226,205,.94);
 }
 
 .actions {
@@ -142,7 +184,7 @@ h1 {
 }
 
 .btn {
-    border: 1px solid rgba(255,255,255,.12);
+    border: 1px solid rgba(255,177,138,.20);
     border-radius: var(--r-input);
     padding: 10px 14px;
     font-size: 13px;
@@ -150,27 +192,27 @@ h1 {
     cursor: pointer;
     color: var(--text);
     font-family: inherit;
-    transition: border-color .15s, background .15s, filter .15s, transform .15s;
+    transition: border-color .15s, background .15s, color .15s, opacity .15s;
 }
 
 .btn:hover {
-    transform: translateY(-1px);
-    filter: brightness(1.07);
+    opacity: .94;
+    border-color: rgba(255,177,138,.30);
 }
 
 .btn.primary {
-    border-color: rgba(168,128,255,.48);
-    background: linear-gradient(135deg, rgba(124,92,255,.62), rgba(34,217,255,.40));
-    box-shadow: 0 8px 18px rgba(0,0,0,.22);
+    border-color: rgba(255,177,138,.52);
+    background: linear-gradient(135deg, rgba(140,63,43,.92), rgba(212,106,68,.80));
+    box-shadow: 0 8px 18px rgba(212,106,68,.18), inset 0 1px 0 rgba(255,255,255,.16);
 }
 
 .btn.secondary {
-    background: rgba(255,255,255,.08);
+    background: rgba(247,231,214,.06);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
 }
 
 .btn.ghost {
-    background: rgba(255,255,255,.06);
+    background: rgba(247,231,214,.05);
 }
 
 .checklist {
@@ -195,11 +237,11 @@ ol {
 .note {
     margin: 0;
     padding: 10px 12px;
-    border: 1px solid rgba(34,217,255,.22);
-    border-left: 3px solid var(--cyan);
+    border: 1px solid rgba(255,177,138,.20);
+    border-left: 3px solid var(--purple);
     border-radius: var(--r-input);
-    background: rgba(34,217,255,.08);
-    color: rgba(237,242,255,.82);
+    background: rgba(212,106,68,.10);
+    color: rgba(247,231,214,.82);
     font-size: 13px;
 }
 

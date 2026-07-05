@@ -1,16 +1,16 @@
 {
     "manifest_version": 3,
-    "name": "Screen Time Manager - Website Blocker and Focus Tool",
-    "version": "2.2.13",
-    "description": "Understand browsing habits, limit distracting sites, and stay focused with daily limits and scheduled blocks.",
+    "name": "Saturn - Screen Time Manager",
+    "version": "3.2.13",
+    "description": "Reclaim time from distracting sites, track your focus journey, and stay on course with daily limits and scheduled blocks.",
     "icons": {
-        "16": "new_logo.png",
-        "32": "new_logo.png",
-        "48": "new_logo.png",
-        "128": "new_logo.png"
+        "16": "assets/planets/saturn-app-icon-16.png",
+        "32": "assets/planets/saturn-app-icon-32.png",
+        "48": "assets/planets/saturn-app-icon-48.png",
+        "128": "assets/planets/saturn-app-icon-128.png"
     },
     "action": {
-        "default_title": "Screen Time Manager",
+        "default_title": "Saturn",
         "default_popup": "popup.html"
     },
     "background": {
@@ -30,11 +30,51 @@
     "host_permissions": ["<all_urls>"],
     "web_accessible_resources": [
         {
-            "resources": ["blocked.html", "blocked.js", "blocked.css"],
+            "resources": [
+                "blocked.html",
+                "blocked.js",
+                "blocked.css",
+                "assets/planets/earth.png",
+                "assets/planets/moon.png",
+                "assets/planets/mars.png",
+                "assets/planets/jupiter.png",
+                "assets/planets/saturn.png",
+                "assets/planets/saturn-timeline.png",
+                "assets/planets/uranus.png",
+                "assets/planets/neptune.png",
+                "assets/planets/interstellar.png",
+                "assets/planets/rocket.png",
+                "assets/planets/rocket-cutout.png",
+                "assets/planets/mission-path.png",
+                "assets/planets/saturn-app-icon-16.png",
+                "assets/planets/saturn-app-icon-32.png",
+                "assets/planets/saturn-app-icon-48.png",
+                "assets/planets/saturn-app-icon-128.png"
+            ],
             "matches": ["<all_urls>"]
         },
         {
-            "resources": ["popup.html", "popup.js", "popup.css"],
+            "resources": [
+                "popup.html",
+                "popup.js",
+                "popup.css",
+                "assets/planets/earth.png",
+                "assets/planets/moon.png",
+                "assets/planets/mars.png",
+                "assets/planets/jupiter.png",
+                "assets/planets/saturn.png",
+                "assets/planets/saturn-timeline.png",
+                "assets/planets/uranus.png",
+                "assets/planets/neptune.png",
+                "assets/planets/interstellar.png",
+                "assets/planets/rocket.png",
+                "assets/planets/rocket-cutout.png",
+                "assets/planets/mission-path.png",
+                "assets/planets/saturn-app-icon-16.png",
+                "assets/planets/saturn-app-icon-32.png",
+                "assets/planets/saturn-app-icon-48.png",
+                "assets/planets/saturn-app-icon-128.png"
+            ],
             "matches": ["https://screen-time-manager.jackster0627.workers.dev/*"]
         }
     ]

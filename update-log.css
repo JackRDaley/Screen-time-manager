@@ -43,16 +43,20 @@
     padding: 16px;
     border-radius: var(--r-input);
     background:
-        linear-gradient(135deg, rgba(34,217,255,.08), transparent 55%),
-        rgba(255,255,255,.035);
-    box-shadow: inset 3px 0 0 rgba(34,217,255,.56), inset 0 1px 0 rgba(255,255,255,.045);
+        linear-gradient(135deg, rgba(255,138,97,.13), transparent 55%),
+        rgba(247,231,214,.04);
+    box-shadow:
+        inset 3px 0 0 rgba(255,138,97,.56),
+        inset 0 1px 0 rgba(255,255,255,.045);
 }
 
 .release-card:nth-child(2) {
     background:
-        linear-gradient(135deg, rgba(139,111,255,.10), transparent 55%),
-        rgba(255,255,255,.035);
-    box-shadow: inset 3px 0 0 rgba(139,111,255,.62), inset 0 1px 0 rgba(255,255,255,.045);
+        linear-gradient(135deg, rgba(143,210,216,.10), transparent 55%),
+        rgba(247,231,214,.035);
+    box-shadow:
+        inset 3px 0 0 rgba(143,210,216,.54),
+        inset 0 1px 0 rgba(255,255,255,.045);
 }
 
 .release-head {
@@ -71,8 +75,9 @@
 .release-date {
     padding: 4px 8px;
     border-radius: var(--r-pill);
-    background: rgba(46,255,168,.10);
-    color: rgba(46,255,168,.96);
+    border: 1px solid rgba(157,179,92,.28);
+    background: rgba(157,179,92,.12);
+    color: rgba(210,224,146,.96);
     font-size: 11px;
     font-weight: 800;
 }

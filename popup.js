@@ -21,13 +21,52 @@ const WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-mana
 const WHOP_CHECKOUT_START_URL = "https://screen-time-manager.jackster0627.workers.dev/whop/start";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
 const CHROME_WEBSTORE_REVIEW_URL = "https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo/reviews";
+const SURVEYMONKEY_FEEDBACK_URL = "https://www.surveymonkey.com/r/QF2RJ58";
 const REVIEW_PROMPT_STATE_KEY = "reviewPromptState";
-const REVIEW_PROMPT_FIRST_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
+const BLOCK_RECLAIM_KEY = "saturnBlockReclaimStats";
+const JOURNEY_DISPLAY_KEY = "saturnJourneyDisplayState";
+const RECLAIM_MS_PER_BLOCK = 5 * 60 * 1000;
+const REVIEW_PROMPT_FIRST_DELAY_MS = 5 * 24 * 60 * 60 * 1000;
 const REVIEW_PROMPT_INTERVAL_MS = 14 * 24 * 60 * 60 * 1000;
+const REVIEW_PROMPT_MIN_DASHBOARD_OPENS = 4;
+const REVIEW_PROMPT_MIN_RECLAIM_MS = 20 * 60 * 1000;
 const LIVE_REFRESH_INTERVAL_MS = 1000;
 const LIVE_REFRESH_MOTION_SUPPRESSION_MS = 120;
+const MAX_DAILY_LIMIT_MINUTES = 1440;
+const LIVE_REFRESH_TARGET_IDS = Object.freeze([
+    "ranking",
+    "rankingByVisits"
+]);
 const HOURLY_BAR_MIN_ACTIVE_HEIGHT_PCT = 6;
 const HOURLY_BAR_DAILY_SHARE_SCALE = 0.25;
+
+const HOUR_MS = 60 * 60 * 1000;
+const PLANET_STOPS = Object.freeze([
+    { id: "earth", label: "Earth", shortLabel: "Earth", thresholdMs: 0, distanceKm: 0 },
+    { id: "moon", label: "Moon", shortLabel: "Moon", thresholdMs: 2 * HOUR_MS, distanceKm: 384400 },
+    { id: "mars", label: "Mars Orbit", shortLabel: "Mars", thresholdMs: 10 * HOUR_MS, distanceKm: 78000000 },
+    { id: "jupiter", label: "Jupiter", shortLabel: "Jupiter", thresholdMs: 25 * HOUR_MS, distanceKm: 628000000 },
+    { id: "saturn", label: "Saturn", shortLabel: "Saturn", thresholdMs: 50 * HOUR_MS, distanceKm: 1275000000 },
+    { id: "uranus", label: "Uranus", shortLabel: "Uranus", thresholdMs: 100 * HOUR_MS, distanceKm: 2723000000 },
+    { id: "neptune", label: "Neptune", shortLabel: "Neptune", thresholdMs: 200 * HOUR_MS, distanceKm: 4351000000 },
+    { id: "interstellar", label: "Interstellar Space", shortLabel: "Deep", thresholdMs: 500 * HOUR_MS, distanceKm: 7500000000 }
+]);
+
+const PLANET_ICON_PATHS = Object.freeze({
+    earth: "assets/planets/earth.png",
+    moon: "assets/planets/moon.png",
+    mars: "assets/planets/mars.png",
+    jupiter: "assets/planets/jupiter.png",
+    saturn: "assets/planets/saturn.png",
+    uranus: "assets/planets/uranus.png",
+    neptune: "assets/planets/neptune.png",
+    interstellar: "assets/planets/interstellar.png"
+});
+
+const TIMELINE_PLANET_ICON_PATHS = Object.freeze({
+    ...PLANET_ICON_PATHS,
+    saturn: "assets/planets/saturn-timeline.png"
+});
 
 const DEFAULT_SETTINGS = Object.freeze({
     defaultLimitMinutes: 30,
@@ -36,7 +75,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     personalInsightsEnabled: true,
     insightNotificationsEnabled: true,
     insightMaxNotificationsPerDay: 1,
-    insightSensitivity: "normal"
+    insightSensitivity: "normal",
+    journeyCollapsed: false
 });
 
 const DEFAULT_PREMIUM = Object.freeze({
@@ -45,8 +85,8 @@ const DEFAULT_PREMIUM = Object.freeze({
 });
 
 const FREE_LIMITS = Object.freeze({
-    maxTrackedDomains: 5,
-    maxScheduledBlocks: 5
+    maxTrackedDomains: 3,
+    maxScheduledBlocks: 1
 });
 
 const PRESET_TEMPLATES = Object.freeze([
@@ -127,18 +167,20 @@ const state = {
     premium: { ...DEFAULT_PREMIUM },
     onboarding: { step: 0, completed: false, completedAt: null, version: ONBOARDING_VERSION },
     immutableOverride: { available: false },
-    selectedDays: [0, 1, 2, 3, 4, 5, 6],
+    selectedDays: [],
     selectedHourlyHour: null,
     selectedInsightIndex: 0,
     editingScheduleId: null,
     applyingPresetId: null,
-    rankingSignature: ""
+    rankingSignature: "",
+    journeyVisual: null
 };
 
 let liveRefreshPromise = null;
 let rankingMotionRestoreTimer = null;
-const presentedInsightsThisSession = new Set();
-const interactedInsightsThisSession = new Set();
+let settingsOverlayCloseTimer = null;
+let journeyAnimationCleanupTimer = null;
+const viewedInsightsThisSession = new Set();
 
 function normalizeDomain(input) {
     const raw = String(input || "").trim().toLowerCase();
@@ -157,6 +199,24 @@ function isValidDomain(domain) {
     if (!value || value.length > 255 || value.includes("..")) return false;
     if (!/^[a-z0-9.-]+$/.test(value)) return false;
     return value.split(".").every((part) => part && !part.startsWith("-") && !part.endsWith("-"));
+}
+
+function parseScheduleTimeInput(value) {
+    const match = String(value || "").trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (!match) return null;
+
+    let hour = Number(match[1]);
+    const minute = Number(match[2] || 0);
+    const meridian = match[3]?.toLowerCase();
+    if (minute < 0 || minute > 59 || hour < 0 || hour > 23) return null;
+    if (meridian === "pm" && hour < 12) hour += 12;
+    if (meridian === "am" && hour === 12) hour = 0;
+
+    return { hour, minute };
+}
+
+function isValidScheduleTimeInput(value) {
+    return Boolean(parseScheduleTimeInput(value));
 }
 
 function send(action, payload = {}) {
@@ -215,11 +275,46 @@ function setText(id, text) {
     if (el) el.textContent = text;
 }
 
+function setAnimatedText(id, text) {
+    const el = $(id);
+    if (!el) return;
+    setAnimatedElementText(el, text);
+}
+
+function setAnimatedElementText(el, text) {
+    if (!el) return;
+    const nextText = String(text);
+    if (el.textContent === nextText) return;
+
+    el.textContent = nextText;
+    if (!el.classList.contains("is-live-refresh-render")) {
+        el.classList.remove("motion-value-pop");
+        void el.offsetWidth;
+        el.classList.add("motion-value-pop");
+    }
+}
+
+function setAllText(selector, text) {
+    document.querySelectorAll(selector).forEach((el) => {
+        el.textContent = text;
+    });
+}
+
+function setAllAnimatedText(selector, text) {
+    document.querySelectorAll(selector).forEach((el) => setAnimatedElementText(el, text));
+}
+
 function setFeedback(id, text = "", ok = true) {
     const el = $(id);
     if (!el) return;
     el.textContent = text;
     el.classList.toggle("is-error", Boolean(text && !ok));
+    el.classList.toggle("is-visible", Boolean(text));
+    if (text && !el.classList.contains("is-live-refresh-render")) {
+        el.classList.remove("is-visible");
+        void el.offsetWidth;
+        el.classList.add("is-visible");
+    }
 }
 
 function timeMs(entry = {}) {
@@ -281,8 +376,8 @@ function formatHourRangeTooltip(hour) {
 
 function getColorGradientForIntensity(value) {
     const ratio = Math.max(0, Math.min(1, Number(value) || 0));
-    const start = [34, 217, 255];
-    const end = [255, 141, 83];
+    const start = [143, 210, 216];
+    const end = [212, 106, 68];
     const r = Math.round(start[0] + (end[0] - start[0]) * ratio);
     const g = Math.round(start[1] + (end[1] - start[1]) * ratio);
     const b = Math.round(start[2] + (end[2] - start[2]) * ratio);
@@ -347,13 +442,19 @@ function deleteSnoozeEntriesForDomain(snoozedDomains = {}, domain) {
     deleteEntriesForDomain(snoozedDomains, domain);
 }
 
-function isLimitCurrentlyBlocking(domain, cfg, statsToday = {}, snoozedDomains = {}) {
+function wasRecentlyReset(domain, recentlyReset = {}, now = Date.now()) {
+    const ts = Number(entryForDomain(recentlyReset, domain) || 0);
+    return Number.isFinite(ts) && ts > 0 && now - ts < 5000;
+}
+
+function isLimitCurrentlyBlocking(domain, cfg, statsToday = {}, snoozedDomains = {}, recentlyReset = {}) {
     const limit = limitConfig(cfg);
     if (!limit.enabled || !limit.limitSeconds) return false;
+    if (wasRecentlyReset(domain, recentlyReset)) return false;
     const snooze = entryForDomain(snoozedDomains, domain);
     const snoozeExpiresAt = Number(snooze?.expiresAt || snooze || 0);
     if (snoozeExpiresAt > Date.now()) return false;
-    return timeMs(statsToday?.[domain]) >= limit.limitSeconds * 1000;
+    return timeMs(entryForDomain(statsToday, domain) || statsToday?.[domain]) >= limit.limitSeconds * 1000;
 }
 
 function escapeHtml(value) {
@@ -414,9 +515,432 @@ function previousOffsets(offsets = []) {
     return offsets.map((offset) => offset + periodLength);
 }
 
+function snoozeHistoryCount(value) {
+    const direct = Number(value || 0);
+    if (Number.isFinite(direct)) return Math.max(0, direct);
+    if (!value || typeof value !== "object") return 0;
+
+    return Object.values(value).reduce((sum, entry) => {
+        const count = typeof entry === "object"
+            ? Number(entry?.count ?? entry?.snoozes ?? 0)
+            : Number(entry || 0);
+        return sum + (Number.isFinite(count) ? Math.max(0, count) : 0);
+    }, 0);
+}
+
 function snoozesForOffsets(offsets = []) {
     const history = state.data.snoozeHistory || {};
-    return offsets.reduce((sum, offset) => sum + Number(history[dayKeyOffset(offset)] || 0), 0);
+    return offsets.reduce((sum, offset) => sum + snoozeHistoryCount(history[dayKeyOffset(offset)]), 0);
+}
+
+function emptyReclaimSummary() {
+    return { count: 0, estimatedMs: 0, bySource: {}, byTier: {} };
+}
+
+function normalizeBlockSourceKey(source) {
+    return source === "scheduled" ? "scheduled" : "limit";
+}
+
+function mergeCountMap(target, source = {}, normalizeKey = (key) => key) {
+    Object.entries(source || {}).forEach(([rawKey, value]) => {
+        const key = normalizeKey(rawKey);
+        target[key] = Number(target[key] || 0) + Math.max(0, Number(value || 0));
+    });
+}
+
+function addReclaimDay(summary, day = {}) {
+    const count = Math.max(0, Number(day.count || day.blockedCount || 0));
+    const estimatedMs = Math.max(0, Number(day.estimatedMs || count * RECLAIM_MS_PER_BLOCK || 0));
+    summary.count += count;
+    summary.estimatedMs += estimatedMs;
+
+    const sourceTotal = Object.values(day.bySource || {}).reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
+    if (sourceTotal > 0) {
+        mergeCountMap(summary.bySource, day.bySource, normalizeBlockSourceKey);
+    } else if (count > 0) {
+        summary.bySource.limit = Number(summary.bySource.limit || 0) + count;
+    }
+
+    mergeCountMap(summary.byTier, day.byTier);
+    return summary;
+}
+
+function reclaimStatsForOffsets(offsets = []) {
+    const history = state.data[BLOCK_RECLAIM_KEY] || {};
+    return offsets.reduce((summary, offset) => {
+        return addReclaimDay(summary, history[dayKeyOffset(offset)] || {});
+    }, emptyReclaimSummary());
+}
+
+function reclaimStatsForHistory() {
+    const history = state.data[BLOCK_RECLAIM_KEY] || {};
+    return Object.values(history).reduce((summary, day) => addReclaimDay(summary, day), emptyReclaimSummary());
+}
+
+function sourceCount(summary, source) {
+    return Math.max(0, Number(summary?.bySource?.[source] || 0));
+}
+
+function formatBlockCount(count) {
+    const total = Math.max(0, Number(count) || 0);
+    return `${total.toLocaleString()} ${total === 1 ? "block" : "blocks"}`;
+}
+
+function formatDayCount(count) {
+    const total = Math.max(0, Number(count) || 0);
+    return `${total} ${total === 1 ? "day" : "days"}`;
+}
+
+function planetIconPath(id) {
+    return PLANET_ICON_PATHS[id] || PLANET_ICON_PATHS.earth;
+}
+
+function timelinePlanetIconPath(id) {
+    return TIMELINE_PLANET_ICON_PATHS[id] || PLANET_ICON_PATHS.earth;
+}
+
+function formatDistanceKm(value) {
+    const distance = Math.max(0, Number(value) || 0);
+    if (distance >= 1000000000) {
+        const billions = distance / 1000000000;
+        return `${billions >= 10 ? Math.round(billions) : billions.toFixed(1)}B km`;
+    }
+    if (distance >= 1000000) return `${Math.round(distance / 1000000)}M km`;
+    if (distance >= 1000) return `${Math.round(distance / 1000)}k km`;
+    return `${Math.round(distance)} km`;
+}
+
+function formatJourneyThreshold(ms) {
+    const hours = Math.max(0, Number(ms) || 0) / HOUR_MS;
+    return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
+}
+
+function journeyDestinationLabel(stop = {}) {
+    if (stop.id === "moon") return "The Moon";
+    return stop.shortLabel || stop.label || "destination";
+}
+
+function journeyForTime(estimatedMs = 0) {
+    const savedMs = Math.max(0, Number(estimatedMs) || 0);
+    let currentIndex = 0;
+    PLANET_STOPS.forEach((stop, index) => {
+        if (savedMs >= stop.thresholdMs) currentIndex = index;
+    });
+
+    const current = PLANET_STOPS[currentIndex];
+    const next = PLANET_STOPS[currentIndex + 1] || null;
+    const start = current.thresholdMs;
+    const end = next?.thresholdMs || Math.max(current.thresholdMs, savedMs);
+    const span = Math.max(1, end - start);
+    const progress = next ? Math.max(0, Math.min(100, Math.round(((savedMs - start) / span) * 100))) : 100;
+
+    return {
+        current,
+        currentIndex,
+        next,
+        progress,
+        remainingMs: next ? Math.max(0, next.thresholdMs - savedMs) : 0
+    };
+}
+
+function journeyVisualKey(journey) {
+    return `${journey.current.id}:${journey.progress}`;
+}
+
+function journeyMarkerLeft(progress = 0) {
+    const pathStart = 7.75;
+    const pathEnd = 92.12;
+    const pct = Math.max(0, Math.min(100, Number(progress) || 0));
+    return pathStart + ((pathEnd - pathStart) * pct / 100);
+}
+
+function journeyDisplaySnapshot(summary) {
+    const journey = journeyForTime(summary?.estimatedMs || 0);
+    return {
+        estimatedMs: Math.max(0, Number(summary?.estimatedMs) || 0),
+        currentId: journey.current.id,
+        currentIndex: journey.currentIndex,
+        progress: journey.progress
+    };
+}
+
+function prepareJourneyVisual(reclaimSummary, options = {}) {
+    const current = journeyDisplaySnapshot(reclaimSummary);
+    const previous = state.data[JOURNEY_DISPLAY_KEY] || {};
+    const previousJourney = journeyForTime(previous.estimatedMs);
+    const previousKey = previous.estimatedMs == null ? null : journeyVisualKey(previousJourney);
+    const currentJourney = journeyForTime(current.estimatedMs);
+    const currentKey = journeyVisualKey(currentJourney);
+    const shouldAnimate = Boolean(previousKey && previousKey !== currentKey);
+
+    state.journeyVisual = {
+        summary: { ...reclaimSummary },
+        previousSummary: previousKey ? { estimatedMs: Number(previous.estimatedMs) || 0 } : null,
+        shouldAnimate,
+        reachedPlanet: shouldAnimate && current.currentIndex > Number(previous.currentIndex || previousJourney.currentIndex || 0),
+        showUnlock: options.persist !== false,
+        unlockedStop: currentJourney.current,
+        totalReclaimedMs: current.estimatedMs
+    };
+
+    if (options.persist !== false) {
+        chrome.storage.local.set({ [JOURNEY_DISPLAY_KEY]: current });
+        state.data[JOURNEY_DISPLAY_KEY] = current;
+    }
+}
+
+function animateJourneyPercent(progress, animate = false) {
+    const el = $("journeyProgressPct");
+    if (!el) return;
+
+    const nextValue = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+    const previousValue = Number.parseInt(el.dataset.value || el.textContent, 10);
+    const safePreviousValue = Number.isFinite(previousValue) ? previousValue : nextValue;
+    const nextText = `${nextValue}%`;
+    el.dataset.value = String(nextValue);
+    el.setAttribute("aria-label", nextText);
+
+    if (!animate || safePreviousValue === nextValue) {
+        el.classList.remove("is-scrolling");
+        if (safePreviousValue !== nextValue || !el.querySelector(".journey-percent-odometer")) {
+            el.innerHTML = odometerPercentHtml(nextValue, nextValue);
+        }
+        return;
+    }
+
+    el.classList.remove("is-scrolling");
+    el.innerHTML = odometerPercentHtml(safePreviousValue, nextValue);
+    void el.offsetWidth;
+    el.classList.add("is-scrolling");
+}
+
+function odometerDigitSequence(fromDigit, toDigit) {
+    if (fromDigit === "" || toDigit === "") return [fromDigit, toDigit];
+    const sequence = [fromDigit];
+    let current = Number(fromDigit);
+    const target = Number(toDigit);
+    while (current !== target && sequence.length < 11) {
+        current = (current + 1) % 10;
+        sequence.push(String(current));
+    }
+    return sequence;
+}
+
+function odometerPercentHtml(previousValue, nextValue) {
+    const from = String(Math.max(0, Math.min(100, Math.round(previousValue))));
+    const to = String(Math.max(0, Math.min(100, Math.round(nextValue))));
+    const width = Math.max(from.length, to.length);
+    const fromPadded = from.padStart(width, " ");
+    const toPadded = to.padStart(width, " ");
+    const digits = Array.from({ length: width }, (_, index) => {
+        const fromDigit = fromPadded[index] === " " ? "" : fromPadded[index];
+        const toDigit = toPadded[index] === " " ? "" : toPadded[index];
+        const sequence = odometerDigitSequence(fromDigit, toDigit);
+        const steps = Math.max(0, sequence.length - 1);
+        const delay = index * 0.055;
+        const cells = sequence.map((digit) => (
+            `<span>${digit === "" ? "&nbsp;" : escapeHtml(digit)}</span>`
+        )).join("");
+        return `
+            <span class="journey-percent-digit" style="--digit-steps:${steps}; --digit-delay:${delay}s;">
+                <span class="journey-percent-wheel">${cells}</span>
+            </span>
+        `;
+    }).join("");
+
+    return `
+        <span class="journey-percent-odometer" aria-hidden="true">
+            ${digits}
+            <span class="journey-percent-symbol">%</span>
+        </span>
+    `;
+}
+
+function clearJourneyMotionClasses() {
+    $("journeyCard")?.classList.remove("is-journey-moving", "is-planet-reached");
+    $("journeyRouteTrack")?.classList.remove("is-journey-moving", "is-planet-reached");
+    journeyAnimationCleanupTimer = null;
+}
+
+function startJourneyMotion(card, routeTrack, reachedPlanet) {
+    if (journeyAnimationCleanupTimer) {
+        window.clearTimeout(journeyAnimationCleanupTimer);
+        journeyAnimationCleanupTimer = null;
+    }
+
+    card.classList.remove("is-journey-moving", "is-planet-reached");
+    routeTrack?.classList.remove("is-journey-moving", "is-planet-reached");
+    void card.offsetWidth;
+    card.classList.add("is-journey-moving");
+    routeTrack?.classList.add("is-journey-moving");
+
+    if (reachedPlanet) {
+        card.classList.add("is-planet-reached");
+        routeTrack?.classList.add("is-planet-reached");
+    }
+
+    journeyAnimationCleanupTimer = window.setTimeout(clearJourneyMotionClasses, 1450);
+}
+
+function showPlanetUnlockModal(stop, totalReclaimedMs = 0) {
+    const modal = $("planetUnlockModal");
+    if (!modal || !stop) return;
+
+    const planet = $("planetUnlockImage");
+    if (planet) {
+        planet.src = planetIconPath(stop.id);
+        planet.className = "planet-unlock-image";
+    }
+
+    setText("planetUnlockTitle", `${stop.label} unlocked`);
+    setText("planetUnlockTime", formatShortTime(totalReclaimedMs));
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+    window.requestAnimationFrame(() => modal.classList.add("is-visible"));
+    $("planetUnlockCloseBtn")?.focus({ preventScroll: true });
+}
+
+function closePlanetUnlockModal() {
+    const modal = $("planetUnlockModal");
+    if (!modal || modal.hidden) return;
+    modal.classList.remove("is-visible");
+    modal.setAttribute("aria-hidden", "true");
+    window.setTimeout(() => {
+        modal.hidden = true;
+    }, 160);
+}
+
+function renderJourney(reclaimSummary = { count: 0, estimatedMs: 0 }) {
+    const card = $("journeyCard");
+    if (!card) return;
+
+    const collapsed = Boolean(state.settings.journeyCollapsed);
+    card.classList.toggle("is-collapsed", collapsed);
+    const toggle = $("journeyToggleBtn");
+    if (toggle) {
+        toggle.setAttribute("aria-label", collapsed ? "Show journey" : "Hide journey");
+        toggle.title = collapsed ? "Show journey" : "Hide journey";
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+    }
+    const collapsedTitle = $("journeyCollapsedTitle");
+    if (collapsedTitle) collapsedTitle.hidden = !collapsed;
+
+    const visual = state.journeyVisual || { summary: reclaimSummary };
+    if (journeyAnimationCleanupTimer && !visual.shouldAnimate) return;
+
+    const journey = journeyForTime(visual.summary?.estimatedMs || reclaimSummary.estimatedMs);
+    const previousJourney = visual.previousSummary ? journeyForTime(visual.previousSummary.estimatedMs) : null;
+    const displayJourney = visual.reachedPlanet && previousJourney
+        ? { ...previousJourney, progress: 100 }
+        : journey;
+    const planet = $("journeyPlanet");
+    if (planet) {
+        planet.className = `journey-stop-planet planet-${displayJourney.current.id}`;
+        planet.src = planetIconPath(displayJourney.current.id);
+    }
+
+    setText("journeyLocation", displayJourney.current.label);
+    setText("journeyNext", displayJourney.next ? displayJourney.next.label : "Mission complete");
+    setText("journeyCurrentThreshold", formatJourneyThreshold(displayJourney.current.thresholdMs));
+
+    const fill = $("journeyProgressFill");
+    if (fill) fill.style.removeProperty("width");
+    animateJourneyPercent(displayJourney.progress, visual.shouldAnimate);
+    setText(
+        "journeyProgressCopy",
+        visual.reachedPlanet && visual.unlockedStop
+            ? `${journeyDestinationLabel(visual.unlockedStop)} unlocked`
+            : (displayJourney.next ? `Next destination: ${journeyDestinationLabel(displayJourney.next)}` : "Journey complete")
+    );
+
+    const nextPlanet = $("journeyNextPlanet");
+    const nextTarget = visual.reachedPlanet && visual.unlockedStop
+        ? visual.unlockedStop
+        : (displayJourney.next || displayJourney.current);
+    if (nextPlanet) {
+        nextPlanet.className = `journey-stop-planet planet-${nextTarget.id}`;
+        nextPlanet.src = planetIconPath(nextTarget.id);
+    }
+    setText("journeyNextThreshold", formatJourneyThreshold(nextTarget.thresholdMs));
+
+    const routeTrack = $("journeyRouteTrack");
+    if (routeTrack) {
+        const progress = Math.max(0, Math.min(100, displayJourney.progress));
+        const markerLeft = journeyMarkerLeft(progress);
+        const previousLeft = previousJourney ? journeyMarkerLeft(previousJourney.progress) : markerLeft;
+        routeTrack.style.setProperty("--journey-progress-left", `${journeyMarkerLeft(0)}%`);
+        routeTrack.style.setProperty("--journey-previous-right", `${previousLeft}%`);
+        routeTrack.style.setProperty("--journey-progress-right", `${markerLeft}%`);
+        routeTrack.style.setProperty("--journey-marker-left", `${markerLeft}%`);
+        if (visual.shouldAnimate) {
+            startJourneyMotion(card, routeTrack, visual.reachedPlanet);
+            if (visual.reachedPlanet && visual.showUnlock) {
+                window.setTimeout(() => showPlanetUnlockModal(visual.unlockedStop, visual.totalReclaimedMs), 650);
+            }
+        } else if (!journeyAnimationCleanupTimer) {
+            card.classList.remove("is-journey-moving", "is-planet-reached");
+            routeTrack.classList.remove("is-journey-moving", "is-planet-reached");
+        }
+    }
+    if (state.journeyVisual) {
+        state.journeyVisual.shouldAnimate = false;
+        state.journeyVisual.reachedPlanet = false;
+        state.journeyVisual.previousSummary = null;
+    }
+}
+
+function renderProfile() {
+    const reclaim = reclaimStatsForHistory();
+    const journey = journeyForTime(reclaim.estimatedMs);
+    const limitBlocks = sourceCount(reclaim, "limit");
+    const scheduledBlocks = sourceCount(reclaim, "scheduled");
+    const topSource = limitBlocks || scheduledBlocks
+        ? (scheduledBlocks > limitBlocks ? "Schedules" : "Limits")
+        : "--";
+    const limitPct = reclaim.count ? Math.round((limitBlocks / reclaim.count) * 100) : 0;
+    const scheduledPct = reclaim.count ? Math.round((scheduledBlocks / reclaim.count) * 100) : 0;
+
+    setText("profileTotalReclaimed", formatShortTime(reclaim.estimatedMs));
+    setText("profileBlockedCount", reclaim.count.toLocaleString());
+    setText("profileCurrentLocation", journey.current.label);
+    setText("profileNextDestination", journey.next ? journey.next.label : "Complete");
+    setText("profileTopSource", topSource);
+    setText("profileJourneySummary", `${formatDistanceKm(journey.current.distanceKm)} traveled`);
+    setText("profileSourceTotal", formatBlockCount(reclaim.count));
+    setText("profileLimitBlocks", formatBlockCount(limitBlocks));
+    setText("profileScheduleBlocks", formatBlockCount(scheduledBlocks));
+    setText("profileJourneyPhrase", `${journey.current.label} orbit`);
+    setText(
+        "profileJourneyDetail",
+        journey.next
+            ? `${journey.next.label} is ${formatShortTime(journey.remainingMs)} away`
+            : "Interstellar course complete"
+    );
+
+    const limitFill = $("profileLimitSourceFill");
+    if (limitFill) limitFill.style.width = `${limitPct}%`;
+    const scheduledFill = $("profileScheduleSourceFill");
+    if (scheduledFill) scheduledFill.style.width = `${scheduledPct}%`;
+
+    const milestones = $("profileJourneyMilestones");
+    if (!milestones) return;
+    milestones.innerHTML = PLANET_STOPS.map((stop, index) => {
+        const stateClass = index < journey.currentIndex
+            ? " is-reached"
+            : index === journey.currentIndex
+            ? " is-current"
+            : " is-locked";
+        const meta = index <= journey.currentIndex ? "reached" : "";
+        return `
+            <div class="profile-map-stop profile-map-stop-${escapeHtml(stop.id)}${stateClass}">
+                <span class="profile-map-connector" aria-hidden="true"></span>
+                <img class="profile-map-icon" src="${escapeHtml(timelinePlanetIconPath(stop.id))}" alt="" aria-hidden="true" />
+                <span class="profile-map-dot" aria-hidden="true"></span>
+                <div class="profile-map-label">${escapeHtml(stop.shortLabel || stop.label)}</div>
+                <div class="profile-map-meta">${escapeHtml(meta)}</div>
+            </div>
+        `;
+    }).join("");
 }
 
 function hourlyUsageForOffsets(offsets = []) {
@@ -471,6 +995,10 @@ function renderList(id, html, emptyText) {
     if (!el) return;
     el.classList.toggle("muted", !html);
     el.innerHTML = html || escapeHtml(emptyText);
+    if (!html || el.classList.contains("is-live-refresh-render")) return;
+    el.querySelectorAll(".row").forEach((row, index) => {
+        row.style.setProperty("--row-index", String(Math.min(index, 8)));
+    });
 }
 
 function presetScheduleId(presetId, domain) {
@@ -515,14 +1043,14 @@ function renderPresetList(listId, presets) {
     const card = container.closest(".card");
     if (card) card.hidden = visiblePresets.length === 0;
 
-    container.innerHTML = visiblePresets.map((preset) => {
+    container.innerHTML = visiblePresets.map((preset, index) => {
         const applying = state.applyingPresetId === preset.id;
         const detail = preset.ruleType === "Scheduled blocks"
             ? `${formatTimeForDisplay(preset.schedule.startTime)} - ${formatTimeForDisplay(preset.schedule.endTime)}`
             : `${preset.limitMinutes} min daily`;
 
         return `
-            <div class="preset-option" data-preset-id="${escapeHtml(preset.id)}">
+            <div class="preset-option" data-preset-id="${escapeHtml(preset.id)}" style="--row-index:${Math.min(index, 8)}">
                 <div class="preset-main">
                     <div class="preset-meta">${escapeHtml(preset.recommendedFor)} &bull; ${escapeHtml(formatTierLabel(preset.tier))} &bull; ${escapeHtml(detail)}</div>
                     <div class="preset-title">${escapeHtml(preset.name)}</div>
@@ -550,6 +1078,69 @@ function renderPresets() {
     );
 }
 
+function reclaimForSelectedRange() {
+    return reclaimStatsForOffsets(offsetsForRange($("statRange")?.value || "Today"));
+}
+
+function usageStatsForOffset(offset) {
+    if (Number(offset) === 0) return state.data.allStatsToday || state.data.statsToday || {};
+    return (state.data.statsHistory || {})[dayKeyOffset(offset)] || {};
+}
+
+function limitWasRespectedForStats(config, entry) {
+    const limit = limitConfig(config);
+    if (!limit.enabled || !limit.limitSeconds) return true;
+    return timeMs(entry) < limit.limitSeconds * 1000;
+}
+
+function daysUnderLimits(offsets = []) {
+    const blockedDomains = state.data.blockedDomains || {};
+    const activeLimits = Object.entries(blockedDomains)
+        .filter(([domain, config]) => isValidDomain(domain) && limitConfig(config).enabled && limitConfig(config).limitSeconds);
+    if (!activeLimits.length) return 0;
+
+    return offsets.reduce((count, offset) => {
+        const stats = usageStatsForOffset(offset);
+        const hadTrackedLimit = activeLimits.some(([domain]) => timeMs(entryForDomain(stats, domain)) > 0);
+        if (!hadTrackedLimit) return count;
+        const stayedUnder = activeLimits.every(([domain, config]) => {
+            return limitWasRespectedForStats(config, entryForDomain(stats, domain));
+        });
+        return count + (stayedUnder ? 1 : 0);
+    }, 0);
+}
+
+function consecutiveDaysUnderLimits(maxDays = 30) {
+    let streak = 0;
+    for (let offset = 0; offset < maxDays; offset += 1) {
+        if (daysUnderLimits([offset]) !== 1) break;
+        streak += 1;
+    }
+    return streak;
+}
+
+function renderBenefitCards(currentOffsets) {
+    const weekReclaim = reclaimStatsForOffsets(offsetsForRange("This week"));
+    const rangeReclaim = reclaimStatsForOffsets(currentOffsets);
+    const underLimitDays = daysUnderLimits(currentOffsets);
+    const underLimitStreak = consecutiveDaysUnderLimits();
+
+    setAllAnimatedText('[data-benefit-value="saved-week"]', formatShortTime(weekReclaim.estimatedMs));
+    setAllText(
+        '[data-benefit-copy="saved-week"]',
+        `${formatShortTime(rangeReclaim.estimatedMs)} reclaimed on this route.`
+    );
+    setAllAnimatedText('[data-benefit-value="avoided-visits"]', String(rangeReclaim.count));
+    setAllText('[data-benefit-copy="avoided-visits"]', rangeReclaim.count === 1 ? "Distracting visit avoided." : "Distracting visits avoided.");
+    setAllAnimatedText('[data-benefit-value="under-limit-days"]', formatDayCount(underLimitDays));
+    setAllText(
+        '[data-benefit-copy="under-limit-days"]',
+        underLimitStreak > 1
+            ? `${formatDayCount(underLimitStreak)} in a row.`
+            : "Days stayed within active limits."
+    );
+}
+
 function presetApplyMessage(preset, result) {
     const limit = preset.ruleType === "Scheduled blocks" ? FREE_LIMITS.maxScheduledBlocks : FREE_LIMITS.maxTrackedDomains;
     const unit = preset.ruleType === "Scheduled blocks" ? "scheduled blocks" : "limits";
@@ -572,23 +1163,27 @@ function presetApplyMessage(preset, result) {
     return parts.join(" ");
 }
 
-function renderStats() {
+function renderStats(options = {}) {
+    const animateValues = options.animateValues !== false;
+    const setStatText = animateValues ? setAnimatedText : setText;
     const range = $("statRange")?.value || "Today";
     const currentOffsets = offsetsForRange(range);
     const previousPeriodOffsets = previousOffsets(currentOffsets);
-    const current = statsForOffsets(currentOffsets);
-    const previous = statsForOffsets(previousPeriodOffsets);
-    const total = totals(current);
-    const previousTotal = totals(previous);
+    const currentStats = statsForOffsets(currentOffsets);
+    const previousStats = statsForOffsets(previousPeriodOffsets);
+    const currentTotals = totals(currentStats);
+    const previousTotals = totals(previousStats);
+    const reclaim = reclaimStatsForOffsets(currentOffsets);
     const snoozes = snoozesForOffsets(currentOffsets);
     const previousSnoozes = snoozesForOffsets(previousPeriodOffsets);
 
-    setText("statScreenTime", formatShortTime(total.timeMs));
-    setText("statVisits", String(total.visits));
-    setText("statSnoozes", String(snoozes));
-    setText("statScreenTimeDelta", formatPercentDelta(total.timeMs, previousTotal.timeMs));
-    setText("statVisitsDelta", formatPercentDelta(total.visits, previousTotal.visits));
+    setStatText("statScreenTime", formatShortTime(currentTotals.timeMs));
+    setStatText("statVisits", String(currentTotals.visits));
+    setStatText("statSnoozes", String(snoozes));
+    setText("statScreenTimeDelta", formatPercentDelta(currentTotals.timeMs, previousTotals.timeMs));
+    setText("statVisitsDelta", formatPercentDelta(currentTotals.visits, previousTotals.visits));
     setText("statSnoozesDelta", formatPercentDelta(snoozes, previousSnoozes));
+    renderJourney(reclaim);
 }
 
 function renderActive() {
@@ -609,13 +1204,15 @@ function renderActive() {
 
     const activeDomains = new Set(activeBlocks.map((block) => normalizeDomain(block.domain)));
     const limitRows = Object.entries(blockedDomains)
-        .filter(([domain, cfg]) => !activeDomains.has(normalizeDomain(domain)) && isLimitCurrentlyBlocking(domain, cfg, statsToday, state.data.snoozedDomains))
+        .filter(([domain, cfg]) => !activeDomains.has(normalizeDomain(domain)) && isLimitCurrentlyBlocking(domain, cfg, statsToday, state.data.snoozedDomains, state.data.recentlyReset))
         .map(([domain, cfg]) => ({ domain, cfg }));
 
     const activeRows = activeBlocks.map((block) => {
-        const endMs = Number(block.endTime || block.endsAt || 0);
+        const endMs = Number(block.endsAt || block.endAt || 0);
         const remainingSec = endMs > Date.now() ? Math.floor((endMs - Date.now()) / 1000) : 0;
-        const endsText = endMs ? new Date(endMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : formatTimeForDisplay(block.endTime);
+        const endsText = endMs && Number.isFinite(endMs)
+            ? new Date(endMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : formatTimeForDisplay(block.endTime);
 
         return `
             <div class="row row-accent-cyan" data-domain="${escapeHtml(block.domain)}">
@@ -664,7 +1261,15 @@ function renderActive() {
     `);
 
     const html = [...activeRows, ...pausedRows, ...reachedRows].join("");
-    setText("activeCount", String(activeRows.length + pausedRows.length + reachedRows.length));
+    const activeBlockCount = activeRows.length;
+    const statusPill = $("statusPill");
+    if (statusPill) {
+        statusPill.classList.toggle("is-inactive", activeBlockCount === 0);
+        statusPill.setAttribute("aria-label", activeBlockCount > 0
+            ? `${activeBlockCount} active ${activeBlockCount === 1 ? "block" : "blocks"}`
+            : "No active blocks or schedules");
+    }
+    setAnimatedText("activeCount", activeBlockCount > 0 ? `${activeBlockCount} active` : "Idle");
     $("activeCard")?.style.setProperty("display", html ? "" : "none");
     renderList("activeList", html, "No active blocks.");
 }
@@ -752,18 +1357,19 @@ function renderRankingStyled() {
 
     const timeTitle = $("ranking")?.parentElement?.querySelector(".card-title");
     const visitsTitle = $("rankingByVisits")?.parentElement?.querySelector(".card-title");
-    if (timeTitle) timeTitle.textContent = `Time Spent · ${range}`;
-    if (visitsTitle) visitsTitle.textContent = `Most Visited · ${range}`;
+    if (timeTitle) timeTitle.textContent = `Time Spent - ${range}`;
+    if (visitsTitle) visitsTitle.textContent = `Most Visited - ${range}`;
     state.rankingSignature = rankingSignature(range);
     renderList("ranking", makeRows(false), "No data yet.");
     renderList("rankingByVisits", makeRows(true), "No data yet.");
 }
 
-function updateRankingMetricsInPlace() {
+function updateRankingMetricsInPlace(options = {}) {
+    const allowRerender = options.allowRerender !== false;
     const range = $("statRange")?.value || "Today";
     const nextSignature = rankingSignature(range);
     if (nextSignature !== state.rankingSignature) {
-        renderRankingStyled();
+        if (allowRerender) renderRankingStyled();
         return;
     }
 
@@ -812,6 +1418,84 @@ function insightTimeLabel(timestamp) {
     return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function selectedStatsRangeLabel() {
+    return $("statRange")?.value || "Today";
+}
+
+function benefitInsightItems() {
+    const dismissed = state.data[DISMISSED_INSIGHTS_KEY] || {};
+    const range = selectedStatsRangeLabel();
+    const currentOffsets = offsetsForRange(range);
+    const rangeReclaim = reclaimStatsForOffsets(currentOffsets);
+    const weekReclaim = reclaimStatsForOffsets(offsetsForRange("This week"));
+    const underLimitDays = daysUnderLimits(currentOffsets);
+    const underLimitStreak = consecutiveDaysUnderLimits();
+    const items = [];
+    const now = Date.now();
+
+    if (rangeReclaim.estimatedMs > 0) {
+        items.push({
+            id: `benefit_time_saved:${range}`,
+            type: "benefit_time_saved",
+            title: `You've reclaimed ${formatInsightReadableTime(rangeReclaim.estimatedMs)} ${insightRangePhrase(range)} with Saturn`,
+            message: saturnBlockedSitesText(rangeReclaim.count),
+            priority: 120,
+            timestamp: now,
+            context: {
+                range,
+                estimatedMs: rangeReclaim.estimatedMs,
+                count: rangeReclaim.count,
+                weekEstimatedMs: weekReclaim.estimatedMs
+            }
+        });
+    } else if (weekReclaim.estimatedMs > 0) {
+        items.push({
+            id: "benefit_time_saved:week",
+            type: "benefit_time_saved",
+            title: `You've reclaimed ${formatInsightReadableTime(weekReclaim.estimatedMs)} this week with Saturn`,
+            message: insightTimeSavedOutcome(weekReclaim.estimatedMs),
+            priority: 120,
+            timestamp: now,
+            context: {
+                range: "This week",
+                estimatedMs: weekReclaim.estimatedMs,
+                count: weekReclaim.count,
+                weekEstimatedMs: weekReclaim.estimatedMs
+            }
+        });
+    }
+
+    if (rangeReclaim.count > 0) {
+        items.push({
+            id: `benefit_avoided_visits:${range}`,
+            type: "benefit_avoided_visits",
+            title: `${rangeReclaim.count} ${rangeReclaim.count === 1 ? "detour" : "detours"} stopped early`,
+            message: rangeReclaim.count === 1
+                ? "One impulse did not get to turn into a session."
+                : "Those impulses did not get to turn into sessions.",
+            priority: 118,
+            timestamp: now,
+            context: { range, count: rangeReclaim.count }
+        });
+    }
+
+    if (underLimitDays > 0) {
+        items.push({
+            id: `benefit_under_limits:${range}`,
+            type: "benefit_under_limits",
+            title: `${formatDayCount(underLimitDays)} of limit discipline`,
+            message: underLimitStreak > 1
+                ? `${formatDayCount(underLimitStreak)} in a row shows the limits are becoming a habit.`
+                : "You stayed inside the boundary you set for yourself.",
+            priority: 116,
+            timestamp: now,
+            context: { range, days: underLimitDays, streak: underLimitStreak }
+        });
+    }
+
+    return items.filter((insight) => !dismissed[insight.id]).slice(0, 3);
+}
+
 function personalInsightItems() {
     if (state.settings.personalInsightsEnabled === false) return [];
     if (!hasEnoughInsightData()) return [];
@@ -841,7 +1525,10 @@ function personalInsightItems() {
     const sorted = Array.from(byDomain.values())
         .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || Number(b.timestamp || 0) - Number(a.timestamp || 0))
         .slice(0, 4);
-    return withDisambiguatedInsightLabels(sorted);
+    return [
+        ...benefitInsightItems(),
+        ...withDisambiguatedInsightLabels(sorted)
+    ].slice(0, 6);
 }
 
 function insightReadiness() {
@@ -882,10 +1569,43 @@ function formatInsightCompactTime(ms) {
     return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
+function formatInsightReadableTime(ms) {
+    const minutes = Math.max(1, Math.round(Number(ms || 0) / 60000));
+    if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    const hourText = `${hours} ${hours === 1 ? "hour" : "hours"}`;
+    if (!remainder) return hourText;
+    return `${hourText} ${remainder} ${remainder === 1 ? "minute" : "minutes"}`;
+}
+
+function insightRangePhrase(range = "") {
+    const normalized = String(range || "").toLowerCase();
+    if (normalized === "today") return "today";
+    if (normalized === "yesterday") return "yesterday";
+    if (normalized === "this month") return "this month";
+    return "this week";
+}
+
+function saturnBlockedSitesText(count) {
+    const total = Math.max(0, Number(count) || 0);
+    if (total <= 0) return "Saturn blocked distracting sites";
+    return `Saturn blocked ${total} distracting ${total === 1 ? "site" : "sites"}`;
+}
+
 function formatInsightIncreasePercent(value) {
     const ratio = Number(value || 0);
     if (!Number.isFinite(ratio) || ratio <= 0) return "";
     return `${Math.max(0, Math.round((ratio - 1) * 100))}%`;
+}
+
+function insightTimeSavedOutcome(ms) {
+    const minutes = Math.max(0, Math.round(Number(ms || 0) / 60000));
+    if (minutes >= 90) return "That is enough space for a serious work block, homework session, or real downtime.";
+    if (minutes >= 45) return "That is enough space for a focused work sprint or a proper reset.";
+    if (minutes >= 20) return "That is enough space for a short walk, a delayed task, or a clean break.";
+    if (minutes >= 10) return "That is enough space to reset before the next thing.";
+    return "Even small saves matter when they interrupt the automatic scroll.";
 }
 
 function pluralizeInsight(value, singular, plural = `${singular}s`) {
@@ -1154,10 +1874,25 @@ function insightUsageMetricText(context = {}) {
     return "";
 }
 
+function isBenefitInsight(insight = {}) {
+    return String(insight.type || "").startsWith("benefit_");
+}
+
 function insightPersonalHeadlineHtml(insight = {}, domain = "") {
     const context = insightContextWithFallback(insight, domain);
     const domainHtml = insightHeadlineEmphasis(insight.displayDomainLabel || insightDomainLabel(domain), "insight-domain-emphasis");
 
+    if (insight.type === "benefit_time_saved") {
+        const savedText = formatInsightReadableTime(context.estimatedMs || context.weekEstimatedMs);
+        const rangeText = insightRangePhrase(context.range);
+        return `You've reclaimed ${insightHeadlineEmphasis(savedText)} ${escapeHtml(rangeText)} with Saturn`;
+    }
+    if (insight.type === "benefit_avoided_visits") {
+        return `${insightHeadlineEmphasis(pluralizeInsight(context.count, "impulse"))} stopped early`;
+    }
+    if (insight.type === "benefit_under_limits") {
+        return `${insightHeadlineEmphasis(formatDayCount(context.days))} of follow-through`;
+    }
     if (insight.type === "long_session" && context.durationMs) {
         return `${domainHtml} is holding your attention right now`;
     }
@@ -1188,6 +1923,18 @@ function insightPersonalHeadlineHtml(insight = {}, domain = "") {
 function insightPersonalSubheadingHtml(insight = {}, domain = "") {
     const context = insightContextWithFallback(insight, domain);
 
+    if (insight.type === "benefit_time_saved") {
+        const count = Number(context.count || 0);
+        return saturnBlockedSitesText(count);
+    }
+    if (insight.type === "benefit_avoided_visits") {
+        return "Those urges did not get to become full sessions";
+    }
+    if (insight.type === "benefit_under_limits") {
+        const streak = Number(context.streak || 0);
+        if (streak > 1) return `${insightHeadlineEmphasis(formatDayCount(streak))} in a row shows the boundary is becoming a habit`;
+        return "You stayed inside the boundary you set for yourself";
+    }
     if (insight.type === "long_session" && context.durationMs) {
         return `Active for ${insightHeadlineEmphasis(formatInsightMinutes(context.durationMs))} straight`;
     }
@@ -1224,17 +1971,20 @@ function insightPersonalSubheadingHtml(insight = {}, domain = "") {
 function insightSlideHtml(insight, index) {
     const blockedDomains = state.data.blockedDomains || {};
     const domain = normalizeDomain(insight.domain);
+    const isBenefit = isBenefitInsight(insight);
     const isLimited = Boolean(entryForDomain(blockedDomains, domain));
-    const action = !isLimited
+    const action = !isBenefit && !isLimited
         ? actionChip("Add Limit", "insight-add-limit", "action-chip-primary insight-primary-action", `data-domain="${escapeHtml(domain)}"`)
         : "";
-    const accent = insight.action === "addLimit" && !isLimited
+    const accent = isBenefit
+        ? "row-accent-cyan"
+        : insight.action === "addLimit" && !isLimited
         ? "row-accent-purple"
         : (index % 2 ? "row-accent-cyan" : "row-accent-muted");
     const subheading = insightPersonalSubheadingHtml(insight, domain);
 
     return `
-        <div class="row insight-row ${accent}" data-insight-id="${escapeHtml(insight.id)}" data-domain="${escapeHtml(domain)}">
+        <div class="row insight-row ${accent}" data-insight-id="${escapeHtml(insight.id)}" data-insight-type="${escapeHtml(insight.type || "")}" ${domain ? `data-domain="${escapeHtml(domain)}"` : ""}>
             <div class="row-main">
                 <div class="insight-headline-row">
                     <div class="insight-copy-block">
@@ -1266,25 +2016,23 @@ function renderPersonalInsights() {
     const card = $("personalInsightsCard");
     const list = $("personalInsightsList");
     const nav = $("personalInsightsNav");
-    const insightsEnabled = state.settings.personalInsightsEnabled !== false;
-    if (card) {
-        card.hidden = !insightsEnabled;
-        card.classList.toggle("dashboard-card-hidden", !insightsEnabled);
-    }
     if (nav) nav.innerHTML = "";
     if (!list) return;
 
-    if (!insightsEnabled) {
+    if (!insights.length) {
+        if (card) {
+            card.hidden = true;
+            card.classList.add("dashboard-card-hidden");
+        }
+        list.classList.add("muted");
         list.innerHTML = "";
         return;
     }
 
-    if (!insights.length) {
-        list.classList.add("muted");
-        list.innerHTML = insightPlaceholderHtml();
-        return;
+    if (card) {
+        card.hidden = false;
+        card.classList.remove("dashboard-card-hidden");
     }
-
     state.selectedInsightIndex = Math.max(0, Math.min(state.selectedInsightIndex, insights.length - 1));
     if (nav) nav.innerHTML = insightHeaderControls(insights.length);
     list.classList.remove("muted");
@@ -1328,7 +2076,7 @@ function renderHourlyStyled() {
     const title = $("usageCardTitle");
     if (!list) return;
     const range = $("statRange")?.value || "Today";
-    if (title) title.textContent = `Usage Distribution · ${range}`;
+    if (title) title.textContent = `Usage Distribution - ${range}`;
 
     const bucketsByHour = hourlyUsageForOffsets(offsetsForRange(range));
     const buckets = Array.from({ length: 24 }, (_, hour) => {
@@ -1444,7 +2192,7 @@ function renderHourInsightStyled(slot) {
     insight.classList.remove("muted");
     insight.innerHTML = `
         <div class="hourly-tip-header">
-            <div class="hourly-tip-time">${formatHourRangeTooltip(hour)}${isPeak ? ' · <span class="hourly-tip-inline-peak">Peak</span>' : ""}</div>
+            <div class="hourly-tip-time">${formatHourRangeTooltip(hour)}${isPeak ? ' - <span class="hourly-tip-inline-peak">Peak</span>' : ""}</div>
             <div class="hourly-tip-time-spent">${formatShortTime(time)} spent</div>
         </div>
         ${domains.length > 0
@@ -1471,9 +2219,10 @@ function renderLimitsStyled() {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([domain, raw]) => {
             const config = limitConfig(raw);
-            const usedSec = Math.round(timeMs(stats[domain]) / 1000);
-            const displaySec = config.limitSeconds ? Math.min(usedSec, config.limitSeconds) : usedSec;
-            const pct = config.limitSeconds ? Math.min(100, Math.round((displaySec / config.limitSeconds) * 100)) : 0;
+            const statEntry = entryForDomain(stats, domain) || stats[domain];
+            const usedSec = Math.round(timeMs(statEntry) / 1000);
+            const pct = config.limitSeconds ? Math.min(100, Math.round((usedSec / config.limitSeconds) * 100)) : 0;
+            const isActive = isLimitCurrentlyBlocking(domain, config, stats, state.data.snoozedDomains, state.data.recentlyReset);
             const accent = !config.enabled
                 ? "row-accent-muted"
                 : (pct >= 100 ? "row-accent-red" : (pct >= 85 ? "row-accent-purple" : "row-accent-cyan"));
@@ -1486,8 +2235,8 @@ function renderLimitsStyled() {
                             <div class="row-metrics">
                                 <span class="tag metric-chip metric-chip-glass">${formatTierLabel(config.tier)}</span>
                                 <span class="tag metric-chip metric-chip-glass">Limit ${config.limitSeconds ? `${Math.round(config.limitSeconds / 60)} min` : "--"}</span>
-                                <span class="tag metric-chip metric-chip-glass">Today ${formatTimeSec(displaySec)}</span>
-                                <span class="tag metric-chip metric-chip-glass">${visits(stats[domain])} visits</span>
+                                <span class="tag metric-chip metric-chip-glass limit-used-chip" data-domain="${escapeHtml(domain)}">Today ${formatTimeSec(usedSec)}</span>
+                                <span class="tag metric-chip metric-chip-glass">${visits(statEntry)} visits</span>
                             </div>
                         </div>
                         <div class="row-right">
@@ -1495,7 +2244,7 @@ function renderLimitsStyled() {
                                 <input class="switch-input" type="checkbox" data-action="toggle-domain" data-domain="${escapeHtml(domain)}" ${config.enabled ? "checked" : ""} aria-label="Toggle ${escapeHtml(domain)} limit" />
                                 <span class="switch-slider" aria-hidden="true"></span>
                             </label>
-                            ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}"`)}
+                            ${actionChip("Remove", "remove-domain", "action-chip-danger", `data-domain="${escapeHtml(domain)}" ${isActive ? "disabled" : ""}`)}
                         </div>
                     </div>
                     ${config.limitSeconds ? `<div class="prog-wrap row-progress"><div class="prog-fill" style="width:${pct}%"></div></div>` : ""}
@@ -1506,6 +2255,16 @@ function renderLimitsStyled() {
 
     renderList("limitList", rows, "No limits set yet.");
     renderPaywalls();
+}
+
+function updateLimitUsageChipsInPlace() {
+    const stats = state.data.statsToday || {};
+    document.querySelectorAll("#limitList .limit-used-chip[data-domain]").forEach((chip) => {
+        const domain = chip.dataset.domain;
+        const statEntry = entryForDomain(stats, domain) || stats[domain];
+        const usedSec = Math.round(timeMs(statEntry) / 1000);
+        chip.textContent = `Today ${formatTimeSec(usedSec)}`;
+    });
 }
 
 function renderScheduleDays() {
@@ -1524,6 +2283,7 @@ function renderScheduleDays() {
             state.selectedDays = state.selectedDays.includes(day)
                 ? state.selectedDays.filter((value) => value !== day)
                 : [...state.selectedDays, day].sort((a, b) => a - b);
+            if (state.selectedDays.length) container.classList.remove("is-invalid");
             renderScheduleDays();
         });
     });
@@ -1533,8 +2293,8 @@ function renderSchedulesStyled() {
     const activeIds = new Set((state.data.activeBlocks || []).map((block) => block.id));
     const rows = (state.data.scheduledBlocks || []).map((block) => {
         const days = block.days || block.daysOfWeek || [];
-        const active = activeIds.has(block.id);
         const enabled = block.enabled !== false;
+        const active = enabled && activeIds.has(block.id);
         const accent = !enabled ? "row-accent-muted is-disabled" : (active ? "row-accent-purple" : "row-accent-cyan");
 
         return `
@@ -1572,12 +2332,16 @@ function renderPaywalls() {
     if (limitsPaywall) {
         limitsPaywall.style.display = !isPremium && blockedCount >= FREE_LIMITS.maxTrackedDomains ? "block" : "none";
     }
-    setText("limitsPaywallNotice", `Free plan includes ${FREE_LIMITS.maxTrackedDomains} limits.`);
+    setText("limitsPaywallNotice", `Free users can manage up to ${FREE_LIMITS.maxTrackedDomains} websites. Upgrade to Saturn Pro Lifetime to manage unlimited sites.`);
 
     const schedulePaywall = $("schedulePaywallCard");
     if (schedulePaywall) {
         schedulePaywall.style.display = !isPremium && scheduleCount >= FREE_LIMITS.maxScheduledBlocks ? "block" : "none";
     }
+    setText("schedulePaywallNotice", "Schedule blocks are one of Saturn's most powerful tools. Upgrade to create unlimited blocks.");
+
+    const profileUpgradeCard = $("profileUpgradeCard");
+    if (profileUpgradeCard) profileUpgradeCard.hidden = isPremium;
 }
 
 function renderStreak() {
@@ -1591,7 +2355,7 @@ function renderStreak() {
         streak += 1;
     }
 
-    setText("streakHeaderValue", String(streak));
+    setAnimatedText("streakHeaderValue", String(streak));
 }
 
 function renderImmutableOverride() {
@@ -1648,19 +2412,23 @@ function renderSettings() {
 }
 
 function beginRankingMotionSuppression() {
-    if (!document.body) return;
     if (rankingMotionRestoreTimer) {
         window.clearTimeout(rankingMotionRestoreTimer);
         rankingMotionRestoreTimer = null;
     }
-    document.body.classList.add("is-live-refresh-render");
+    LIVE_REFRESH_TARGET_IDS.forEach((id) => {
+        const target = $(id);
+        if (!target) return;
+        target.classList.add("live-refresh-target", "is-live-refresh-render");
+    });
 }
 
 function endRankingMotionSuppressionSoon() {
-    if (!document.body) return;
-    void document.body.offsetHeight;
+    void document.documentElement.offsetHeight;
     rankingMotionRestoreTimer = window.setTimeout(() => {
-        document.body?.classList.remove("is-live-refresh-render");
+        document.querySelectorAll(".live-refresh-target.is-live-refresh-render").forEach((target) => {
+            target.classList.remove("is-live-refresh-render");
+        });
         rankingMotionRestoreTimer = null;
     }, LIVE_REFRESH_MOTION_SUPPRESSION_MS);
 }
@@ -1672,6 +2440,7 @@ function renderAll(options = {}) {
 
     try {
         renderStats();
+        renderProfile();
         renderActive();
         if (updateRankingInPlace) updateRankingMetricsInPlace();
         else renderRankingStyled();
@@ -1685,6 +2454,19 @@ function renderAll(options = {}) {
         renderSettings();
     } finally {
         if (suppressRankingMotion) endRankingMotionSuppressionSoon();
+    }
+}
+
+function renderLiveUsageOnly() {
+    beginRankingMotionSuppression();
+    try {
+        renderStats({ animateValues: false });
+        updateRankingMetricsInPlace({ allowRerender: false });
+        if ($("tab2")?.checked) {
+            updateLimitUsageChipsInPlace();
+        }
+    } finally {
+        endRankingMotionSuppressionSoon();
     }
 }
 
@@ -1704,20 +2486,30 @@ async function loadAll(options = {}) {
         DISMISSED_INSIGHTS_KEY,
         "snoozeHistory",
         "snoozedDomains",
+        "recentlyReset",
         "activeBlocks",
         "scheduledBlocks",
         SETTINGS_KEY,
         PREMIUM_KEY,
         REVIEW_PROMPT_STATE_KEY,
         ONBOARDING_KEY,
+        BLOCK_RECLAIM_KEY,
+        JOURNEY_DISPLAY_KEY,
         "immutableAdminOverrideEnabled"
     ]);
 
     state.settings = { ...DEFAULT_SETTINGS, ...(state.data[SETTINGS_KEY] || {}) };
     state.premium = { ...DEFAULT_PREMIUM, ...(state.data[PREMIUM_KEY] || {}) };
     state.onboarding = { ...state.onboarding, ...(state.data[ONBOARDING_KEY] || {}) };
+    if (options.updateJourneyDisplay === true || !state.journeyVisual) {
+        prepareJourneyVisual(reclaimForSelectedRange(), { persist: options.updateJourneyDisplay === true });
+    }
     const overrideState = await send("getImmutableOverrideState");
     state.immutableOverride = overrideState?.success ? overrideState : { available: false };
+    if (options.liveUsageOnly === true) {
+        renderLiveUsageOnly();
+        return;
+    }
     renderAll({
         suppressRankingMotion: options.suppressRankingMotion === true,
         updateRankingInPlace: options.updateRankingInPlace === true
@@ -1726,7 +2518,7 @@ async function loadAll(options = {}) {
 
 function refreshLive() {
     if (liveRefreshPromise) return liveRefreshPromise;
-    liveRefreshPromise = loadAll({ flush: true, suppressRankingMotion: true, updateRankingInPlace: true }).finally(() => {
+    liveRefreshPromise = loadAll({ flush: true, liveUsageOnly: true }).finally(() => {
         liveRefreshPromise = null;
     });
     return liveRefreshPromise;
@@ -1753,8 +2545,11 @@ async function addDomain(event) {
 async function saveLimitForDomain(domain, minutes, tier = "standard") {
     const normalized = normalizeDomain(domain);
     const numericMinutes = Number(minutes);
-    if (!isValidDomain(normalized) || !Number.isFinite(numericMinutes) || numericMinutes <= 0) {
-        return { success: false, error: "Enter a valid domain and limit." };
+    if (!isValidDomain(normalized)) {
+        return { success: false, error: "Enter a valid domain." };
+    }
+    if (!Number.isFinite(numericMinutes) || numericMinutes <= 0 || numericMinutes > MAX_DAILY_LIMIT_MINUTES) {
+        return { success: false, error: `Enter a daily limit from 1 to ${MAX_DAILY_LIMIT_MINUTES} minutes.` };
     }
 
     const data = await chrome.storage.local.get(["blockedDomains", "alertsSent"]);
@@ -2067,10 +2862,19 @@ function scheduleFromForm() {
 async function saveSchedule(event) {
     event.preventDefault();
     const block = scheduleFromForm();
+    const missingScheduleFields = !block.domain || !block.startTime || !block.endTime || !block.days.length;
+    $("scheduledDays")?.classList.toggle("is-invalid", !block.days.length);
 
-    if (!isValidDomain(block.domain) || !block.startTime || !block.endTime || !block.days.length) {
+    if (missingScheduleFields) {
         setFeedback("scheduledFormMsg", "Complete the schedule fields.", false);
-        $("scheduledDays")?.classList.toggle("is-invalid", !block.days.length);
+        return;
+    }
+    if (!isValidDomain(block.domain)) {
+        setFeedback("scheduledFormMsg", "Enter a valid domain.", false);
+        return;
+    }
+    if (!isValidScheduleTimeInput(block.startTime) || !isValidScheduleTimeInput(block.endTime)) {
+        setFeedback("scheduledFormMsg", "Enter valid start and end times.", false);
         return;
     }
 
@@ -2114,7 +2918,7 @@ function editSchedule(id) {
 
 function resetScheduleForm() {
     state.editingScheduleId = null;
-    state.selectedDays = [0, 1, 2, 3, 4, 5, 6];
+    state.selectedDays = [];
     $("scheduledForm")?.reset();
     $("cancelScheduledEditBtn").hidden = true;
     $("scheduledFormModeLabel").hidden = true;
@@ -2160,8 +2964,20 @@ function settingsFromForm() {
             : DEFAULT_SETTINGS.insightMaxNotificationsPerDay,
         insightSensitivity: ["low", "normal", "high"].includes(sensitivity)
             ? sensitivity
-            : DEFAULT_SETTINGS.insightSensitivity
+            : DEFAULT_SETTINGS.insightSensitivity,
+        journeyCollapsed: Boolean(state.settings.journeyCollapsed)
     };
+}
+
+async function recordDashboardOpenForPrompt() {
+    const prompt = reviewPromptState();
+    const today = getDayKey();
+    const seenDays = Array.isArray(prompt.dashboardOpenDays) ? prompt.dashboardOpenDays : [];
+    await persistReviewPromptState({
+        createdAt: Number(prompt.createdAt || Date.now()),
+        dashboardOpenCount: Number(prompt.dashboardOpenCount || 0) + 1,
+        dashboardOpenDays: seenDays.includes(today) ? seenDays : [...seenDays, today].slice(-30)
+    });
 }
 
 async function persistSettings() {
@@ -2170,7 +2986,18 @@ async function persistSettings() {
     if (state.settings.personalInsightsEnabled !== false) {
         await send("generateInsights", { allowNotifications: false });
     }
+    renderStats();
+    renderProfile();
     setFeedback("settingsSavedMsg", "Settings saved");
+}
+
+async function toggleJourneyCollapsed() {
+    state.settings = {
+        ...state.settings,
+        journeyCollapsed: !state.settings.journeyCollapsed
+    };
+    await chrome.storage.local.set({ [SETTINGS_KEY]: state.settings });
+    renderStats();
 }
 
 async function saveSettings(event) {
@@ -2229,6 +3056,7 @@ function whopCheckoutStartUrl() {
 
 function openWhopCheckout(trigger = "unknown") {
     trackFunnelEvent("upgrade_clicked", { trigger });
+    // TODO: Replace Whop URLs with final production purchase URLs before publishing.
     chrome.tabs.create({ url: whopCheckoutStartUrl() });
 }
 
@@ -2265,10 +3093,31 @@ function hideReviewPromptToast() {
     }, 180);
 }
 
+function hasFiveUsageDays() {
+    const history = state.data.statsHistory || {};
+    const today = state.data.allStatsToday || state.data.statsToday || {};
+    const activeDays = new Set();
+    if (Object.values(today).some((entry) => timeMs(entry) > 0 || visits(entry) > 0)) activeDays.add(getDayKey());
+    Object.entries(history).forEach(([day, stats]) => {
+        if (Object.values(stats || {}).some((entry) => timeMs(entry) > 0 || visits(entry) > 0)) activeDays.add(day);
+    });
+    return activeDays.size >= 5;
+}
+
+function reviewPromptEligible() {
+    const prompt = reviewPromptState();
+    const totalReclaim = reclaimStatsForHistory();
+    return hasFiveUsageDays()
+        || countBlockedDomains(state.data.blockedDomains || {}) >= 2
+        || countScheduledBlocks(state.data.scheduledBlocks || []) >= 1
+        || Number(prompt.dashboardOpenCount || 0) >= REVIEW_PROMPT_MIN_DASHBOARD_OPENS
+        || totalReclaim.estimatedMs >= REVIEW_PROMPT_MIN_RECLAIM_MS;
+}
+
 async function maybeShowReviewPromptToast() {
     const prompt = reviewPromptState();
     const now = Date.now();
-    if (prompt.reviewedAt) return;
+    if (prompt.reviewedAt || prompt.feedbackSubmittedAt || prompt.feedbackClickedAt) return;
 
     const nextPromptAt = Number(prompt.nextPromptAt || 0);
     if (!nextPromptAt) {
@@ -2280,6 +3129,7 @@ async function maybeShowReviewPromptToast() {
         return;
     }
 
+    if (!reviewPromptEligible()) return;
     if (nextPromptAt > now) return;
 
     showReviewPromptToast();
@@ -2299,13 +3149,25 @@ async function deferReviewPromptToast(action = "not_now") {
     trackFunnelEvent("review_prompt_action", { action });
     await persistReviewPromptState({
         dismissedAt: now,
+        dismissedAction: action,
         nextPromptAt: now + REVIEW_PROMPT_INTERVAL_MS
     });
     hideReviewPromptToast();
 }
 
+async function openSurveyMonkeyFeedback() {
+    await persistReviewPromptState({
+        feedbackClickedAt: Date.now(),
+        nextPromptAt: null
+    });
+    trackFunnelEvent("review_prompt_action", { action: "give_feedback" });
+    chrome.tabs.create({ url: SURVEYMONKEY_FEEDBACK_URL });
+    hideReviewPromptToast();
+}
+
 async function openChromeWebStoreReview() {
     trackFunnelEvent("review_prompt_action", { action: "leave_review" });
+    // TODO: Confirm this Chrome Web Store review URL after the final listing ID is locked.
     chrome.tabs.create({ url: CHROME_WEBSTORE_REVIEW_URL });
     await persistReviewPromptState({
         reviewedAt: Date.now(),
@@ -2318,7 +3180,7 @@ async function handleActivationNotice() {
     const data = await chrome.storage.local.get([WHOP_ACTIVATION_NOTICE_KEY]);
     if (!data[WHOP_ACTIVATION_NOTICE_KEY]) return;
 
-    setActiveTab("tab4");
+    openSettingsOverlay({ focus: false });
     setFeedback("premiumStatusMsg", "Premium activated.", true);
     await chrome.storage.local.remove(WHOP_ACTIVATION_NOTICE_KEY);
 }
@@ -2333,6 +3195,40 @@ function selectedOnboardingStep() {
 function setActiveTab(tabId) {
     const tab = $(tabId);
     if (tab) tab.checked = true;
+}
+
+function openSettingsOverlay(options = {}) {
+    const overlay = $("settingsOverlay");
+    if (!overlay) return;
+    if (settingsOverlayCloseTimer) {
+        window.clearTimeout(settingsOverlayCloseTimer);
+        settingsOverlayCloseTimer = null;
+    }
+    overlay.hidden = false;
+    overlay.setAttribute("aria-hidden", "false");
+    $("settingsCogBtn")?.setAttribute("aria-expanded", "true");
+    window.requestAnimationFrame(() => overlay.classList.add("is-visible"));
+
+    if (options.focus !== false) {
+        window.setTimeout(() => $("settingsCloseBtn")?.focus({ preventScroll: true }), 0);
+    }
+}
+
+function closeSettingsOverlay(options = {}) {
+    const overlay = $("settingsOverlay");
+    if (!overlay || overlay.hidden) return;
+    overlay.classList.remove("is-visible");
+    overlay.setAttribute("aria-hidden", "true");
+    $("settingsCogBtn")?.setAttribute("aria-expanded", "false");
+    if (settingsOverlayCloseTimer) window.clearTimeout(settingsOverlayCloseTimer);
+    settingsOverlayCloseTimer = window.setTimeout(() => {
+        overlay.hidden = true;
+        settingsOverlayCloseTimer = null;
+    }, 180);
+
+    if (options.focus !== false) {
+        $("settingsCogBtn")?.focus({ preventScroll: true });
+    }
 }
 
 function onboardingShouldShow() {
@@ -2529,12 +3425,16 @@ function bindDelegatedActions() {
 function bindEvents() {
     $("statRange")?.addEventListener("change", () => {
         state.selectedHourlyHour = null;
+        prepareJourneyVisual(reclaimForSelectedRange(), { persist: false });
         renderAll();
     });
     $("addForm")?.addEventListener("submit", addDomain);
     $("scheduledForm")?.addEventListener("submit", saveSchedule);
     $("cancelScheduledEditBtn")?.addEventListener("click", resetScheduleForm);
     $("settingsForm")?.addEventListener("submit", saveSettings);
+    $("journeyToggleBtn")?.addEventListener("click", toggleJourneyCollapsed);
+    $("settingsCogBtn")?.addEventListener("click", () => openSettingsOverlay());
+    $("settingsCloseBtn")?.addEventListener("click", () => closeSettingsOverlay());
     $("use24HourTime")?.addEventListener("change", persistSettings);
     $("limitNotificationsEnabled")?.addEventListener("change", persistSettings);
     $("personalInsightsEnabled")?.addEventListener("change", persistSettings);
@@ -2544,11 +3444,19 @@ function bindEvents() {
     $("immutableAdminOverrideBtn")?.addEventListener("click", useImmutableOverride);
     $("verifyWhopBtn")?.addEventListener("click", syncPremium);
     $("manageWhopBtn")?.addEventListener("click", () => chrome.tabs.create({ url: WHOP_MANAGE_URL }));
+    $("upgradeBtnHeader")?.addEventListener("click", () => openWhopCheckout("header_upgrade"));
     $("upgradeBtnFromLimits")?.addEventListener("click", () => openWhopCheckout("limits_paywall"));
     $("upgradeBtnFromSchedule")?.addEventListener("click", () => openWhopCheckout("schedule_paywall"));
+    $("upgradeBtnFromProfile")?.addEventListener("click", () => openWhopCheckout("profile_upgrade"));
+    $("upgradeBtnFromSettings")?.addEventListener("click", () => openWhopCheckout("settings_upgrade"));
+    $("giveFeedbackToastBtn")?.addEventListener("click", openSurveyMonkeyFeedback);
     $("leaveReviewToastBtn")?.addEventListener("click", openChromeWebStoreReview);
     $("dismissReviewToastBtn")?.addEventListener("click", () => deferReviewPromptToast("dismiss"));
     $("notNowReviewToastBtn")?.addEventListener("click", () => deferReviewPromptToast("not_now"));
+    $("planetUnlockCloseBtn")?.addEventListener("click", closePlanetUnlockModal);
+    $("planetUnlockModal")?.addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) closePlanetUnlockModal();
+    });
     $("linkWhopTokenBtn")?.addEventListener("click", linkWhopToken);
     $("manualWhopToken")?.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;
@@ -2564,8 +3472,16 @@ function bindEvents() {
         const marker = event.target.closest("[data-step]");
         if (marker) showOnboardingStep(Number(marker.dataset.step));
     });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !$("settingsOverlay")?.hidden) {
+            closeSettingsOverlay();
+        }
+        if (event.key === "Escape" && !$("planetUnlockModal")?.hidden) {
+            closePlanetUnlockModal();
+        }
+    });
 
-    chrome.storage.onChanged?.addListener((changes, area) => {
+    chrome.storage?.onChanged?.addListener((changes, area) => {
         if (area !== "local") return;
         const watched = [
             "blockedDomains",
@@ -2576,18 +3492,27 @@ function bindEvents() {
             PERSONAL_INSIGHTS_KEY,
             DISMISSED_INSIGHTS_KEY,
             "snoozedDomains",
+            "recentlyReset",
             "activeBlocks",
             "scheduledBlocks",
             SETTINGS_KEY,
             PREMIUM_KEY,
+            BLOCK_RECLAIM_KEY,
             REVIEW_PROMPT_STATE_KEY
         ];
         const changedWatchedKeys = watched.filter((key) => Object.prototype.hasOwnProperty.call(changes, key));
         if (changedWatchedKeys.length) {
-            const liveUsageKeys = ["statsToday", "allStatsToday", "hourlyUsageHistory"];
+            const liveUsageKeys = [
+                "statsToday",
+                "allStatsToday",
+                "statsHistory",
+                "hourlyUsageHistory",
+                BLOCK_RECLAIM_KEY
+            ];
             const isLiveUsageOnly = changedWatchedKeys.every((key) => liveUsageKeys.includes(key));
             loadAll({
                 flush: false,
+                liveUsageOnly: isLiveUsageOnly,
                 suppressRankingMotion: isLiveUsageOnly,
                 updateRankingInPlace: isLiveUsageOnly
             });
@@ -2600,7 +3525,8 @@ function bindEvents() {
 document.addEventListener("DOMContentLoaded", async () => {
     bindEvents();
     renderScheduleDays();
-    await loadAll({ flush: true, refreshInsights: true });
+    await loadAll({ flush: true, refreshInsights: true, updateJourneyDisplay: true });
+    await recordDashboardOpenForPrompt();
     trackFunnelEvent("popup_opened", { trigger: "browser_action" });
     await handleActivationNotice();
     if ($("limitInput")) $("limitInput").value = state.settings.defaultLimitMinutes;
