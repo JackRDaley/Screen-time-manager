@@ -1,0 +1,12 @@
+output\store-media\chrome-web-store\saturn-icon-128.png 128x128
+output\store-media\chrome-web-store\saturn-promo-small-440x280.png 440x280
+output\store-media\chrome-web-store\saturn-promo-marquee-1400x560.png 1400x560
+output\store-media\chrome-web-store\saturn-screenshot-1-dashboard-1280x800.png 1280x800
+output\store-media\chrome-web-store\saturn-screenshot-2-limits-1280x800.png 1280x800
+output\store-media\chrome-web-store\saturn-screenshot-3-schedules-1280x800.png 1280x800
+output\store-media\chrome-web-store\saturn-screenshot-4-blocked-page-1280x800.png 1280x800
+output\store-media\chrome-web-store\saturn-screenshot-5-profile-1280x800.png 1280x800
+output\store-media\whop\saturn-whop-avatar-400x400.png 400x400
+output\store-media\whop\saturn-whop-banner-2000x1000.png 2000x1000
+output\store-media\whop\saturn-whop-product-1280x720.png 1280x720
+output\store-media\whop\saturn-whop-premium-product-1280x720.png 1280x720

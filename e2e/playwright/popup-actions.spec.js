@@ -2,7 +2,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 
-const WHOP_CHECKOUT_START_URL = 'https://screen-time-manager.jackster0627.workers.dev/whop/start';
+const WHOP_CHECKOUT_START_URL = 'https://api.saturnfocus.com/whop/start';
 const WHOP_MANAGE_URL = 'https://whop.com/hub/memberships/';
 const CHROME_WEBSTORE_REVIEW_URL = 'https://chromewebstore.google.com/detail/screen-time-manager/pecaajdaecdmikcgfdgldcofdebhfbgo/reviews';
 const SURVEYMONKEY_FEEDBACK_URL = 'https://www.surveymonkey.com/r/QF2RJ58';

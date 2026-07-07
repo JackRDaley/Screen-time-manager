@@ -17,13 +17,12 @@ worker/.wrangler/
 .tools/
 release/
 .vercel/
-output/
-reactbits-prototype/dist/
+website/dist/
+test-results/
 dashboard-exports-*/
 dashboard-exports-*.zip
 ga4-data-api-export-*/
 ga4-data-api-export-*.zip
-production-*.zip
 
 # Logs
 npm-debug.log*

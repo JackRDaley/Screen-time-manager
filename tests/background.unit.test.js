@@ -48,7 +48,7 @@ function sendBackgroundMessage(request, sender = {}) {
   });
 }
 
-function sendExternalBackgroundMessage(request, sender = { url: 'https://screen-time-manager.jackster0627.workers.dev/whop/complete' }) {
+function sendExternalBackgroundMessage(request, sender = { url: 'https://api.saturnfocus.com/whop/complete' }) {
   return new Promise((resolve) => {
     runtimeExternalMessageListener(request, sender, resolve);
   });

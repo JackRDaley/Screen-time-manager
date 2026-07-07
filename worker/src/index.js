@@ -1426,7 +1426,7 @@ export default {
             `Whop checkout callback is missing a usable token plus extension id/client state.\n` +
                 `Params received: ${received}\n\n` +
                 `In your Whop dashboard, set the post-checkout redirect URL to:\n` +
-                `https://screen-time-manager.jackster0627.workers.dev/whop/complete?token={user_id}\n\n` +
+                `https://api.saturnfocus.com/whop/complete?token={user_id}\n\n` +
                 `If you see literal {user_id}, Whop did not substitute variables for that field.\n` +
                 `Use a real user_id/membership_id token source from Whop checkout return data.`,
                 {

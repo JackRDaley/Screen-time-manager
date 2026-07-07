@@ -6,6 +6,10 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:playwright": "playwright test",
+    "website:dev": "npm --prefix website run dev",
+    "website:build": "npm --prefix website run build",
+    "website:preview": "npm --prefix website run preview",
+    "prune:production-builds": "node tools/prune-production-builds.mjs",
     "export:ga4": "node tools/ga4-data-api-export.mjs",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy"
@@ -13,6 +17,7 @@
   "devDependencies": {
     "@playwright/test": "^1.54.2",
     "jest": "^29.7.0",
+    "sharp": "^0.35.3",
     "wrangler": "^4.95.0"
   }
 }

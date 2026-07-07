@@ -21,6 +21,8 @@ const brand = {
   text: "#f7e7d6",
   muted: "#cbb7a6",
   cyan: "#8fd2d8",
+  heroBlue: "#74b6ff",
+  heroCyan: "#28d9ff",
   green: "#9db35c",
   slogan: "Your time. Your universe.",
 };
@@ -647,6 +649,63 @@ async function whopProduct(output) {
     .toFile(output);
 }
 
+async function whopPremiumProduct(output) {
+  const width = 1280;
+  const height = 720;
+  const iconUri = await dataUri(assets.icon);
+  const premium = `
+    <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="premiumGlow" cx="50%" cy="50%" r="46%">
+          <stop offset="0%" stop-color="${brand.heroCyan}" stop-opacity="0.24"/>
+          <stop offset="46%" stop-color="${brand.heroBlue}" stop-opacity="0.10"/>
+          <stop offset="100%" stop-color="${brand.heroBlue}" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="premiumText" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="${brand.heroCyan}"/>
+          <stop offset="52%" stop-color="${brand.heroBlue}"/>
+          <stop offset="100%" stop-color="${brand.gold}"/>
+        </linearGradient>
+        <linearGradient id="premiumLine" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="${brand.heroCyan}" stop-opacity="0"/>
+          <stop offset="52%" stop-color="${brand.heroCyan}" stop-opacity="0.88"/>
+          <stop offset="100%" stop-color="${brand.gold}" stop-opacity="0"/>
+        </linearGradient>
+        <filter id="wordGlow" x="-20%" y="-40%" width="140%" height="180%">
+          <feDropShadow dx="0" dy="0" stdDeviation="16" flood-color="${brand.heroCyan}" flood-opacity="0.35"/>
+          <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#030100" flood-opacity="0.42"/>
+        </filter>
+      </defs>
+      <style>
+        text { font-family: "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+        .brand { font-size: 132px; font-weight: 950; fill: ${brand.cream}; }
+        .premium { font-size: 92px; font-weight: 950; fill: url(#premiumText); letter-spacing: 7px; text-transform: uppercase; }
+      </style>
+      <rect width="100%" height="100%" fill="url(#premiumGlow)"/>
+      <path d="M150 112 C356 26, 514 76, 640 52 C810 20, 972 62, 1138 122" fill="none" stroke="url(#premiumLine)" stroke-width="3" opacity="0.42"/>
+      <path d="M170 586 C378 650, 506 602, 650 628 C812 658, 1010 632, 1130 560" fill="none" stroke="url(#premiumLine)" stroke-width="3" opacity="0.24"/>
+      <circle cx="1048" cy="166" r="4" fill="${brand.heroCyan}" opacity="0.74"/>
+      <circle cx="222" cy="524" r="3" fill="${brand.gold}" opacity="0.58"/>
+      <circle cx="1110" cy="500" r="3" fill="${brand.heroBlue}" opacity="0.62"/>
+      <ellipse cx="640" cy="408" rx="394" ry="96" fill="none" stroke="${brand.burn}" stroke-width="16" opacity="0.46" transform="rotate(-8 640 408)"/>
+      <ellipse cx="640" cy="408" rx="394" ry="96" fill="none" stroke="${brand.gold}" stroke-width="4" opacity="0.32" transform="rotate(-8 640 408)"/>
+      <ellipse cx="640" cy="408" rx="306" ry="70" fill="none" stroke="${brand.heroCyan}" stroke-width="3" opacity="0.30" transform="rotate(-8 640 408)"/>
+      <g filter="url(#wordGlow)">
+        <image href="${iconUri}" x="320" y="238" width="126" height="126"/>
+        <text class="brand" x="478" y="347">Saturn</text>
+        <text class="premium" x="640" y="486" text-anchor="middle">Premium</text>
+      </g>
+    </svg>`;
+
+  await sharp({ create: { width, height, channels: 4, background: brand.bg } })
+    .composite([
+      { input: svgBuffer(backgroundSvg(width, height)), left: 0, top: 0 },
+      { input: svgBuffer(premium), left: 0, top: 0 },
+    ])
+    .png()
+    .toFile(output);
+}
+
 async function verifyDimensions(files) {
   const rows = [];
   for (const [file, expected] of files) {
@@ -662,7 +721,7 @@ async function writeReadme(files) {
   const lines = [
     "# Saturn Store Media",
     "",
-    "Generated from live Playwright renders of the Saturn extension UI with populated listing data.",
+    "Generated from live Playwright renders of the Saturn extension UI plus brand artwork for premium Whop media.",
     "",
     "Brand: Saturn",
     `Slogan: ${brand.slogan}`,
@@ -678,6 +737,7 @@ async function writeReadme(files) {
     "- 400x400 company avatar",
     "- 2000x1000 company banner",
     "- 1280x720 product/gallery image",
+    "- 1280x720 premium product image",
     "",
     "Files:",
     ...files.map(([file, size]) => `- ${path.relative(outRoot, file).replaceAll("\\", "/")} (${size})`),
@@ -703,6 +763,7 @@ async function main() {
     [path.join(whopOut, "saturn-whop-avatar-400x400.png"), "400x400"],
     [path.join(whopOut, "saturn-whop-banner-2000x1000.png"), "2000x1000"],
     [path.join(whopOut, "saturn-whop-product-1280x720.png"), "1280x720"],
+    [path.join(whopOut, "saturn-whop-premium-product-1280x720.png"), "1280x720"],
   ];
 
   await resizePng(assets.icon, files[0][0], 128, 128, "contain");
@@ -740,6 +801,7 @@ async function main() {
   await whopAvatar(files[8][0]);
   await whopBanner(files[9][0]);
   await whopProduct(files[10][0]);
+  await whopPremiumProduct(files[11][0]);
 
   await verifyDimensions(files);
   await writeReadme(files);

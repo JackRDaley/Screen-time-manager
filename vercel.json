@@ -1,9 +1,22 @@
 {
-  "installCommand": "cd reactbits-prototype && npm ci",
-  "buildCommand": "cd reactbits-prototype && npm run build",
-  "outputDirectory": "reactbits-prototype/dist",
+  "installCommand": "cd website && npm ci",
+  "buildCommand": "cd website && npm run build",
+  "outputDirectory": "website/dist",
   "cleanUrls": true,
   "trailingSlash": false,
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.saturnfocus.com"
+        }
+      ],
+      "destination": "https://saturnfocus.com/$1",
+      "permanent": false
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

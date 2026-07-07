@@ -30,29 +30,54 @@ A lightweight Chrome extension that helps users stay focused by tracking time sp
 
 - JavaScript (Vanilla)
 - Chrome Extensions API (Manifest V3)
-- HTML and CSS
+- React and Vite for the public website
+- Cloudflare Worker for analytics and premium handoff endpoints
+- Jest and Playwright for automated checks
 
 ---
 
-## Vercel Website
+## Repository Layout
 
-This repo includes a static marketing website for Saturn:
+The repository is split by runtime so generated files and website code do not crowd the extension source:
 
-- `index.html`
-- `privacy.html`
-- `changelog.html`
-- `feedback.html`
-- `landing.css`
-- `landing.js`
-- `vercel.json`
+```text
+.
+|-- manifest.json              # Chrome extension manifest
+|-- background.js              # Extension service worker
+|-- popup.html/css/js          # Extension popup UI
+|-- blocked.html/css/js        # Extension blocked-page UI
+|-- welcome.html/css/js        # Extension onboarding page
+|-- assets/                    # Extension assets and icons
+|-- tests/                     # Jest unit and packaging tests
+|-- e2e/playwright/            # Playwright browser flows
+|-- tools/                     # Local export/media utilities
+|-- worker/                    # Cloudflare Worker project
+`-- website/                   # React/Vite marketing website
+```
 
-To deploy it on Vercel, import the repository and use the default static settings:
+Generated folders such as `test-results/`, `website/dist/`, `dashboard-exports-*`, and `ga4-data-api-export-*` are intentionally ignored. The `output/` folder is kept because it contains curated store media.
 
-- Framework Preset: Other
-- Build Command: None
-- Output Directory: `./`
+Production release zips use a rolling backlog: keep the latest three `production-*.zip` files in the repo root and scrap anything older. Run `npm run prune:production-builds` after creating a new production archive.
 
-Speed Insights is installed with the Vercel script tag in `index.html`:
+---
+
+## Website
+
+The public Saturn website lives in `website/`.
+
+```bash
+npm run website:dev
+npm run website:build
+npm run website:preview
+```
+
+Vercel is configured from the repository root in `vercel.json`:
+
+- Install Command: `cd website && npm ci`
+- Build Command: `cd website && npm run build`
+- Output Directory: `website/dist`
+
+Speed Insights is installed with the Vercel script tag in `website/index.html`:
 
 ```html
 <script defer src="/_vercel/speed-insights/script.js"></script>
@@ -186,22 +211,6 @@ Required Worker values:
 
 If only `WHOP_PRODUCT_ID` is configured, the Worker looks up the first non-archived buy-now plan for that product before creating checkout. The Whop API key needs checkout configuration create/read permissions, plan read permission, plus the membership/payment read permissions already used by verification.
 
----
-
-## Project Structure
-
-```
-├── manifest.json        # Extension configuration
-├── background.js        # Core logic (tracking and enforcement)
-├── popup.html           # Extension UI
-├── popup.css            # Popup styling
-├── popup.js             # Popup logic
-├── blocked.html         # Blocked page
-├── icons/               # Extension icons
-└── assets/              # Images and UI assets
-```
-
----
 
 ## Permissions Explained
 
