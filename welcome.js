@@ -29,9 +29,7 @@ function bindActions() {
 
     openUpdateLogBtn?.addEventListener("click", () => {
         const params = new URLSearchParams(window.location.search);
-        const url = new URL(chrome.runtime.getURL("update-log.html"));
-        const version = params.get("version");
-        if (version) url.searchParams.set("version", version);
+        const url = new URL("https://saturnfocus.com/changelog");
 
         chrome.tabs.create({
             url: url.toString(),

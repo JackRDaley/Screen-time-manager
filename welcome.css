@@ -81,19 +81,6 @@ body {
     animation: rise-in 0.5s ease both;
 }
 
-.hero::after {
-    content: "";
-    position: absolute;
-    right: -34px;
-    bottom: -28px;
-    width: 210px;
-    height: 70px;
-    border: 1px solid rgba(255,177,138,.20);
-    border-radius: 50%;
-    transform: rotate(-15deg);
-    pointer-events: none;
-}
-
 .hero > * {
     position: relative;
     z-index: 1;
