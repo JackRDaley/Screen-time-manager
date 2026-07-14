@@ -1,8 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Saturn - Screen Time Manager",
-    "version": "3.3.15",
+  "version": "3.3.15",
   "description": "Reclaim time from distracting sites, track your focus journey, and stay on course with daily limits and scheduled blocks.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "saturn@saturnfocus.com",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["browsingActivity"],
+        "optional": ["technicalAndInteraction"]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  },
   "icons": {
     "16": "assets/planets/saturn-app-icon-16.png",
     "32": "assets/planets/saturn-app-icon-32.png",
@@ -14,6 +27,12 @@
     "default_popup": "popup.html"
   },
   "background": {
+    "scripts": [
+      "shared-extension-utils.js",
+      "gdpr-utils.js",
+      "insights.js",
+      "background.js"
+    ],
     "service_worker": "background.js"
   },
   "content_scripts": [

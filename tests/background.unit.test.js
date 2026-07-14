@@ -474,7 +474,7 @@ describe("Background helper functions (unit)", () => {
 
     expect(storage.data.statsToday["example.com"]).toBeUndefined();
     expect(storage.data.activeSession.domain).toBe("news.com");
-    expect(storage.data.activeSession.lastHeartbeatAt).toBe(0);
+    expect(storage.data.activeSession.lastHeartbeatAt).toBe(startedAt + 30000);
     expect(global.chrome.action.setBadgeText).toHaveBeenLastCalledWith({
       text: "0%",
     });
@@ -1261,10 +1261,10 @@ describe("Background helper functions (unit)", () => {
     dateNowSpy.mockReturnValue(startedAt + 26000);
     await handleActiveLimitWakeup("activeLimitThreshold:75:alpha.com");
 
-    expect(storage.data.statsToday["alpha.com"].timeMs).toBe(20000);
+    expect(storage.data.statsToday["alpha.com"].timeMs).toBe(22000);
     expect(global.chrome.notifications.create).not.toHaveBeenCalled();
     expect(global.chrome.action.setBadgeText).toHaveBeenLastCalledWith({
-      text: "33%",
+      text: "37%",
     });
     expect(global.chrome.alarms.create).not.toHaveBeenCalledWith(
       ACTIVE_LIMIT_BADGE_ALARM,
@@ -1785,7 +1785,7 @@ describe("Background helper functions (unit)", () => {
     expect(storage.data.activeSession).toEqual(
       expect.objectContaining({
         domain: "alpha.com",
-        lastHeartbeatAt: 0,
+        lastHeartbeatAt: startedAt,
       }),
     );
     expect(global.chrome.action.setBadgeText).toHaveBeenLastCalledWith({

@@ -16,6 +16,8 @@ server/.env
 worker/.wrangler/
 .tools/
 release/
+dist/
+output/firefox/
 .vercel/
 website/dist/
 test-results/

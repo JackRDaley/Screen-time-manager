@@ -568,6 +568,16 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function setSafeHtml(el, html) {
+  if (!el) return;
+  const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
+  el.replaceChildren(
+    ...Array.from(parsed.body.childNodes).map((node) =>
+      document.importNode(node, true),
+    ),
+  );
+}
+
 function dayKeyOffset(offset) {
   const date = new Date();
   date.setDate(date.getDate() - offset);
@@ -838,13 +848,13 @@ function animateJourneyPercent(progress, animate = false) {
       safePreviousValue !== nextValue ||
       !el.querySelector(".journey-percent-odometer")
     ) {
-      el.innerHTML = odometerPercentHtml(nextValue, nextValue);
+      setSafeHtml(el, odometerPercentHtml(nextValue, nextValue));
     }
     return;
   }
 
   el.classList.remove("is-scrolling");
-  el.innerHTML = odometerPercentHtml(safePreviousValue, nextValue);
+  setSafeHtml(el, odometerPercentHtml(safePreviousValue, nextValue));
   void el.offsetWidth;
   el.classList.add("is-scrolling");
 }
@@ -1110,15 +1120,17 @@ function renderProfile() {
 
   const milestones = $("profileJourneyMilestones");
   if (!milestones) return;
-  milestones.innerHTML = PLANET_STOPS.map((stop, index) => {
-    const stateClass =
-      index < journey.currentIndex
-        ? " is-reached"
-        : index === journey.currentIndex
-          ? " is-current"
-          : " is-locked";
-    const meta = index <= journey.currentIndex ? "reached" : "";
-    return `
+  setSafeHtml(
+    milestones,
+    PLANET_STOPS.map((stop, index) => {
+      const stateClass =
+        index < journey.currentIndex
+          ? " is-reached"
+          : index === journey.currentIndex
+            ? " is-current"
+            : " is-locked";
+      const meta = index <= journey.currentIndex ? "reached" : "";
+      return `
             <div class="profile-map-stop profile-map-stop-${escapeHtml(stop.id)}${stateClass}">
                 <span class="profile-map-connector" aria-hidden="true"></span>
                 <img class="profile-map-icon" src="${escapeHtml(timelinePlanetIconPath(stop.id))}" alt="" aria-hidden="true" />
@@ -1127,7 +1139,8 @@ function renderProfile() {
                 <div class="profile-map-meta">${escapeHtml(meta)}</div>
             </div>
         `;
-  }).join("");
+    }).join(""),
+  );
 }
 
 function hourlyUsageForOffsets(offsets = []) {
@@ -1187,7 +1200,11 @@ function renderList(id, html, emptyText) {
   const el = $(id);
   if (!el) return;
   el.classList.toggle("muted", !html);
-  el.innerHTML = html || escapeHtml(emptyText);
+  if (html) {
+    setSafeHtml(el, html);
+  } else {
+    el.textContent = emptyText;
+  }
   if (!html || el.classList.contains("is-live-refresh-render")) return;
   el.querySelectorAll(".row").forEach((row, index) => {
     row.style.setProperty("--row-index", String(Math.min(index, 8)));
@@ -1244,15 +1261,17 @@ function renderPresetList(listId, presets) {
   const card = container.closest(".card");
   if (card) card.hidden = visiblePresets.length === 0;
 
-  container.innerHTML = visiblePresets
-    .map((preset, index) => {
-      const applying = state.applyingPresetId === preset.id;
-      const detail =
-        preset.ruleType === "Scheduled blocks"
-          ? `${formatTimeForDisplay(preset.schedule.startTime)} - ${formatTimeForDisplay(preset.schedule.endTime)}`
-          : `${preset.limitMinutes} min daily`;
+  setSafeHtml(
+    container,
+    visiblePresets
+      .map((preset, index) => {
+        const applying = state.applyingPresetId === preset.id;
+        const detail =
+          preset.ruleType === "Scheduled blocks"
+            ? `${formatTimeForDisplay(preset.schedule.startTime)} - ${formatTimeForDisplay(preset.schedule.endTime)}`
+            : `${preset.limitMinutes} min daily`;
 
-      return `
+        return `
             <div class="preset-option" data-preset-id="${escapeHtml(preset.id)}" style="--row-index:${Math.min(index, 8)}">
                 <div class="preset-main">
                     <div class="preset-meta">${escapeHtml(preset.recommendedFor)} &bull; ${escapeHtml(formatTierLabel(preset.tier))} &bull; ${escapeHtml(detail)}</div>
@@ -1270,8 +1289,9 @@ function renderPresetList(listId, presets) {
                 </button>
             </div>
         `;
-    })
-    .join("");
+      })
+      .join(""),
+  );
 }
 
 function renderPresets() {
@@ -2619,7 +2639,7 @@ function renderPersonalInsights() {
   const card = $("personalInsightsCard");
   const list = $("personalInsightsList");
   const nav = $("personalInsightsNav");
-  if (nav) nav.innerHTML = "";
+  if (nav) nav.replaceChildren();
   if (!list) return;
 
   if (!insights.length) {
@@ -2628,7 +2648,7 @@ function renderPersonalInsights() {
       card.classList.add("dashboard-card-hidden");
     }
     list.classList.add("muted");
-    list.innerHTML = "";
+    list.replaceChildren();
     return;
   }
 
@@ -2640,13 +2660,16 @@ function renderPersonalInsights() {
     0,
     Math.min(state.selectedInsightIndex, insights.length - 1),
   );
-  if (nav) nav.innerHTML = insightHeaderControls(insights.length);
+  if (nav) setSafeHtml(nav, insightHeaderControls(insights.length));
   list.classList.remove("muted");
-  list.innerHTML = `
+  setSafeHtml(
+    list,
+    `
         <div class="insight-carousel">
             ${insightSlideHtml(insights[state.selectedInsightIndex], state.selectedInsightIndex)}
         </div>
-    `;
+    `,
+  );
 
   const visibleInsight = insights[state.selectedInsightIndex];
   if (
@@ -2724,7 +2747,9 @@ function renderHourlyStyled() {
   }
 
   list.classList.remove("muted");
-  list.innerHTML = `
+  setSafeHtml(
+    list,
+    `
         ${buckets
           .map((bucket) => {
             const { heightPct, normalized } = getHourlyBarMetrics(
@@ -2753,7 +2778,8 @@ function renderHourlyStyled() {
             `;
           })
           .join("")}
-    `;
+    `,
+  );
 
   const slots = list.querySelectorAll(".hourly-slot");
 
@@ -2812,18 +2838,23 @@ function renderHourInsightStyled(slot) {
 
   if (time <= 0) {
     insight.classList.add("muted");
-    insight.innerHTML = `
+    setSafeHtml(
+      insight,
+      `
         <div class="usage-summary">
             <span>${formatHourRangeTooltip(hour)}</span>
             <strong>0m</strong>
         </div>
         <div class="usage-site"><span>No tracked usage</span><strong></strong></div>
-    `;
+    `,
+    );
     return;
   }
 
   insight.classList.remove("muted");
-  insight.innerHTML = `
+  setSafeHtml(
+    insight,
+    `
         <div class="usage-summary">
             <span>${formatHourRangeTooltip(hour)}</span>
             <strong>${formatShortTime(time)}</strong>
@@ -2842,7 +2873,8 @@ function renderHourInsightStyled(slot) {
                 .join("")
             : `<div class="usage-site"><span>${hasDomainBreakdown ? "No tracked sites this hour" : "Site breakdown unavailable"}</span><strong></strong></div>`
         }
-    `;
+    `,
+  );
 }
 
 function renderLimitsStyled() {
@@ -2918,13 +2950,16 @@ function renderScheduleDays() {
   const container = $("scheduledDays");
   if (!container) return;
 
-  container.innerHTML = DAY_OPTIONS.map(
-    ([label, value]) => `
+  setSafeHtml(
+    container,
+    DAY_OPTIONS.map(
+      ([label, value]) => `
         <button type="button" class="day-bubble ${state.selectedDays.includes(value) ? "is-selected" : ""}" data-day="${value}">
             ${label}
         </button>
     `,
-  ).join("");
+    ).join(""),
+  );
 
   container.querySelectorAll(".day-bubble").forEach((button) => {
     button.addEventListener("click", () => {
@@ -4148,11 +4183,14 @@ function renderOnboardingMarkers(stepIndex) {
   const container = $("onboardingStepMarkers");
   if (!container) return;
 
-  container.innerHTML = ONBOARDING_STEPS.map(
-    (_, index) => `
+  setSafeHtml(
+    container,
+    ONBOARDING_STEPS.map(
+      (_, index) => `
         <button class="onboarding-step-marker ${index === stepIndex ? "is-active" : ""}" type="button" data-step="${index}" aria-label="Go to tour step ${index + 1}" ${index === stepIndex ? 'aria-current="step"' : ""}>${index + 1}</button>
     `,
-  ).join("");
+    ).join(""),
+  );
 }
 
 function positionOnboardingTour(target, placement = "auto") {

@@ -1,6 +1,8 @@
-importScripts("shared-extension-utils.js");
-importScripts("gdpr-utils.js");
-importScripts("insights.js");
+if (typeof importScripts === "function") {
+  importScripts("shared-extension-utils.js");
+  importScripts("gdpr-utils.js");
+  importScripts("insights.js");
+}
 
 const { formatTimeSec, getDayKey, getOrCreateAnalyticsClientId } =
   globalThis.StmSharedUtils || {};
@@ -1078,7 +1080,7 @@ async function flushTime() {
   await persistActiveSession();
 }
 
-async function flushPopupActiveTick() {
+async function flushActiveTrackingTick() {
   if (!(await isBrowserFocused())) return 0;
   if (!activeDomain) await restoreActiveSession();
   if (!isValidDomain(activeDomain)) return 0;
@@ -1104,6 +1106,10 @@ async function flushPopupActiveTick() {
   return deltaMs;
 }
 
+async function flushPopupActiveTick() {
+  return flushActiveTrackingTick();
+}
+
 async function setActiveDomain(tabId, countVisit = false, options = {}) {
   const shouldEnforce = options.enforce !== false;
   const shouldBadge = options.badge !== false;
@@ -1117,7 +1123,7 @@ async function setActiveDomain(tabId, countVisit = false, options = {}) {
   const tab =
     tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
   const domain = domainFromUrl(tab?.url || "");
-  setActiveContext(tabId, domain, 0);
+  setActiveContext(tabId, domain, domain ? Date.now() : 0);
   await persistActiveSession();
 
   if (domain && countVisit) {
@@ -2892,6 +2898,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       return;
     }
     await hydrateActiveContext({ countVisit: false, badge: false });
+    await flushActiveTrackingTick();
     await syncActionBadge({ hydrate: false });
     await scheduleActiveLimitWakeups(activeDomain);
   }
