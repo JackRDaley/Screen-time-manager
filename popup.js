@@ -21,7 +21,7 @@ const ONBOARDING_VERSION = 2;
 const FUNNEL_STATE_KEY = "activationFunnelState";
 const FUNNEL_VERSION = 1;
 const WHOP_CHECKOUT_URL =
-  "https://whop.com/screen-time-manager/screen-time-manager-pro/";
+  "https://whop.com/saturnfocus/screen-time-manager-pro/";
 const WHOP_CHECKOUT_START_URL = "https://api.saturnfocus.com/whop/start";
 const WHOP_MANAGE_URL = "https://whop.com/hub/memberships/";
 const CHROME_WEBSTORE_REVIEW_URL =

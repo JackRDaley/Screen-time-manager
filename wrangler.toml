@@ -12,7 +12,7 @@ head_sampling_rate = 0.1
 
 [vars]
 WHOP_VERIFY_URL = "https://api.whop.com/api/v1/memberships"
-WHOP_CHECKOUT_URL = "https://whop.com/screen-time-manager/screen-time-manager-pro/"
+WHOP_CHECKOUT_URL = "https://whop.com/saturnfocus/screen-time-manager-pro/"
 WHOP_PRODUCT_ID = "prod_1bS0uOo82g327"
 WHOP_COMPANY_ID = "biz_EE8NPUFwUpVWma"
 WHOP_ACTIVE_STATUSES = "active,trialing"

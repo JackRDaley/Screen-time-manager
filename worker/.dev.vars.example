@@ -1,7 +1,7 @@
 WHOP_API_KEY=your_whop_secret
 JWT_SECRET=replace_with_a_long_random_secret
 WHOP_VERIFY_URL=https://api.whop.com/api/v1/memberships
-WHOP_CHECKOUT_URL=https://whop.com/screen-time-manager/screen-time-manager-pro/
+WHOP_CHECKOUT_URL=https://whop.com/saturnfocus/screen-time-manager-pro/
 WHOP_PRODUCT_ID=prod_xxxxxxxxxxxxx
 WHOP_PLAN_ID=plan_xxxxxxxxxxxxx
 WHOP_PLAN_NAME=Lifetime Premium
